@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import heic2any from 'heic2any';
 import type { LucideIcon } from 'lucide-react';
 import { 
   Sparkles,
@@ -740,16 +741,44 @@ interface FileUploadProps {
   onChange?: (file: File | null) => void;
 }
 
+// 检查是否为需要转换的非标准图片格式
+function isNonStandardImageFormat(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return name.endsWith('.heic') || name.endsWith('.heif') || 
+         file.type === 'image/heic' || file.type === 'image/heif';
+}
+
 function FileUpload({ label, accept, hint, icon, value, onChange }: FileUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
 
-  // 生成图片预览 URL
+  // 生成图片预览 URL（非标准格式先转换）
   useEffect(() => {
     if (value && accept.includes('image')) {
-      const url = URL.createObjectURL(value);
-      setPreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
+      // 检查是否为 HEIC/HEIF 等非标准格式
+      if (isNonStandardImageFormat(value)) {
+        setIsConverting(true);
+        heic2any({ blob: value, toType: 'image/jpeg', quality: 0.8 })
+          .then((result) => {
+            const blob = Array.isArray(result) ? result[0] : result;
+            const url = URL.createObjectURL(blob);
+            setPreviewUrl(url);
+          })
+          .catch((err) => {
+            console.error('图片格式转换失败:', err);
+            // 降级：显示文件名而非预览
+            setPreviewUrl(null);
+          })
+          .finally(() => setIsConverting(false));
+      } else {
+        // 标准格式直接渲染
+        const url = URL.createObjectURL(value);
+        setPreviewUrl(url);
+      }
+      return () => {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+      };
     } else {
       setPreviewUrl(null);
     }
@@ -770,18 +799,29 @@ function FileUpload({ label, accept, hint, icon, value, onChange }: FileUploadPr
 
   // 已上传文件 - 图片显示预览
   if (value) {
-    const isImage = accept.includes('image') && previewUrl;
+    const isImage = accept.includes('image');
+    const hasPreview = previewUrl !== null;
     
     return (
       <div className="relative">
-        {isImage ? (
+        {isImage && (hasPreview || isConverting) ? (
           // 图片预览 - 自适应长宽
           <div className="relative rounded-xl overflow-hidden border border-gray-200">
-            <img 
-              src={previewUrl} 
-              alt={value.name}
-              className="w-full max-h-64 object-contain bg-gray-50"
-            />
+            {isConverting ? (
+              // 转换中显示加载状态
+              <div className="w-full h-32 bg-gray-50 flex items-center justify-center">
+                <div className="text-center">
+                  <Loader2 size={24} className="text-gray-400 animate-spin mx-auto mb-2" />
+                  <p className="text-xs text-gray-400">转换中...</p>
+                </div>
+              </div>
+            ) : (
+              <img 
+                src={previewUrl!} 
+                alt={value.name}
+                className="w-full max-h-64 object-contain bg-gray-50"
+              />
+            )}
             <button
               onClick={handleRemove}
               className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-colors"
