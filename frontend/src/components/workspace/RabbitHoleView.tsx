@@ -775,12 +775,12 @@ function FileUpload({ label, accept, hint, icon, value, onChange }: FileUploadPr
     return (
       <div className="relative">
         {isImage ? (
-          // 图片预览
+          // 图片预览 - 自适应长宽
           <div className="relative rounded-xl overflow-hidden border border-gray-200">
             <img 
               src={previewUrl} 
               alt={value.name}
-              className="w-full h-40 object-cover"
+              className="w-full max-h-64 object-contain bg-gray-50"
             />
             <button
               onClick={handleRemove}
