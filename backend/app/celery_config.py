@@ -2,9 +2,16 @@
 HoppingRabbit AI - Celery 配置
 分布式任务队列配置，支持 AI 处理任务
 """
+import os
+from pathlib import Path
+
+# 加载环境变量（必须在其他导入之前）
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
+
 from celery import Celery
 from kombu import Queue
-import os
 
 # 从环境变量获取配置
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")

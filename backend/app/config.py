@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     dev_mode: bool = True
 
     class Config:
-        env_file = ".env"
+        env_file = ".env"  # 读取 backend/.env
         env_file_encoding = "utf-8"
         extra = "ignore"
 

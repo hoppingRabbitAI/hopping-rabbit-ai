@@ -2,6 +2,13 @@
 HoppingRabbit AI - FastAPI Application Entry
 """
 import os
+from pathlib import Path
+
+# 加载环境变量（必须在其他导入之前）
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
+
 import traceback
 import logging
 from fastapi import FastAPI, Request

@@ -32,13 +32,10 @@ git clone https://github.com/your-repo/hoppingrabbit-ai.git
 cd hoppingrabbit-ai
 
 # 2. 配置环境变量（重要！）
-cp .env.example .env
-cp frontend/.env.example frontend/.env.local
-# 编辑 .env 和 frontend/.env.local 填入 Supabase 配置
-# 从 Supabase Dashboard -> Settings -> API 获取：
-#   - Project URL (https://xxx.supabase.co)
-#   - anon public key (eyJhbGciOiJIUzI1NiIs... JWT格式)
-#   - service_role key (eyJhbGciOiJIUzI1NiIs... JWT格式)
+# 本地开发 - 前后端分别配置:
+#   - backend/.env      后端配置（API密钥、LLM、ASR等）
+#   - frontend/.env.local   前端配置（NEXT_PUBLIC_* 变量）
+# 从 Supabase Dashboard -> Settings -> API 获取配置
 
 # 3. 启动开发环境
 ./start-dev.sh

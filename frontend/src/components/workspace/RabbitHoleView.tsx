@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { 
   Sparkles,
   Image,
@@ -44,7 +45,7 @@ interface Feature {
   title: string;
   subtitle: string;
   description: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
+  icon: LucideIcon;
   category: 'video' | 'image';
   badge?: 'new' | 'hot';
   previewType: 'video' | 'image';
