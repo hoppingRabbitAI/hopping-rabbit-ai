@@ -118,7 +118,7 @@ class TextToVideoRequest(BaseModel):
     """文生视频请求"""
     prompt: str = Field(..., description="正向提示词", min_length=1, max_length=2500)
     negative_prompt: str = Field("", description="负向提示词", max_length=2500)
-    model_name: str = Field("kling-v1", description="模型: kling-v1/kling-v1-5/kling-v1-6")
+    model_name: str = Field("kling-v2-1-master", description="模型: kling-v2-1-master/kling-video-o1/kling-v2-5-turbo/kling-v2-6")
     duration: str = Field("5", description="视频时长: 5/10")
     aspect_ratio: str = Field("16:9", description="宽高比: 16:9/9:16/1:1")
     cfg_scale: float = Field(0.5, ge=0, le=1, description="提示词相关性")
@@ -129,7 +129,7 @@ class ImageToVideoRequest(BaseModel):
     image: str = Field(..., description="源图片 URL 或 Base64")
     prompt: str = Field("", description="运动描述提示词", max_length=2500)
     negative_prompt: str = Field("", description="负向提示词")
-    model_name: str = Field("kling-v1", description="模型版本")
+    model_name: str = Field("kling-v2-5-turbo", description="模型: kling-v2-5-turbo/kling-v2-1-master/kling-v2-6")
     duration: str = Field("5", description="视频时长: 5/10")
     cfg_scale: float = Field(0.5, ge=0, le=1, description="提示词相关性")
 
@@ -139,7 +139,7 @@ class MultiImageToVideoRequest(BaseModel):
     images: List[str] = Field(..., description="图片列表(2-4张)", min_length=2, max_length=4)
     prompt: str = Field("", description="运动描述提示词", max_length=2500)
     negative_prompt: str = Field("", description="负向提示词")
-    model_name: str = Field("kling-v1-5", description="模型版本(仅v1.5+)")
+    model_name: str = Field("kling-v2-5-turbo", description="模型: kling-v2-5-turbo(支持首尾帧)")
     duration: str = Field("5", description="视频时长: 5/10")
 
 
@@ -148,6 +148,7 @@ class MotionControlRequest(BaseModel):
     image: str = Field(..., description="待驱动图片 URL 或 Base64")
     video_url: str = Field(..., description="动作参考视频 URL")
     prompt: str = Field("", description="辅助描述", max_length=2500)
+    model_name: str = Field("kling-v2-5-turbo", description="模型: kling-v2-5-turbo/kling-v1-6")
     mode: str = Field("pro", description="模式: pro")
     duration: str = Field("5", description="视频时长: 5/10")
 
@@ -179,13 +180,13 @@ class VideoExtendRequest(BaseModel):
 class ImageGenerationRequest(BaseModel):
     """图像生成请求"""
     prompt: str = Field(..., description="正向提示词", min_length=1, max_length=2500)
-    negative_prompt: str = Field("", description="负向提示词", max_length=2500)
+    negative_prompt: str = Field("", description="负向提示词(图生图时不支持)", max_length=2500)
     image: str = Field(None, description="参考图像(图生图模式)")
-    image_reference: str = Field(None, description="参考类型: subject/face (仅 kling-v1-5 支持)")
-    model_name: str = Field(None, description="模型: kling-v1/v1-5/v2/v2-new/v2-1 (图生图+参考自动用v1-5)")
+    image_reference: str = Field(None, description="参考类型: subject/face")
+    model_name: str = Field("kling-v2-1", description="模型: kling-v1/kling-v1-5/kling-v2/kling-v2-new/kling-v2-1")
     resolution: str = Field("1k", description="清晰度: 1k/2k")
     n: int = Field(1, ge=1, le=9, description="生成数量")
-    aspect_ratio: str = Field("16:9", description="画面比例")
+    aspect_ratio: str = Field(None, description="画面比例(仅文生图有效，图生图由参考图决定)")
     image_fidelity: float = Field(0.5, ge=0, le=1, description="图片参考强度")
     human_fidelity: float = Field(0.45, ge=0, le=1, description="面部参考强度")
 
@@ -195,7 +196,7 @@ class OmniImageRequest(BaseModel):
     prompt: str = Field(..., description="提示词(用<<<image_N>>>引用图片)", max_length=2500)
     image_list: List[Dict[str, str]] = Field(None, description="参考图列表")
     element_list: List[Dict[str, int]] = Field(None, description="主体参考列表")
-    model_name: str = Field("kling-image-o1", description="模型名称")
+    model_name: str = Field("kling-v2-1", description="模型: kling-v1/kling-v1-5/kling-v2/kling-v2-new/kling-v2-1")
     resolution: str = Field("1k", description="清晰度: 1k/2k")
     n: int = Field(1, ge=1, le=9, description="生成数量")
     aspect_ratio: str = Field("auto", description="画面比例(支持auto)")
@@ -419,34 +420,35 @@ async def create_image_generation(request: ImageGenerationRequest):
     user_id = _get_current_user_id()
     
     try:
-        # 智能选择模型：
-        # 1. 图生图 + image_reference 强制用 kling-v1-5（API 限制）
-        # 2. 其他情况使用用户指定或默认模型
-        if request.image and request.image_reference:
-            model_name = "kling-v1-5"  # image_reference 仅 v1-5 支持，强制！
-            logger.info(f"[KlingAPI] 图生图+参考模式，强制使用 kling-v1-5")
-        elif request.model_name:
-            model_name = request.model_name
-        else:
-            model_name = "kling-v1"  # 默认模型
+        # 使用用户指定模型或默认 kling-v2-1
+        model_name = request.model_name or "kling-v2-1"
         
         ai_task_id = _create_ai_task(user_id, "image_generation", request.model_dump())
+        
+        # 构建 options
+        options = {
+            "model_name": model_name,
+            "resolution": request.resolution,
+            "n": request.n,
+            "image_fidelity": request.image_fidelity,
+            "human_fidelity": request.human_fidelity,
+        }
+        
+        # 文生图模式支持 aspect_ratio，图生图由参考图决定
+        if not request.image and request.aspect_ratio:
+            options["aspect_ratio"] = request.aspect_ratio
+        
+        # negative_prompt 图生图时不支持
+        neg_prompt = "" if request.image else request.negative_prompt
         
         process_image_generation.delay(
             ai_task_id=ai_task_id,
             user_id=user_id,
             prompt=request.prompt,
-            negative_prompt=request.negative_prompt,
+            negative_prompt=neg_prompt,
             image=request.image,
             image_reference=request.image_reference,
-            options={
-                "model_name": model_name,
-                "resolution": request.resolution,
-                "n": request.n,
-                "aspect_ratio": request.aspect_ratio,
-                "image_fidelity": request.image_fidelity,
-                "human_fidelity": request.human_fidelity,
-            }
+            options=options
         )
         
         logger.info(f"[KlingAPI] 图像生成任务已创建: {ai_task_id}, model={model_name}")
@@ -879,7 +881,7 @@ async def get_capabilities():
                     "output": "video",
                     "estimated_time": "2-10分钟",
                     "api_endpoint": "POST /v1/videos/text2video",
-                    "models": ["kling-v1", "kling-v1-5", "kling-v1-6"],
+                    "models": ["kling-v2-1-master", "kling-video-o1", "kling-v2-5-turbo", "kling-v2-6"],
                 },
                 {
                     "id": "image_to_video",
@@ -891,17 +893,19 @@ async def get_capabilities():
                     "output": "video",
                     "estimated_time": "1-5分钟",
                     "api_endpoint": "POST /v1/videos/image2video",
+                    "models": ["kling-v2-5-turbo", "kling-v2-1-master", "kling-v2-6"],
                 },
                 {
                     "id": "multi_image_to_video",
                     "name": "多图生视频",
                     "endpoint": "POST /kling/multi-image-to-video",
-                    "description": "2-4张图片生成场景转换视频",
+                    "description": "2-4张图片生成场景转换视频(支持首尾帧)",
                     "use_cases": ["故事板动态化", "多场景串联"],
                     "input": {"images": ["图片列表(2-4张)"]},
                     "output": "video",
                     "estimated_time": "2-8分钟",
                     "api_endpoint": "POST /v1/videos/multi-image2video",
+                    "models": ["kling-v2-5-turbo"],
                 },
                 {
                     "id": "motion_control",
@@ -913,6 +917,7 @@ async def get_capabilities():
                     "output": "video",
                     "estimated_time": "2-8分钟",
                     "api_endpoint": "POST /v1/videos/motion-control",
+                    "models": ["kling-v2-5-turbo", "kling-v1-6"],
                 },
                 {
                     "id": "video_extend",
@@ -948,7 +953,7 @@ async def get_capabilities():
                     "output": "image",
                     "estimated_time": "30秒-2分钟",
                     "api_endpoint": "POST /v1/images/generations",
-                    "models": ["kling-v1", "kling-v1-5", "kling-v2", "kling-v2-new", "kling-v2-1"],
+                    "models": ["kling-image-o1", "kling-v2-1"],
                 },
                 {
                     "id": "omni_image",

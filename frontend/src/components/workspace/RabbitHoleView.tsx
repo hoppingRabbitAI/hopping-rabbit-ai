@@ -1,8 +1,18 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import heic2any from 'heic2any';
 import type { LucideIcon } from 'lucide-react';
+
+// heic2any 需要动态导入，因为它依赖 window 对象
+const convertHeicToJpeg = async (file: File): Promise<Blob> => {
+  const heic2any = (await import('heic2any')).default;
+  const result = await heic2any({
+    blob: file,
+    toType: 'image/jpeg',
+    quality: 0.9,
+  });
+  return Array.isArray(result) ? result[0] : result;
+};
 import { 
   Sparkles,
   Wand2,
@@ -279,19 +289,38 @@ function FeatureDetail({ feature, onBack }: FeatureDetailProps) {
     setFormData(prev => ({ ...prev, ...updates }));
   }, []);
 
-  // 上传文件并获取 URL
+  // 上传文件并获取 URL（自动转换非标准图片格式为 JPEG）
   const uploadFileAndGetUrl = async (file: File, prefix: string): Promise<string> => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
     const supabase = createClient(supabaseUrl, supabaseKey);
     
     const timestamp = Date.now();
-    const ext = file.name.split('.').pop() || 'bin';
+    let uploadFile: File | Blob = file;
+    let ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
+    
+    // Kling AI 支持的标准图片格式白名单
+    const SUPPORTED_IMAGE_FORMATS = ['png', 'jpg', 'jpeg', 'webp'];
+    
+    // 如果是图片上传且不在支持的格式内，转换为 JPEG
+    if (prefix === 'image' && !SUPPORTED_IMAGE_FORMATS.includes(ext)) {
+      try {
+        console.log(`[Upload] 检测到非标准格式 .${ext}，正在转换为 JPEG...`);
+        const jpegBlob = await convertHeicToJpeg(file);
+        uploadFile = jpegBlob;
+        ext = 'jpg';
+        console.log('[Upload] 格式转换完成，大小:', jpegBlob.size);
+      } catch (err) {
+        console.error('[Upload] 格式转换失败:', err);
+        throw new Error(`不支持的图片格式 .${ext}，请转换为 PNG/JPG/WEBP 后重试`);
+      }
+    }
+    
     const path = `rabbit-hole/${prefix}/${timestamp}.${ext}`;
     
     const { error } = await supabase.storage
       .from('ai-creations')
-      .upload(path, file, { upsert: true });
+      .upload(path, uploadFile, { upsert: true });
     
     if (error) throw new Error(`上传失败: ${error.message}`);
     
@@ -759,9 +788,8 @@ function FileUpload({ label, accept, hint, icon, value, onChange }: FileUploadPr
       // 检查是否为 HEIC/HEIF 等非标准格式
       if (isNonStandardImageFormat(value)) {
         setIsConverting(true);
-        heic2any({ blob: value, toType: 'image/jpeg', quality: 0.8 })
-          .then((result) => {
-            const blob = Array.isArray(result) ? result[0] : result;
+        convertHeicToJpeg(value)
+          .then((blob) => {
             const url = URL.createObjectURL(blob);
             setPreviewUrl(url);
           })

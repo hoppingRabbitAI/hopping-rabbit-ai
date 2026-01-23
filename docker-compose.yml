@@ -40,8 +40,7 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - REDIS_URL=redis://redis:6379/0
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - WHISPER_MODEL=base
       - WHISPER_DEVICE=cpu
@@ -77,22 +76,19 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_URL=redis://host.docker.internal:6379/0
+      - CELERY_BROKER_URL=redis://host.docker.internal:6379/0
+      - CELERY_RESULT_BACKEND=redis://host.docker.internal:6379/1
       - WHISPER_MODEL=base
       - WHISPER_DEVICE=cpu
-    depends_on:
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
       - video_cache:/tmp/hoppingrabbit_cache
       - video_storage:/tmp/hoppingrabbit_storage
       - model_cache:/root/.cache
-    command: celery -A app.celery_config worker --loglevel=info -Q cpu_high,cpu_low -c 4 -n cpu_worker@%h
+    command: celery -A app.celery_config worker --loglevel=info -Q default,cpu_high,cpu_medium,cpu_low,gpu_high,gpu_medium -c 4 -n cpu_worker@%h
     deploy:
       resources:
         limits:
@@ -114,7 +110,7 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - DEMUCS_MODEL=htdemucs
       - TORCH_DEVICE=cuda

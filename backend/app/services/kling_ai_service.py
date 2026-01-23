@@ -297,7 +297,7 @@ class KlingAIClient:
             prompt: 正向提示词（必填，不超过2500字符）
             negative_prompt: 负向提示词（可选，不超过2500字符）
             options: 可选参数
-                - model_name: 模型版本 kling-v1/kling-v1-6/kling-v2-master/kling-v2-1-master/kling-v2-5-turbo/kling-v2-6 (默认 kling-v1)
+                - model_name: 模型版本 kling-v2-1-master/kling-video-o1/kling-v2-5-turbo/kling-v2-6 (默认 kling-v2-1-master)
                 - duration: 视频时长 "5"/"10" 秒 (默认 "5")
                 - aspect_ratio: 宽高比 "16:9"/"9:16"/"1:1" (默认 "16:9")
                 - mode: 生成模式 "std"(标准)/"pro"(高品质) (默认 "std")
@@ -415,7 +415,7 @@ class KlingAIClient:
             image: 参考图像（必填）- URL 或 Base64 编码
             prompt: 正向提示词（可选，不超过2500字符）
             options: 可选参数
-                - model_name: 模型版本 kling-v1/kling-v1-5/kling-v1-6/kling-v2-master/kling-v2-1/kling-v2-1-master/kling-v2-5-turbo/kling-v2-6 (默认 kling-v1)
+                - model_name: 模型版本 kling-v2-5-turbo/kling-v2-1-master/kling-v2-6 (默认 kling-v2-5-turbo)
                 - image_tail: 尾帧图片（URL或Base64）用于控制结束帧
                 - negative_prompt: 负向提示词
                 - duration: 视频时长 "5"/"10" 秒 (默认 "5")
@@ -550,7 +550,7 @@ class KlingAIClient:
             image_list: 图片列表（必填，最多4张）- URL 或 Base64 编码
             prompt: 正向提示词（必填，不超过2500字符）
             options: 可选参数
-                - model_name: 模型版本 (默认 kling-v1-6，目前仅支持此版本)
+                - model_name: 模型版本 kling-v2-5-turbo (支持首尾帧)
                 - negative_prompt: 负向提示词
                 - duration: 视频时长 "5"/"10" 秒 (默认 "5")
                 - aspect_ratio: 宽高比 "16:9"/"9:16"/"1:1" (默认 "16:9")
@@ -588,7 +588,7 @@ class KlingAIClient:
         if options.get("model_name"):
             payload["model_name"] = options["model_name"]
         else:
-            payload["model_name"] = "kling-v1-6"  # 默认值
+            payload["model_name"] = "kling-v2-5-turbo"  # 默认值（支持首尾帧）
         
         if options.get("negative_prompt"):
             payload["negative_prompt"] = options["negative_prompt"]
@@ -1171,16 +1171,13 @@ class KlingAIClient:
                 - face: 人物长相参考（需仅含1张人脸）
             options: 可选参数
                 - model_name: 模型名称
-                    - kling-v1（默认）
-                    - kling-v1-5
-                    - kling-v2
-                    - kling-v2-new
-                    - kling-v2-1
+                    - kling-v1, kling-v1-5, kling-v2, kling-v2-new, kling-v2-1
+                    - 默认 kling-v2-1（推荐）
                 - image_fidelity: 图片参考强度 [0,1]，默认 0.5
                 - human_fidelity: 面部参考强度 [0,1]，默认 0.45（仅 subject 模式）
                 - resolution: 清晰度 1k/2k，默认 1k
                 - n: 生成数量 [1,9]，默认 1
-                - aspect_ratio: 画面比例 16:9/9:16/1:1/4:3/3:4/3:2/2:3/21:9
+                - aspect_ratio: 画面比例 16:9/9:16/1:1/4:3/3:4/3:2/2:3/21:9（仅文生图）
                 - callback_url: 回调地址
         
         Returns:
@@ -1200,28 +1197,41 @@ class KlingAIClient:
             "prompt": prompt
         }
         
-        # 模型选择（API 层已处理智能选择，这里直接使用）
-        if options.get("model_name"):
-            payload["model_name"] = options["model_name"]
+        # 模型选择逻辑：
+        # - 图生图(image不为空)：只有 kling-v1-5 支持，强制使用
+        # - 文生图：可以使用任意模型，默认 kling-v2-1
+        if image:
+            # 图生图强制使用 kling-v1-5（唯一支持图生图的模型）
+            model_name = "kling-v1-5"
+            logger.info(f"[KlingAI] 图生图模式，自动切换到 kling-v1-5")
+        else:
+            # 文生图使用指定模型或默认 kling-v2-1
+            model_name = options.get("model_name", "kling-v2-1")
+        
+        payload["model_name"] = model_name
         
         # 负向提示词（图生图时不支持）
         if negative_prompt and not image:
             payload["negative_prompt"] = negative_prompt
         
-        # 参考图像
+        # 参考图像（图生图模式）
         if image:
             payload["image"] = image
-            # kling-v1-5+ 支持 image_reference
+            
+            # kling-v1-5 图生图必须指定 image_reference
             if image_reference:
                 payload["image_reference"] = image_reference
-        
-        # 图片参考强度
-        if options.get("image_fidelity") is not None:
-            payload["image_fidelity"] = options["image_fidelity"]
-        
-        # 面部参考强度（仅 subject 模式）
-        if options.get("human_fidelity") is not None:
-            payload["human_fidelity"] = options["human_fidelity"]
+            else:
+                # 默认使用 subject（保留主体特征）
+                payload["image_reference"] = "subject"
+            
+            # 图片参考强度
+            if options.get("image_fidelity") is not None:
+                payload["image_fidelity"] = options["image_fidelity"]
+            
+            # 面部参考强度（仅 subject 模式）
+            if options.get("human_fidelity") is not None:
+                payload["human_fidelity"] = options["human_fidelity"]
         
         # 清晰度
         if options.get("resolution"):
@@ -1231,16 +1241,15 @@ class KlingAIClient:
         if options.get("n"):
             payload["n"] = options["n"]
         
-        # 画面比例
-        if options.get("aspect_ratio"):
+        # 画面比例（仅文生图时有效，图生图时由参考图决定）
+        if options.get("aspect_ratio") and not image:
             payload["aspect_ratio"] = options["aspect_ratio"]
         
         # 回调地址
         if options.get("callback_url"):
             payload["callback_url"] = options["callback_url"]
         
-        actual_model = payload.get("model_name", "kling-v1")
-        logger.info(f"[KlingAI] 创建图像生成任务: prompt={prompt[:50]}..., model={actual_model}, image_reference={image_reference}")
+        logger.info(f"[KlingAI] 创建图像生成任务: prompt={prompt[:50]}..., model={model_name}, image_reference={image_reference}")
         
         result = await self._request("POST", "/images/generations", payload)
         return result
@@ -1344,7 +1353,7 @@ class KlingAIClient:
                 [{"element_id": 123}, ...]
                 - 主体数量 + 图片数量 <= 10
             options: 可选参数
-                - model_name: 模型名称，默认 kling-image-o1
+                - model_name: 模型名称，默认 kling-v2-1
                 - resolution: 清晰度 1k/2k，默认 1k
                 - n: 生成数量 [1,9]，默认 1
                 - aspect_ratio: 画面比例 16:9/9:16/1:1/4:3/3:4/3:2/2:3/21:9/auto
@@ -1369,7 +1378,7 @@ class KlingAIClient:
             "prompt": prompt
         }
         
-        # 模型选择（默认 kling-image-o1）
+        # 模型选择（默认 kling-v2-1）
         if options.get("model_name"):
             payload["model_name"] = options["model_name"]
         
