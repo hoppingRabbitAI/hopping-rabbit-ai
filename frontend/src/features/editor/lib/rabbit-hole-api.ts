@@ -39,7 +39,8 @@ export type AITaskType =
   | 'face_swap';
 
 export interface AITaskResponse {
-  task_id: string;
+  id: string;  // 后端返回的是 id
+  task_id?: string;  // 兼容旧字段（部分接口可能返回这个）
   task_type: AITaskType;
   status: AITaskStatus;
   progress: number;
@@ -157,6 +158,7 @@ export interface ImageGenerationRequest {
   n?: number;
   aspect_ratio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '2:3' | '3:2';
   image?: string;
+  image_reference?: 'subject' | 'face';  // subject: 保留人物特征, face: 保留人脸
   image_fidelity?: number;
 }
 
@@ -315,6 +317,27 @@ export async function addAITaskToProject(
   return request(`/kling/ai-task/${taskId}/add-to-project`, {
     method: 'POST',
     body: JSON.stringify({ project_id: projectId, name }),
+  });
+}
+
+/**
+ * 删除单个 AI 任务
+ */
+export async function deleteAITask(taskId: string): Promise<{ success: boolean; deleted_count: number }> {
+  return request(`/kling/ai-task/${taskId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * 批量删除 AI 任务
+ */
+export async function batchDeleteAITasks(
+  taskIds: string[]
+): Promise<{ success: boolean; deleted_count: number; requested_count: number }> {
+  return request('/kling/ai-tasks/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ task_ids: taskIds }),
   });
 }
 

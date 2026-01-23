@@ -16,6 +16,7 @@ from .tracks import router as tracks_router
 from .workspace import router as workspace_router
 from .keyframes import router as keyframes_router
 from .kling import router as kling_router  # 可灵AI
+from .callback import router as callback_router  # AI回调接收
 
 # 创建主路由器
 api_router = APIRouter()
@@ -32,6 +33,7 @@ api_router.include_router(tasks_router)
 api_router.include_router(smart_router)
 api_router.include_router(export_router)
 api_router.include_router(kling_router)  # 可灵AI 口播能力
+api_router.include_router(callback_router)  # AI回调接收
 
 # 导出
 __all__ = [

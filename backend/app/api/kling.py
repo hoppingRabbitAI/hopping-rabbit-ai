@@ -56,6 +56,21 @@ def _get_current_user_id(authorization: str = None) -> str:
     return "00000000-0000-0000-0000-000000000001"
 
 
+def _get_callback_url() -> Optional[str]:
+    """
+    获取可灵AI回调URL
+    
+    如果配置了 callback_base_url，返回完整的回调地址
+    否则返回 None，任务将使用轮询模式
+    """
+    from ..config import get_settings
+    settings = get_settings()
+    
+    if settings.callback_base_url:
+        return f"{settings.callback_base_url.rstrip('/')}/api/callback/kling"
+    return None
+
+
 def _create_ai_task(
     user_id: str,
     task_type: str,
@@ -65,20 +80,24 @@ def _create_ai_task(
     ai_task_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
     
+    # 获取回调URL
+    callback_url = _get_callback_url()
+    
     task_data = {
         "id": ai_task_id,
         "user_id": user_id,
         "task_type": task_type,
-        "source": "rabbit_hole",
         "provider": "kling",
         "status": "pending",
         "progress": 0,
-        "status_message": "任务已创建，等待处理",
+        "status_message": "任务已创建，等待处理" + ("（回调模式）" if callback_url else "（轮询模式）"),
         "input_params": input_params,
         "created_at": now,
     }
     
     _get_supabase().table("ai_tasks").insert(task_data).execute()
+    
+    logger.info(f"[KlingAPI] 创建任务: {ai_task_id}, callback={callback_url or '无(轮询模式)'}")
     return ai_task_id
 
 
@@ -162,8 +181,8 @@ class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., description="正向提示词", min_length=1, max_length=2500)
     negative_prompt: str = Field("", description="负向提示词", max_length=2500)
     image: str = Field(None, description="参考图像(图生图模式)")
-    image_reference: str = Field(None, description="参考类型: subject/face")
-    model_name: str = Field("kling-v1", description="模型: kling-v1/v1-5/v2/v2-new/v2-1")
+    image_reference: str = Field(None, description="参考类型: subject/face (仅 kling-v1-5 支持)")
+    model_name: str = Field(None, description="模型: kling-v1/v1-5/v2/v2-new/v2-1 (图生图+参考自动用v1-5)")
     resolution: str = Field("1k", description="清晰度: 1k/2k")
     n: int = Field(1, ge=1, le=9, description="生成数量")
     aspect_ratio: str = Field("16:9", description="画面比例")
@@ -400,6 +419,17 @@ async def create_image_generation(request: ImageGenerationRequest):
     user_id = _get_current_user_id()
     
     try:
+        # 智能选择模型：
+        # 1. 图生图 + image_reference 强制用 kling-v1-5（API 限制）
+        # 2. 其他情况使用用户指定或默认模型
+        if request.image and request.image_reference:
+            model_name = "kling-v1-5"  # image_reference 仅 v1-5 支持，强制！
+            logger.info(f"[KlingAPI] 图生图+参考模式，强制使用 kling-v1-5")
+        elif request.model_name:
+            model_name = request.model_name
+        else:
+            model_name = "kling-v1"  # 默认模型
+        
         ai_task_id = _create_ai_task(user_id, "image_generation", request.model_dump())
         
         process_image_generation.delay(
@@ -410,7 +440,7 @@ async def create_image_generation(request: ImageGenerationRequest):
             image=request.image,
             image_reference=request.image_reference,
             options={
-                "model_name": request.model_name,
+                "model_name": model_name,
                 "resolution": request.resolution,
                 "n": request.n,
                 "aspect_ratio": request.aspect_ratio,
@@ -419,7 +449,7 @@ async def create_image_generation(request: ImageGenerationRequest):
             }
         )
         
-        logger.info(f"[KlingAPI] 图像生成任务已创建: {ai_task_id}")
+        logger.info(f"[KlingAPI] 图像生成任务已创建: {ai_task_id}, model={model_name}")
         return {"success": True, "task_id": ai_task_id, "status": "pending"}
         
     except Exception as e:
@@ -676,6 +706,86 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
         raise
     except Exception as e:
         logger.error(f"[KlingAPI] 添加到项目失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 任务删除接口
+# ============================================
+
+class BatchDeleteRequest(BaseModel):
+    """批量删除请求"""
+    task_ids: List[str] = Field(..., description="要删除的任务 ID 列表")
+
+
+@router.delete("/ai-task/{task_id}", summary="删除单个任务", tags=["任务管理"])
+async def delete_ai_task(task_id: str):
+    """删除单个 AI 任务"""
+    user_id = _get_current_user_id()
+    
+    try:
+        supabase = _get_supabase()
+        
+        # 验证任务属于当前用户
+        task_result = supabase.table("ai_tasks").select("id, user_id").eq("id", task_id).single().execute()
+        if not task_result.data:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        if task_result.data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权删除此任务")
+        
+        # 删除任务
+        supabase.table("ai_tasks").delete().eq("id", task_id).execute()
+        
+        logger.info(f"[KlingAPI] 删除任务: task_id={task_id}")
+        return {"success": True, "deleted_count": 1}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KlingAPI] 删除任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ai-tasks/batch-delete", summary="批量删除任务", tags=["任务管理"])
+async def batch_delete_ai_tasks(request: BatchDeleteRequest):
+    """批量删除 AI 任务"""
+    user_id = _get_current_user_id()
+    
+    if not request.task_ids:
+        raise HTTPException(status_code=400, detail="任务 ID 列表不能为空")
+    
+    if len(request.task_ids) > 100:
+        raise HTTPException(status_code=400, detail="单次最多删除 100 个任务")
+    
+    try:
+        supabase = _get_supabase()
+        
+        # 验证所有任务都属于当前用户
+        tasks_result = supabase.table("ai_tasks").select("id, user_id").in_("id", request.task_ids).execute()
+        
+        valid_task_ids = []
+        for task in tasks_result.data:
+            if task.get("user_id") == user_id:
+                valid_task_ids.append(task["id"])
+        
+        if not valid_task_ids:
+            raise HTTPException(status_code=404, detail="没有找到可删除的任务")
+        
+        # 批量删除
+        supabase.table("ai_tasks").delete().in_("id", valid_task_ids).execute()
+        
+        logger.info(f"[KlingAPI] 批量删除任务: count={len(valid_task_ids)}")
+        return {
+            "success": True,
+            "deleted_count": len(valid_task_ids),
+            "requested_count": len(request.task_ids),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KlingAPI] 批量删除任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

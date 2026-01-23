@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # Storage
     cache_dir: str = "/tmp/hoppingrabbit_cache"
     
+    # Callback URL (可灵AI回调地址)
+    # 生产环境需设置为公网可访问的地址，如 https://api.example.com
+    # 本地开发可用 ngrok 等工具暴露
+    callback_base_url: str = ""  # 例如: https://api.hoppingrabbit.ai
+    
     # CORS
     cors_origins: list[str] = [
         "http://localhost:3000",

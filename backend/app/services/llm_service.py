@@ -356,3 +356,64 @@ def get_current_llm_provider() -> str:
         return f"gemini ({GEMINI_MODEL})"
     else:
         return f"doubao ({DOUBAO_MODEL_ENDPOINT})"
+
+
+# ============================================
+# 图像 Prompt 增强
+# ============================================
+
+IMAGE_PROMPT_ENHANCEMENT_SYSTEM = """你是一个专业的 AI 图像生成提示词专家。
+用户会给你一个简短的描述，你需要将其扩展为更详细、更适合 AI 图像生成的 prompt。
+
+重要规则：
+1. 如果用户提到"换背景"、"改背景"等，要强调"保持人物不变，只改变背景"
+2. 添加画质描述词：如 high quality, detailed, professional photography
+3. 保持用户原意，不要改变主题
+4. 输出应该是英文（AI 图像模型更擅长英文）
+5. 如果用户已经写了很详细的 prompt，只需微调润色
+6. 长度控制在 50-150 词
+
+只输出增强后的 prompt，不要其他解释。"""
+
+
+async def enhance_image_prompt(
+    user_prompt: str,
+    is_image_to_image: bool = False
+) -> str:
+    """
+    增强用户的图像生成 prompt
+    
+    Args:
+        user_prompt: 用户输入的原始 prompt
+        is_image_to_image: 是否是图生图模式
+    
+    Returns:
+        增强后的 prompt，如果 LLM 失败则返回原始 prompt
+    """
+    if not is_llm_configured():
+        logger.info("[PromptEnhance] LLM 未配置，跳过增强")
+        return user_prompt
+    
+    # 构建请求
+    context = ""
+    if is_image_to_image:
+        context = "（注意：用户上传了参考图片，这是图生图模式，请确保 prompt 中强调保留原图的人物/主体特征）\n\n"
+    
+    prompt = f"{context}用户输入：{user_prompt}"
+    
+    try:
+        enhanced = await call_llm(
+            prompt=prompt,
+            system_prompt=IMAGE_PROMPT_ENHANCEMENT_SYSTEM,
+            max_tokens=300
+        )
+        
+        if enhanced and len(enhanced.strip()) > 0:
+            logger.info(f"[PromptEnhance] 原始: {user_prompt[:50]}... -> 增强: {enhanced[:50]}...")
+            return enhanced.strip()
+        else:
+            return user_prompt
+            
+    except Exception as e:
+        logger.warning(f"[PromptEnhance] 增强失败: {e}")
+        return user_prompt

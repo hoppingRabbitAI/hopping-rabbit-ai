@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_ANON_KEY", ""))
-STORAGE_BUCKET = "assets"  # 素材存储桶
+STORAGE_BUCKET = "ai-creations"  # AI 生成素材存储桶
 
 
 def _get_supabase():
@@ -112,11 +112,11 @@ def upload_to_storage(file_path: str, storage_path: str) -> str:
     with open(file_path, "rb") as f:
         file_data = f.read()
     
-    # 上传文件
+    # 上传文件 (upsert=true 避免重复报错)
     result = supabase.storage.from_(STORAGE_BUCKET).upload(
         storage_path,
         file_data,
-        file_options={"content-type": "video/mp4"}
+        file_options={"content-type": "video/mp4", "upsert": "true"}
     )
     
     # 获取公开 URL
@@ -127,11 +127,10 @@ def upload_to_storage(file_path: str, storage_path: str) -> str:
 
 def create_asset_record(
     user_id: str,
-    file_url: str,
+    storage_path: str,
     ai_task_id: str,
-    metadata: Dict = None
 ) -> str:
-    """创建 Asset 记录"""
+    """创建 Asset 记录 - 匹配 assets 表结构"""
     supabase = _get_supabase()
     
     asset_id = str(uuid4())
@@ -139,13 +138,16 @@ def create_asset_record(
     
     asset_data = {
         "id": asset_id,
+        "project_id": "00000000-0000-0000-0000-000000000000",  # AI 生成的素材使用虚拟项目
         "user_id": user_id,
         "name": f"AI生成_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
-        "type": "video",
-        "url": file_url,
+        "original_filename": "ai_generated.mp4",
+        "file_type": "video",
+        "mime_type": "video/mp4",
+        "storage_path": storage_path,
+        "status": "ready",
         "ai_task_id": ai_task_id,
         "ai_generated": True,
-        "metadata": metadata or {},
         "created_at": now,
         "updated_at": now,
     }
@@ -353,17 +355,8 @@ async def _process_lip_sync_async(
         
         asset_id = create_asset_record(
             user_id=user_id,
-            file_url=final_url,
+            storage_path=storage_path,
             ai_task_id=ai_task_id,
-            metadata={
-                "duration": video_duration,
-                "video_id": video_id,
-                "source": "lip_sync",
-                "session_id": session_id,
-                "face_id": face_id,
-                "input_video": video_url,
-                "input_audio": audio_url,
-            }
         )
         
         # Step 7: 完成

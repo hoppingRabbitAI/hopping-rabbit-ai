@@ -129,7 +129,13 @@ class KlingAIClient:
             else:
                 raise ValueError(f"不支持的 HTTP 方法: {method}")
             
-            response.raise_for_status()
+            # 处理错误响应，打印详细信息
+            if response.status_code >= 400:
+                error_text = response.text
+                logger.error(f"[KlingAI] API 错误: {response.status_code} - {error_text}")
+                logger.error(f"[KlingAI] 请求数据: {data}")
+                response.raise_for_status()
+            
             return response.json()
     
     # ========================================
@@ -1194,7 +1200,7 @@ class KlingAIClient:
             "prompt": prompt
         }
         
-        # 模型选择
+        # 模型选择（API 层已处理智能选择，这里直接使用）
         if options.get("model_name"):
             payload["model_name"] = options["model_name"]
         
@@ -1205,7 +1211,7 @@ class KlingAIClient:
         # 参考图像
         if image:
             payload["image"] = image
-            # 使用 kling-v1-5 且有 image 时，image_reference 必填
+            # kling-v1-5+ 支持 image_reference
             if image_reference:
                 payload["image_reference"] = image_reference
         
@@ -1233,7 +1239,8 @@ class KlingAIClient:
         if options.get("callback_url"):
             payload["callback_url"] = options["callback_url"]
         
-        logger.info(f"[KlingAI] 创建图像生成任务: prompt={prompt[:50]}..., model={options.get('model_name', 'kling-v1')}")
+        actual_model = payload.get("model_name", "kling-v1")
+        logger.info(f"[KlingAI] 创建图像生成任务: prompt={prompt[:50]}..., model={actual_model}, image_reference={image_reference}")
         
         result = await self._request("POST", "/images/generations", payload)
         return result

@@ -21,6 +21,7 @@ import {
   Download,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { createClient } from '@supabase/supabase-js';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { 
   createLipSyncTask, 
@@ -28,6 +29,11 @@ import {
   AITaskStatus,
   AITaskResponse 
 } from '@/features/editor/lib/rabbit-hole-api';
+
+// Supabase 客户端（用于 Realtime 订阅）
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
@@ -90,18 +96,61 @@ export function RabbitHolePage() {
   // 预览状态
   const [isPlaying, setIsPlaying] = useState(false);
   const resultVideoRef = useRef<HTMLVideoElement>(null);
-  
-  // 轮询定时器
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 清理轮询
+  // Realtime 订阅任务状态
   useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
+    if (!taskId) return;
+
+    debugLog('开始订阅任务状态:', taskId);
+
+    // 首次加载状态
+    const loadInitialStatus = async () => {
+      try {
+        const status = await getAITaskStatus(taskId);
+        setTaskStatus(status);
+        debugLog('初始任务状态:', status);
+        
+        if (status.status === 'completed') {
+          setStep('result');
+        }
+      } catch (error) {
+        debugLog('加载任务状态失败:', error);
       }
     };
-  }, []);
+    loadInitialStatus();
+
+    // 订阅 Realtime
+    const channel = supabase
+      .channel(`rabbit_hole_task_${taskId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'ai_tasks',
+          filter: `id=eq.${taskId}`,
+        },
+        (payload) => {
+          debugLog('收到任务状态更新:', payload.new);
+          const newStatus = payload.new as AITaskResponse;
+          setTaskStatus(newStatus);
+
+          if (newStatus.status === 'completed' || newStatus.status === 'failed' || newStatus.status === 'cancelled') {
+            if (newStatus.status === 'completed') {
+              setStep('result');
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        debugLog('Realtime 订阅状态:', status);
+      });
+
+    return () => {
+      debugLog('取消订阅:', taskId);
+      supabase.removeChannel(channel);
+    };
+  }, [taskId]);
 
   // 处理视频上传
   const handleVideoUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -149,35 +198,6 @@ export function RabbitHolePage() {
     debugLog('音频文件已选择:', file.name, file.size);
   }, []);
 
-  // 开始任务轮询
-  const startPolling = useCallback((id: string) => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-    }
-
-    pollIntervalRef.current = setInterval(async () => {
-      try {
-        const status = await getAITaskStatus(id);
-        setTaskStatus(status);
-        
-        debugLog('任务状态更新:', status);
-
-        if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          
-          if (status.status === 'completed') {
-            setStep('result');
-          }
-        }
-      } catch (error) {
-        debugLog('轮询状态失败:', error);
-      }
-    }, 3000);
-  }, []);
-
   // 提交任务
   const handleSubmit = useCallback(async () => {
     if (!videoFile || !audioFile) {
@@ -205,23 +225,20 @@ export function RabbitHolePage() {
       const response = await createLipSyncTask({
         video_url: videoUrl,
         audio_url: audioUrl,
-        enhance_face: true,
-        expression_scale: 1.0,
       });
 
       if (response.success) {
         setTaskId(response.task_id);
         setStep('processing');
         setTaskStatus({
+          id: response.task_id,
           task_id: response.task_id,
           task_type: 'lip_sync',
           status: 'pending',
           progress: 0,
           created_at: new Date().toISOString(),
         });
-        
-        // 开始轮询
-        startPolling(response.task_id);
+        // Realtime 订阅会自动在 useEffect 中开始
       } else {
         throw new Error(response.message || '创建任务失败');
       }
@@ -232,7 +249,7 @@ export function RabbitHolePage() {
       setUploading(false);
       setUploadProgress(0);
     }
-  }, [videoFile, audioFile, startPolling]);
+  }, [videoFile, audioFile]);
 
   // 重新开始
   const handleReset = useCallback(() => {
@@ -241,11 +258,6 @@ export function RabbitHolePage() {
     setStep('upload');
     setTaskId(null);
     setTaskStatus(null);
-    
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
   }, []);
 
   // 视频播放控制

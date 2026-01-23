@@ -438,7 +438,6 @@ CREATE INDEX idx_content_selections_user_id ON content_selections(user_id);
 CREATE TABLE ai_tasks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL,  -- 不添加 FK，由后端 service_key 管理
-    project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
     
     -- 任务类型
     -- lip_sync: 口型同步
@@ -446,19 +445,12 @@ CREATE TABLE ai_tasks (
     -- background_replace: 换背景
     -- text_to_video: 文生视频
     -- image_to_video: 图生视频
+    -- image_generation: 文生图/图生图
     -- digital_human: 数字人口播
     task_type TEXT NOT NULL CHECK (task_type IN (
         'lip_sync', 'face_swap', 'background_replace',
-        'text_to_video', 'image_to_video', 'digital_human'
+        'text_to_video', 'image_to_video', 'image_generation', 'digital_human'
     )),
-    
-    -- 任务来源
-    -- rabbit_hole: Rabbit Hole AI 创作工具集
-    -- editor: 编辑器内 AI 工具
-    source TEXT NOT NULL DEFAULT 'rabbit_hole' CHECK (source IN ('rabbit_hole', 'editor')),
-    
-    -- 关联的源 Clip (仅 editor 来源)
-    source_clip_id UUID REFERENCES clips(id) ON DELETE SET NULL,
     
     -- 输入参数 (JSONB)
     -- lip_sync: {"video_url": "...", "audio_url": "...", "face_index": 0}
@@ -476,9 +468,9 @@ CREATE TABLE ai_tasks (
     progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
     status_message TEXT,  -- 当前状态描述
     
-    -- 输出
-    output_url TEXT,  -- AI 生成的视频 URL
-    output_asset_id UUID REFERENCES assets(id) ON DELETE SET NULL,  -- 关联到素材库
+    -- 输出（第一个结果的 URL，详细结果在 ai_outputs 表）
+    output_url TEXT,
+    result_metadata JSONB,  -- {total_outputs, output_ids}
     
     -- 错误信息
     error_code TEXT,
@@ -491,14 +483,51 @@ CREATE TABLE ai_tasks (
 );
 
 CREATE INDEX idx_ai_tasks_user_id ON ai_tasks(user_id);
-CREATE INDEX idx_ai_tasks_project_id ON ai_tasks(project_id);
 CREATE INDEX idx_ai_tasks_status ON ai_tasks(status);
 CREATE INDEX idx_ai_tasks_task_type ON ai_tasks(task_type);
 CREATE INDEX idx_ai_tasks_created_at ON ai_tasks(created_at DESC);
 CREATE INDEX idx_ai_tasks_provider_task_id ON ai_tasks(provider_task_id);
 
 -- ============================================================================
--- 完成 - 13 张表
+-- 14. AI 输出表 (ai_outputs)
+-- AI 任务生成的结果，1个任务可生成多个输出（如多张图片）
+-- 创建时间: 2026-01-23
+-- ============================================================================
+CREATE TABLE ai_outputs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id UUID NOT NULL REFERENCES ai_tasks(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,  -- 冗余存储，方便查询
+    
+    -- 输出类型
+    output_type TEXT NOT NULL CHECK (output_type IN ('image', 'video', 'audio')),
+    
+    -- 输出索引（同一任务的多个输出）
+    output_index INTEGER NOT NULL DEFAULT 0,
+    
+    -- 原始 URL（来自 AI 服务，30天后失效）
+    original_url TEXT NOT NULL,
+    
+    -- 持久化存储
+    storage_path TEXT,  -- Supabase Storage 路径
+    storage_url TEXT,   -- 公开访问 URL
+    
+    -- 元数据
+    width INTEGER,
+    height INTEGER,
+    duration FLOAT,  -- 视频/音频时长（秒）
+    file_size BIGINT,
+    
+    -- 时间戳
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_ai_outputs_task_id ON ai_outputs(task_id);
+CREATE INDEX idx_ai_outputs_user_id ON ai_outputs(user_id);
+CREATE INDEX idx_ai_outputs_output_type ON ai_outputs(output_type);
+CREATE INDEX idx_ai_outputs_created_at ON ai_outputs(created_at DESC);
+
+-- ============================================================================
+-- 完成 - 14 张表
 -- ============================================================================
 
 -- ============================================================================

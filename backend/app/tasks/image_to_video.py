@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_ANON_KEY", ""))
-STORAGE_BUCKET = "assets"
+STORAGE_BUCKET = "ai-creations"
 
 
 def _get_supabase():
@@ -224,7 +224,7 @@ async def _process_image_to_video_async(
             _get_supabase().storage.from_(STORAGE_BUCKET).upload(
                 storage_path,
                 f.read(),
-                {"content-type": "video/mp4"}
+                {"content-type": "video/mp4", "upsert": "true"}
             )
         
         # 获取公开 URL
@@ -240,22 +240,17 @@ async def _process_image_to_video_async(
         logger.info(f"[ImageToVideo] Step 7: 创建 Asset 记录...")
         
         asset_data = {
+            "project_id": "00000000-0000-0000-0000-000000000000",
             "user_id": user_id,
             "name": f"AI图生视频_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-            "type": "video",
-            "source_type": "ai_generated",
-            "url": storage_url,
+            "original_filename": "ai_generated.mp4",
+            "file_type": "video",
+            "mime_type": "video/mp4",
             "storage_path": storage_path,
-            "size": os.path.getsize(temp_file.name) if os.path.exists(temp_file.name) else 0,
+            "status": "ready",
             "duration": float(videos[0].get("duration", 5.0)),
             "ai_task_id": task_id,
             "ai_generated": True,
-            "metadata": {
-                "source_image": image_url,
-                "prompt": options.get("prompt", ""),
-                "motion_scale": options.get("motion_scale", 1.0),
-                "kling_task_id": kling_task_id,
-            }
         }
         
         asset_id = create_asset(user_id, asset_data)

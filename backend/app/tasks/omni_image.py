@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_ANON_KEY", ""))
-STORAGE_BUCKET = "assets"
+STORAGE_BUCKET = "ai-creations"
 
 
 def _get_supabase():
@@ -122,11 +122,11 @@ def upload_to_storage(file_path: str, storage_path: str, content_type: str = "im
     with open(file_path, "rb") as f:
         file_data = f.read()
     
-    # 上传文件
+    # 上传文件 (upsert=true 避免重复报错)
     supabase.storage.from_(STORAGE_BUCKET).upload(
         storage_path,
         file_data,
-        file_options={"content-type": content_type}
+        file_options={"content-type": content_type, "upsert": "true"}
     )
     
     # 获取公开 URL
@@ -137,28 +137,37 @@ def upload_to_storage(file_path: str, storage_path: str, content_type: str = "im
 
 def create_asset_record(
     user_id: str,
-    file_url: str,
+    storage_path: str,
     ai_task_id: str,
     asset_type: str = "image",
-    metadata: Dict = None
 ) -> str:
-    """创建 Asset 记录"""
+    """创建 Asset 记录 - 匹配 assets 表结构"""
     supabase = _get_supabase()
     
     asset_id = str(uuid4())
     now = datetime.utcnow().isoformat()
     
-    ext = ".png" if asset_type == "image" else ".mp4"
+    if asset_type == "image":
+        ext = ".png"
+        file_type = "image"
+        mime_type = "image/png"
+    else:
+        ext = ".mp4"
+        file_type = "video"
+        mime_type = "video/mp4"
     
     asset_data = {
         "id": asset_id,
+        "project_id": "00000000-0000-0000-0000-000000000000",  # AI 生成的素材使用虚拟项目
         "user_id": user_id,
         "name": f"AI生成_Omni_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}",
-        "type": asset_type,
-        "url": file_url,
+        "original_filename": f"ai_generated{ext}",
+        "file_type": file_type,
+        "mime_type": mime_type,
+        "storage_path": storage_path,
+        "status": "ready",
         "ai_task_id": ai_task_id,
         "ai_generated": True,
-        "metadata": metadata or {},
         "created_at": now,
         "updated_at": now,
     }
@@ -357,19 +366,9 @@ async def _process_omni_image_async(
             # 创建 Asset 记录
             asset_id = create_asset_record(
                 user_id=user_id,
-                file_url=final_url,
+                storage_path=storage_path,
                 ai_task_id=ai_task_id,
                 asset_type="image",
-                metadata={
-                    "index": img_index,
-                    "source": "omni_image",
-                    "prompt": prompt,
-                    "model": options.get("model_name", "kling-image-o1"),
-                    "resolution": options.get("resolution", "1k"),
-                    "aspect_ratio": options.get("aspect_ratio", "auto"),
-                    "input_images_count": num_images,
-                    "input_elements_count": num_elements,
-                }
             )
             
             uploaded_images.append({

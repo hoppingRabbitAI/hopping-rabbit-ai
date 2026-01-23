@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Home,
@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-export type SidebarTab = 'home' | 'videos' | 'ai-creations' | 'trash' | 'rabbit-hole' | 'exports';
+export type SidebarTab = 'home' | 'videos' | 'my-materials' | 'trash' | 'rabbit-hole' | 'exports';
 
 // Rabbit Hole 功能列表配置
 const rabbitHoleFeatures = {
@@ -53,16 +53,79 @@ export function Sidebar({ activeTab, onTabChange, onRabbitHoleFeatureSelect }: S
   const [flyoutPosition, setFlyoutPosition] = useState({ top: 0, left: 0 });
   const rabbitHoleButtonRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
+  const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 更新 flyout 位置
-  useEffect(() => {
-    if (isRabbitHoleHovered && rabbitHoleButtonRef.current) {
-      const rect = rabbitHoleButtonRef.current.getBoundingClientRect();
-      setFlyoutPosition({
-        top: rect.top,
-        left: rect.right + 8, // 8px gap
-      });
+  // 延迟关闭 flyout - 解决鼠标移动到 flyout 过程中菜单消失的问题
+  const handleMouseEnter = useCallback(() => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
     }
+    setIsRabbitHoleHovered(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    // 延迟 150ms 关闭，给用户时间移动到 flyout
+    closeTimeoutRef.current = setTimeout(() => {
+      setIsRabbitHoleHovered(false);
+    }, 150);
+  }, []);
+
+  // 清理 timeout
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // 更新 flyout 位置 - 使用 ResizeObserver 动态测量实际高度
+  useEffect(() => {
+    if (!isRabbitHoleHovered || !rabbitHoleButtonRef.current) return;
+
+    const updatePosition = () => {
+      if (!rabbitHoleButtonRef.current) return;
+      
+      const buttonRect = rabbitHoleButtonRef.current.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      const padding = 16;
+      
+      // 获取 flyout 实际高度（如果已渲染）
+      const flyoutHeight = flyoutRef.current?.offsetHeight || 450;
+      
+      let top = buttonRect.top;
+      
+      // 智能定位：如果底部会超出，则向上调整
+      if (top + flyoutHeight > viewportHeight - padding) {
+        top = viewportHeight - flyoutHeight - padding;
+      }
+      
+      // 确保顶部不会超出
+      top = Math.max(padding, top);
+      
+      setFlyoutPosition({
+        top,
+        left: buttonRect.right + 8,
+      });
+    };
+
+    // 初始定位
+    updatePosition();
+
+    // 监听 flyout 尺寸变化（首次渲染时会触发）
+    const observer = new ResizeObserver(updatePosition);
+    if (flyoutRef.current) {
+      observer.observe(flyoutRef.current);
+    }
+
+    // 也监听窗口大小变化
+    window.addEventListener('resize', updatePosition);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updatePosition);
+    };
   }, [isRabbitHoleHovered]);
 
   const mainNavItems = [
@@ -80,12 +143,6 @@ export function Sidebar({ activeTab, onTabChange, onRabbitHoleFeatureSelect }: S
       icon: Video,
     },
     {
-      id: 'ai-creations' as SidebarTab,
-      label: 'AI 创作',
-      icon: Sparkles,
-      badge: 'new',
-    },
-    {
       id: 'exports' as SidebarTab,
       label: '导出记录',
       icon: Download,
@@ -94,6 +151,15 @@ export function Sidebar({ activeTab, onTabChange, onRabbitHoleFeatureSelect }: S
       id: 'trash' as SidebarTab,
       label: '回收站',
       icon: Trash2,
+    },
+  ];
+
+  // 工具分组导航项
+  const toolNavItems = [
+    {
+      id: 'my-materials' as SidebarTab,
+      label: '我的素材',
+      icon: Layers,
     },
   ];
 
@@ -171,12 +237,20 @@ export function Sidebar({ activeTab, onTabChange, onRabbitHoleFeatureSelect }: S
           <p className="px-3 mb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
             工具
           </p>
+          
+          {/* 我的素材 */}
+          <div className="space-y-0.5 mb-2">
+            {toolNavItems.map((item) => (
+              <NavItem key={item.id} item={item} isActive={activeTab === item.id} />
+            ))}
+          </div>
+          
           <div className="relative">
             {/* Rabbit Hole Button */}
             <button
               ref={rabbitHoleButtonRef}
-              onMouseEnter={() => setIsRabbitHoleHovered(true)}
-              onMouseLeave={() => setIsRabbitHoleHovered(false)}
+              onMouseEnter={handleMouseEnter}
+              onMouseLeave={handleMouseLeave}
               onClick={() => onTabChange('rabbit-hole')}
               className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-left transition-all duration-150
                 ${activeTab === 'rabbit-hole'
@@ -204,8 +278,8 @@ export function Sidebar({ activeTab, onTabChange, onRabbitHoleFeatureSelect }: S
             left: flyoutPosition.left,
             zIndex: 9999,
           }}
-          onMouseEnter={() => setIsRabbitHoleHovered(true)}
-          onMouseLeave={() => setIsRabbitHoleHovered(false)}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
         >
           {/* Video Generation */}
           <div className="px-3 mb-2">

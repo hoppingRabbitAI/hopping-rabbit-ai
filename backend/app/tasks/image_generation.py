@@ -4,10 +4,11 @@ HoppingRabbit AI - 图像生成 Celery 任务
 
 任务流程:
 1. 接收 prompt 和可选参考图
-2. 调用可灵 AI API 创建图像生成任务
-3. 轮询任务状态，更新进度
-4. 下载生成结果，上传到 Supabase Storage
-5. 创建 Asset 记录，更新任务状态
+2. (可选) 使用 LLM 增强 prompt
+3. 调用可灵 AI API 创建图像生成任务
+4. 轮询任务状态，更新进度
+5. 下载生成结果，上传到 Supabase Storage
+6. 创建 ai_outputs 记录，更新任务状态
 
 应用场景:
 - 生成口播背景图片
@@ -25,6 +26,7 @@ from uuid import uuid4
 
 from ..celery_config import celery_app
 from ..services.kling_ai_service import kling_client
+from ..services.llm_service import enhance_image_prompt, is_llm_configured
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_ANON_KEY", ""))
-STORAGE_BUCKET = "assets"
+STORAGE_BUCKET = "ai-creations"
 
 
 def _get_supabase():
@@ -120,11 +122,11 @@ def upload_to_storage(file_path: str, storage_path: str, content_type: str = "im
     with open(file_path, "rb") as f:
         file_data = f.read()
     
-    # 上传文件
+    # 上传文件 (upsert=true 避免重复报错)
     supabase.storage.from_(STORAGE_BUCKET).upload(
         storage_path,
         file_data,
-        file_options={"content-type": content_type}
+        file_options={"content-type": content_type, "upsert": "true"}
     )
     
     # 获取公开 URL
@@ -135,29 +137,38 @@ def upload_to_storage(file_path: str, storage_path: str, content_type: str = "im
 
 def create_asset_record(
     user_id: str,
-    file_url: str,
+    storage_path: str,
     ai_task_id: str,
     asset_type: str = "image",
-    metadata: Dict = None
 ) -> str:
-    """创建 Asset 记录"""
+    """创建 Asset 记录 - 匹配 assets 表结构"""
     supabase = _get_supabase()
     
     asset_id = str(uuid4())
     now = datetime.utcnow().isoformat()
     
-    # 根据类型设置文件扩展名
-    ext = ".png" if asset_type == "image" else ".mp4"
+    # 根据类型设置文件扩展名和 mime_type
+    if asset_type == "image":
+        ext = ".png"
+        file_type = "image"
+        mime_type = "image/png"
+    else:
+        ext = ".mp4"
+        file_type = "video"
+        mime_type = "video/mp4"
     
     asset_data = {
         "id": asset_id,
+        # AI 生成的素材不关联具体项目，project_id 为 null
         "user_id": user_id,
         "name": f"AI生成_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}",
-        "type": asset_type,
-        "url": file_url,
+        "original_filename": f"ai_generated{ext}",
+        "file_type": file_type,
+        "mime_type": mime_type,
+        "storage_path": storage_path,
+        "status": "ready",
         "ai_task_id": ai_task_id,
         "ai_generated": True,
-        "metadata": metadata or {},
         "created_at": now,
         "updated_at": now,
     }
@@ -170,6 +181,16 @@ def create_asset_record(
 # ============================================
 # Celery 任务
 # ============================================
+
+def _get_callback_url() -> str:
+    """获取回调URL"""
+    from ..config import get_settings
+    settings = get_settings()
+    
+    if settings.callback_base_url:
+        return f"{settings.callback_base_url.rstrip('/')}/api/callback/kling"
+    return ""
+
 
 @celery_app.task(
     bind=True,
@@ -195,6 +216,10 @@ def process_image_generation(
     """
     图像生成 Celery 任务 - 文生图/图生图
     
+    支持两种模式:
+    1. 回调模式 (推荐): 配置 callback_base_url 后，任务提交后立即返回，结果由回调接收
+    2. 轮询模式: 未配置回调时，任务会轮询等待结果
+    
     Args:
         ai_task_id: AI 任务 ID (ai_tasks 表)
         user_id: 用户 ID
@@ -212,7 +237,13 @@ def process_image_generation(
     """
     options = options or {}
     
-    logger.info(f"[ImageGen] 开始处理任务: {ai_task_id}")
+    # 检查是否使用回调模式
+    callback_url = _get_callback_url()
+    if callback_url:
+        options["callback_url"] = callback_url
+        logger.info(f"[ImageGen] 使用回调模式: {ai_task_id}, callback_url={callback_url}")
+    else:
+        logger.info(f"[ImageGen] 使用轮询模式: {ai_task_id}")
     
     # 运行异步任务
     loop = asyncio.new_event_loop()
@@ -228,6 +259,7 @@ def process_image_generation(
                 image=image,
                 image_reference=image_reference,
                 options=options,
+                use_callback=bool(callback_url),
             )
         )
         return result
@@ -242,23 +274,46 @@ async def _process_image_generation_async(
     negative_prompt: str,
     image: str,
     image_reference: str,
-    options: Dict
+    options: Dict,
+    use_callback: bool = False
 ) -> Dict:
-    """图像生成异步处理"""
+    """
+    图像生成异步处理
+    
+    Args:
+        use_callback: 是否使用回调模式
+            - True: 提交任务后立即返回，结果由 /api/callback/kling 接收
+            - False: 轮询等待任务完成
+    """
     
     try:
         # Step 1: 更新状态为处理中
         update_ai_task_status(ai_task_id, "processing")
-        update_ai_task_progress(ai_task_id, 5, "准备处理")
+        
+        mode_hint = "回调模式" if use_callback else "轮询模式"
+        update_ai_task_progress(ai_task_id, 5, f"准备处理（{mode_hint}）")
+        
+        # Step 1.5: Prompt 增强（可选）
+        is_image_to_image = bool(image)
+        enhanced_prompt = prompt
+        
+        if is_llm_configured():
+            update_ai_task_progress(ai_task_id, 8, "优化提示词...")
+            try:
+                enhanced_prompt = await enhance_image_prompt(prompt, is_image_to_image)
+                logger.info(f"[ImageGen] Prompt 增强: {prompt[:30]}... -> {enhanced_prompt[:50]}...")
+            except Exception as e:
+                logger.warning(f"[ImageGen] Prompt 增强失败，使用原始 prompt: {e}")
+                enhanced_prompt = prompt
         
         # Step 2: 创建图像生成任务
-        update_ai_task_progress(ai_task_id, 10, "提交生成请求")
+        update_ai_task_progress(ai_task_id, 10, "提交生成请求到AI引擎")
         
         task_type = "图生图" if image else "文生图"
-        logger.info(f"[ImageGen] 创建{task_type}任务: prompt={prompt[:50]}...")
+        logger.info(f"[ImageGen] 创建{task_type}任务: prompt={enhanced_prompt[:50]}...")
         
         create_result = await kling_client.create_image_generation_task(
-            prompt=prompt,
+            prompt=enhanced_prompt,
             negative_prompt=negative_prompt,
             image=image,
             image_reference=image_reference,
@@ -277,8 +332,30 @@ async def _process_image_generation_async(
         update_ai_task(ai_task_id, provider_task_id=provider_task_id)
         logger.info(f"[ImageGen] 任务已创建: provider_task_id={provider_task_id}, status={task_status}")
         
-        # Step 3: 轮询任务状态
-        update_ai_task_progress(ai_task_id, 20, "AI 生成中")
+        # ============================================
+        # 回调模式: 立即返回，等待回调通知
+        # ============================================
+        if use_callback:
+            update_ai_task_progress(
+                ai_task_id, 
+                15, 
+                "任务已提交，等待AI处理完成..."
+            )
+            
+            logger.info(f"[ImageGen] 回调模式 - 任务已提交，等待回调: {ai_task_id}")
+            
+            return {
+                "success": True,
+                "ai_task_id": ai_task_id,
+                "provider_task_id": provider_task_id,
+                "mode": "callback",
+                "message": "任务已提交，结果将通过回调返回"
+            }
+        
+        # ============================================
+        # 轮询模式: 等待任务完成
+        # ============================================
+        update_ai_task_progress(ai_task_id, 20, "AI 生成中（轮询等待）")
         
         max_polls = 60  # 最多轮询 60 次（5 分钟）
         poll_interval = 5  # 每 5 秒轮询一次
@@ -299,7 +376,13 @@ async def _process_image_generation_async(
             
             # 更新进度（20% - 80%）
             progress = 20 + int((i / max_polls) * 60)
-            update_ai_task_progress(ai_task_id, progress, f"AI 生成: {current_status}")
+            status_msg = {
+                "submitted": "任务已提交",
+                "processing": "AI正在生成中...",
+                "succeed": "生成完成",
+                "failed": "生成失败"
+            }.get(current_status, current_status)
+            update_ai_task_progress(ai_task_id, progress, status_msg)
             
             logger.info(f"[ImageGen] 轮询 {i+1}/{max_polls}: status={current_status}")
             
@@ -356,17 +439,9 @@ async def _process_image_generation_async(
             # 创建 Asset 记录
             asset_id = create_asset_record(
                 user_id=user_id,
-                file_url=final_url,
+                storage_path=storage_path,
                 ai_task_id=ai_task_id,
                 asset_type="image",
-                metadata={
-                    "index": img_index,
-                    "source": "image_generation",
-                    "prompt": prompt,
-                    "model": options.get("model_name", "kling-v1"),
-                    "resolution": options.get("resolution", "1k"),
-                    "aspect_ratio": options.get("aspect_ratio", "16:9"),
-                }
             )
             
             uploaded_images.append({
@@ -399,7 +474,8 @@ async def _process_image_generation_async(
             "ai_task_id": ai_task_id,
             "output_url": first_url,
             "output_asset_id": first_asset_id,
-            "images": uploaded_images
+            "images": uploaded_images,
+            "mode": "polling"
         }
         
     except Exception as e:
@@ -413,3 +489,4 @@ async def _process_image_generation_async(
         )
         
         raise
+

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_ANON_KEY", ""))
-STORAGE_BUCKET = "assets"
+STORAGE_BUCKET = "ai-creations"
 
 
 def _get_supabase():
@@ -203,11 +203,11 @@ def upload_to_storage(
     with open(file_path, "rb") as f:
         file_data = f.read()
     
-    # 上传文件
+    # 上传文件 (upsert=true 避免重复报错)
     supabase.storage.from_(STORAGE_BUCKET).upload(
         storage_path,
         file_data,
-        file_options={"content-type": content_type}
+        file_options={"content-type": content_type, "upsert": "true"}
     )
     
     # 获取公开 URL
@@ -223,7 +223,7 @@ async def download_and_upload(
     task_id: str,
     file_type: str = "video",
     index: int = None
-) -> str:
+) -> tuple[str, str]:
     """
     下载远程文件并上传到 Storage（一体化操作）
     
@@ -235,7 +235,7 @@ async def download_and_upload(
         index: 文件索引（批量生成时）
         
     Returns:
-        Storage 公开 URL
+        (storage_path, public_url) 元组
     """
     # 确定文件扩展名和 MIME 类型
     ext_map = {
@@ -258,7 +258,7 @@ async def download_and_upload(
         
         # 上传
         final_url = upload_to_storage(tmp_path, storage_path, content_type)
-        return final_url
+        return storage_path, final_url
         
     finally:
         # 清理临时文件
@@ -272,22 +272,20 @@ async def download_and_upload(
 
 def create_asset_record(
     user_id: str,
-    file_url: str,
+    storage_path: str,
     ai_task_id: str,
     asset_type: str = "video",
     name: str = None,
-    metadata: Dict = None
 ) -> str:
     """
-    创建 Asset 记录
+    创建 Asset 记录 - 匹配 assets 表结构
     
     Args:
         user_id: 用户 ID
-        file_url: 文件 URL
+        storage_path: Storage 中的路径
         ai_task_id: 关联的 AI 任务 ID
         asset_type: 类型 (video/image/audio)
         name: 素材名称
-        metadata: 元数据
         
     Returns:
         新创建的 Asset ID
@@ -297,22 +295,29 @@ def create_asset_record(
     asset_id = str(uuid4())
     now = datetime.utcnow().isoformat()
     
-    # 自动生成名称
-    ext_map = {"video": ".mp4", "image": ".png", "audio": ".mp3"}
-    ext = ext_map.get(asset_type, "")
+    # 自动生成名称和 MIME 类型
+    type_config = {
+        "video": (".mp4", "video", "video/mp4"),
+        "image": (".png", "image", "image/png"),
+        "audio": (".mp3", "audio", "audio/mpeg"),
+    }
+    ext, file_type, mime_type = type_config.get(asset_type, ("", asset_type, "application/octet-stream"))
     
     if not name:
         name = f"AI生成_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
     
     asset_data = {
         "id": asset_id,
+        "project_id": "00000000-0000-0000-0000-000000000000",  # AI 生成的素材使用虚拟项目
         "user_id": user_id,
         "name": name,
-        "type": asset_type,
-        "url": file_url,
+        "original_filename": f"ai_generated{ext}",
+        "file_type": file_type,
+        "mime_type": mime_type,
+        "storage_path": storage_path,
+        "status": "ready",
         "ai_task_id": ai_task_id,
         "ai_generated": True,
-        "metadata": metadata or {},
         "created_at": now,
         "updated_at": now,
     }

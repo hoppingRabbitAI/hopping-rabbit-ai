@@ -13,6 +13,7 @@ import {
   FolderPlus,
   ChevronDown
 } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import { 
   getAITaskStatus, 
   AITaskResponse, 
@@ -21,6 +22,11 @@ import {
   addAITaskToProject
 } from '@/features/editor/lib/rabbit-hole-api';
 import { projectApi } from '@/lib/api';
+
+// Supabase 客户端（用于 Realtime 订阅）
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // ============================================
 // 类型定义
@@ -37,7 +43,6 @@ interface AITaskProgressProps {
   onError?: (error: Error) => void;
   onClose?: () => void;
   autoClose?: boolean;
-  pollInterval?: number;
   onAddedToProject?: (assetId: string, projectId: string) => void;
 }
 
@@ -115,12 +120,11 @@ export function AITaskProgress({
   onError,
   onClose,
   autoClose = false,
-  pollInterval = 3000,
   onAddedToProject,
 }: AITaskProgressProps) {
   const [task, setTask] = useState<AITaskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isPolling, setIsPolling] = useState(true);
+  const [isSubscribed, setIsSubscribed] = useState(false);
   
   // 添加到项目相关状态
   const [showProjectSelector, setShowProjectSelector] = useState(false);
@@ -164,61 +168,113 @@ export function AITaskProgress({
     }
   }, [taskId, addingToProject, onAddedToProject]);
 
-  // 轮询任务状态
+  // Supabase Realtime 订阅任务状态变化
   useEffect(() => {
-    if (!taskId || !isPolling) return;
+    if (!taskId) return;
 
     let mounted = true;
-    let timeoutId: NodeJS.Timeout;
 
-    const poll = async () => {
+    // 首次加载任务状态
+    const loadInitialTask = async () => {
       try {
         const taskData = await getAITaskStatus(taskId);
-        
         if (!mounted) return;
         
         setTask(taskData);
         setError(null);
 
-        // 检查是否完成
+        // 如果已经完成，不需要订阅
         if (taskData.status === 'completed') {
-          setIsPolling(false);
           onComplete?.(taskData);
           if (autoClose) {
             setTimeout(() => onClose?.(), 2000);
           }
-        } else if (taskData.status === 'failed' || taskData.status === 'cancelled') {
-          setIsPolling(false);
+          return;
+        }
+        
+        if (taskData.status === 'failed' || taskData.status === 'cancelled') {
           if (taskData.error_message) {
             setError(taskData.error_message);
           }
-        } else {
-          // 继续轮询
-          timeoutId = setTimeout(poll, pollInterval);
+          return;
         }
+
+        // 未完成，开始订阅
+        setIsSubscribed(true);
       } catch (err) {
         if (!mounted) return;
         const errorMessage = err instanceof Error ? err.message : '查询任务状态失败';
         setError(errorMessage);
         onError?.(err instanceof Error ? err : new Error(errorMessage));
-        // 出错后继续尝试
-        timeoutId = setTimeout(poll, pollInterval * 2);
       }
     };
 
-    poll();
+    loadInitialTask();
 
     return () => {
       mounted = false;
-      if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [taskId, isPolling, pollInterval, onComplete, onError, onClose, autoClose]);
+  }, [taskId, onComplete, onError, onClose, autoClose]);
 
-  // 重试
-  const handleRetry = useCallback(() => {
+  // Realtime 订阅
+  useEffect(() => {
+    if (!taskId || !isSubscribed) return;
+
+    console.log('[AITaskProgress] 开始订阅任务状态:', taskId);
+
+    const channel = supabase
+      .channel(`ai_task_${taskId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'ai_tasks',
+          filter: `id=eq.${taskId}`,
+        },
+        (payload) => {
+          console.log('[AITaskProgress] 收到任务更新:', payload.new);
+          const newTask = payload.new as AITaskResponse;
+          setTask(newTask);
+
+          // 检查是否完成
+          if (newTask.status === 'completed') {
+            setIsSubscribed(false);
+            onComplete?.(newTask);
+            if (autoClose) {
+              setTimeout(() => onClose?.(), 2000);
+            }
+          } else if (newTask.status === 'failed' || newTask.status === 'cancelled') {
+            setIsSubscribed(false);
+            if (newTask.error_message) {
+              setError(newTask.error_message);
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('[AITaskProgress] 订阅状态:', status);
+      });
+
+    return () => {
+      console.log('[AITaskProgress] 取消订阅:', taskId);
+      supabase.removeChannel(channel);
+    };
+  }, [taskId, isSubscribed, onComplete, onClose, autoClose]);
+
+  // 重试（重新加载初始状态）
+  const handleRetry = useCallback(async () => {
     setError(null);
-    setIsPolling(true);
-  }, []);
+    try {
+      const taskData = await getAITaskStatus(taskId);
+      setTask(taskData);
+      if (taskData.status !== 'completed' && taskData.status !== 'failed' && taskData.status !== 'cancelled') {
+        setIsSubscribed(true);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '查询任务状态失败');
+    }
+  }, [taskId]);
 
   // 渲染
   if (!task && !error) {
@@ -437,7 +493,7 @@ export function AITaskList({ tasks, onTaskClick }: AITaskListProps) {
         return (
           <div
             key={task.task_id}
-            onClick={() => onTaskClick?.(task.task_id)}
+            onClick={() => task.task_id && onTaskClick?.(task.task_id)}
             className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg hover:border-gray-300 cursor-pointer transition-colors"
           >
             <StatusIcon status={task.status} />
