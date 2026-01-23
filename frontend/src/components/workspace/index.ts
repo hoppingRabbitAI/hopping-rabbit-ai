@@ -6,7 +6,6 @@ export { Sidebar, type SidebarTab } from './Sidebar';
 export { AssetsView } from './AssetsView';
 export { RabbitHoleView } from './RabbitHoleView';
 export { AITaskProgress, AITaskList } from './AITaskProgress';
-export { AICreationsView } from './AICreationsView';
 
 // 智能一键成片 V2
 export { SmartProcessingView } from './SmartProcessingView';

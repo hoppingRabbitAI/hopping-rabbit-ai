@@ -4,11 +4,37 @@
 
 1. **Node.js** >= 18.0
 2. **Python** >= 3.10
-3. **Redis** 运行在 localhost:6379
-4. **pnpm** 包管理器
+3. **pnpm** 包管理器
+4. **Docker & Docker Compose** (推荐)
 5. **ngrok** (用于接收 AI 回调)
 
-## 🚀 启动步骤
+## 🚀 启动模式选择
+
+### 模式A: Docker完全容器化 🐳 (推荐)
+
+**优点**: 环境一致、开箱即用、包含监控面板
+
+```bash
+# 启动所有服务（包括Celery）
+docker-compose up frontend backend celery_cpu_worker redis rabbitmq flower
+
+# 或后台运行
+docker-compose up -d frontend backend celery_cpu_worker redis rabbitmq flower
+```
+
+✅ **服务地址**:
+- 前端: http://localhost:3000
+- 后端: http://localhost:8000
+- Celery监控: http://localhost:5555
+- RabbitMQ管理: http://localhost:15672 (guest/guest)
+
+---
+
+### 模式B: 混合模式 💻 (灵活调试)
+
+**优点**: 快速重启单个服务、直接调试
+
+## 🚀 启动步骤 (模式B - 混合模式)
 
 ### 1. 启动 Redis (如果没运行)
 ```bash
@@ -94,6 +120,41 @@ A:
 1. 确认 ngrok 正在运行
 2. 确认后端 `CALLBACK_BASE_URL` 设置正确
 3. 检查 ngrok 控制台 http://127.0.0.1:4040 查看请求
+
+### Q: Docker模式下如何查看Celery日志?
+A: 
+```bash
+docker-compose logs -f celery_cpu_worker
+```
+
+### Q: 如何重启单个Docker服务?
+A:
+```bash
+docker-compose restart celery_cpu_worker
+```
+
+---
+
+## 🎯 快速命令参考
+
+```bash
+# Docker模式 - 启动所有服务
+docker-compose up -d
+
+# Docker模式 - 只启动开发必需的服务
+docker-compose up -d redis rabbitmq backend frontend celery_cpu_worker
+
+# 查看运行中的容器
+docker-compose ps
+
+# 停止所有服务
+docker-compose down
+
+# 清理并重新构建
+docker-compose down -v
+docker-compose build --no-cache
+docker-compose up
+```
 
 ---
 
