@@ -1,0 +1,172 @@
+# HoppingRabbit AI
+
+> 🎬 智能口播视频剪辑工作台 - 像编辑文档一样编辑视频
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## ✨ 功能特性
+
+- 🎙️ **AI 语音识别** - faster-whisper 驱动的高精度语音转文字
+- ✂️ **文本驱动剪辑** - 删除文字即删除对应视频片段
+- 🔇 **智能静音检测** - 自动识别并移除无声片段
+- 🎵 **人声分离** - Demucs 模型提取人声/背景音
+- 👥 **说话人识别** - pyannote.audio 多人对话分离
+- 🔄 **毫秒级自动保存** - IndexedDB + 云端双重保障
+- 📊 **波形可视化** - Canvas 实时波形渲染
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Node.js 18+ / pnpm 8+
+- Python 3.11+
+- Docker & Docker Compose
+- FFmpeg 6+
+- GPU (可选，用于加速 AI 任务)
+
+### 一键启动 (推荐)
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/your-repo/hoppingrabbit-ai.git
+cd hoppingrabbit-ai
+
+# 2. 配置环境变量（重要！）
+cp .env.example .env
+cp frontend/.env.example frontend/.env.local
+# 编辑 .env 和 frontend/.env.local 填入 Supabase 配置
+# 从 Supabase Dashboard -> Settings -> API 获取：
+#   - Project URL (https://xxx.supabase.co)
+#   - anon public key (eyJhbGciOiJIUzI1NiIs... JWT格式)
+#   - service_role key (eyJhbGciOiJIUzI1NiIs... JWT格式)
+
+# 3. 启动开发环境
+./start-dev.sh
+
+# 启用 GPU 支持 (需要 NVIDIA Docker)
+./start-dev.sh --gpu
+
+# 启用本地存储 (MinIO)
+./start-dev.sh --storage
+```
+
+### 手动启动
+
+```bash
+# Docker Compose 启动所有服务
+docker compose up -d
+
+# 或分别启动前后端
+
+# 前端
+cd frontend && pnpm install && pnpm dev
+
+# 后端
+cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload
+
+# Celery Worker
+celery -A app.celery_config worker --loglevel=info -Q cpu_high,cpu_low,gpu
+```
+
+### 访问地址
+
+| 服务 | 地址 |
+|------|------|
+| 前端 | http://localhost:3000 |
+| 后端 API | http://localhost:8000 |
+| API 文档 | http://localhost:8000/docs |
+| Flower 监控 | http://localhost:5555 |
+| RabbitMQ 管理 | http://localhost:15672 |
+
+## 📁 项目结构
+
+```
+hoppingrabbit-ai/
+├── frontend/               # Next.js 14 前端
+│   ├── src/
+│   │   ├── app/           # App Router 页面
+│   │   ├── components/    # React 组件
+│   │   │   └── editor/    # 编辑器组件
+│   │   ├── stores/        # Zustand 状态管理
+│   │   ├── lib/           # API 客户端 & SyncManager
+│   │   └── types/         # TypeScript 类型定义
+│   └── package.json
+├── backend/                # Python FastAPI 后端
+│   ├── app/
+│   │   ├── api/           # API 路由
+│   │   ├── services/      # 业务服务
+│   │   ├── tasks/         # Celery 异步任务
+│   │   │   ├── transcribe.py       # ASR 语音识别
+│   │   │   ├── stem_separation.py  # 人声分离
+│   │   │   ├── diarization.py      # 说话人识别
+│   │   │   ├── export.py           # 视频导出
+│   │   │   └── asset_processing.py # 资源处理
+│   │   ├── models.py      # Pydantic 模型
+│   │   └── celery_config.py
+│   ├── requirements.txt
+│   └── Dockerfile
+├── supabase/              # 数据库 Schema
+│   └── schema.sql
+├── docker-compose.yml     # 完整服务编排
+├── start-dev.sh          # 开发环境启动脚本
+└── .env.example          # 环境变量模板
+```
+
+## 🔧 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 前端 | Next.js 14, TypeScript, Tailwind CSS, Zustand, Canvas API |
+| 后端 | Python 3.11, FastAPI, Celery, RabbitMQ, Redis |
+| AI 模型 | faster-whisper, Demucs, pyannote.audio, Silero VAD |
+| 数据库 | Supabase PostgreSQL |
+| 存储 | Supabase Storage / MinIO |
+| 视频处理 | FFmpeg |
+
+## 🏗️ 架构设计
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Next.js 前端   │────▶│   FastAPI 后端   │
+└─────────────────┘     └────────┬────────┘
+         │                       │
+         ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐
+│   IndexedDB     │     │   RabbitMQ      │
+│   (离线缓存)     │     │   (消息队列)     │
+└─────────────────┘     └────────┬────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │  Celery Workers │
+                        │  ┌───┐ ┌───┐    │
+                        │  │CPU│ │GPU│    │
+                        │  └───┘ └───┘    │
+                        └────────┬────────┘
+                                 │
+         ┌───────────────────────┼───────────────────────┐
+         ▼                       ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Supabase DB   │     │   Redis Cache   │     │   Object Store  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+## 📝 API 文档
+
+启动后访问 http://localhost:8000/docs 查看 Swagger UI。
+
+主要端点：
+- `POST /api/projects` - 创建项目
+- `GET /api/projects/{id}` - 获取项目
+- `PATCH /api/projects/{id}/save` - 毫秒级保存
+- `POST /api/tasks/asr` - 启动语音识别
+- `POST /api/tasks/stem` - 启动人声分离
+- `POST /api/export` - 导出视频
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📄 License
+
+MIT License © 2024

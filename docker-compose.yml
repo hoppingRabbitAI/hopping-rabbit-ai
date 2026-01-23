@@ -1,0 +1,269 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Frontend - Next.js 14
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+      - NEXT_PUBLIC_SUPABASE_URL=${SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: pnpm dev
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # Backend API - FastAPI
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DEV_MODE=true
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - DEMUCS_MODEL=htdemucs
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - video_cache:/tmp/hoppingrabbit_cache
+      - video_storage:/tmp/hoppingrabbit_storage
+      - model_cache:/root/.cache
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # Celery Worker - CPU 任务 (ASR, 资源处理)
+  # ============================================
+  celery_cpu_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DEV_MODE=true
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - video_cache:/tmp/hoppingrabbit_cache
+      - video_storage:/tmp/hoppingrabbit_storage
+      - model_cache:/root/.cache
+    command: celery -A app.celery_config worker --loglevel=info -Q cpu_high,cpu_low -c 4 -n cpu_worker@%h
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # Celery Worker - GPU 任务 (人声分离, 导出)
+  # ============================================
+  celery_gpu_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DEV_MODE=true
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DEMUCS_MODEL=htdemucs
+      - TORCH_DEVICE=cuda
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - video_cache:/tmp/hoppingrabbit_cache
+      - video_storage:/tmp/hoppingrabbit_storage
+      - model_cache:/root/.cache
+    command: celery -A app.celery_config worker --loglevel=info -Q gpu -c 2 -n gpu_worker@%h
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 8G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # Celery Beat - 定时任务调度器
+  # ============================================
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DEV_MODE=true
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.celery_config beat --loglevel=info
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # Flower - Celery 监控面板
+  # ============================================
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      - rabbitmq
+      - redis
+    command: celery -A app.celery_config flower --port=5555
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # RabbitMQ - 消息队列
+  # ============================================
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # 管理面板
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # Redis - 缓存和 Celery 结果后端
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hoppingrabbit-network
+
+  # ============================================
+  # MinIO - 本地对象存储 (开发环境可选)
+  # ============================================
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # 管理面板
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    profiles:
+      - storage
+    networks:
+      - hoppingrabbit-network
+
+# ============================================
+# 网络配置
+# ============================================
+networks:
+  hoppingrabbit-network:
+    driver: bridge
+
+# ============================================
+# 数据卷
+# ============================================
+volumes:
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  video_cache:
+    driver: local
+  video_storage:
+    driver: local
+  model_cache:
+    driver: local
+  minio_data:
+    driver: local

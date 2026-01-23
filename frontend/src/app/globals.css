@@ -1,0 +1,164 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 17, 24, 39;
+  --background-rgb: 250, 250, 250;
+  --accent-blue: 59, 130, 246;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ==================== 滚动条样式 ==================== */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ==================== 播放头形状 ==================== */
+.clip-path-playhead {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 70%, 50% 100%, 0% 70%);
+}
+
+/* ==================== 文稿编辑区样式 ==================== */
+.transcript-segment {
+  @apply relative p-4 rounded-2xl transition-all border cursor-pointer;
+}
+
+.transcript-segment.normal {
+  @apply bg-gray-50 border-gray-200 hover:bg-gray-100 hover:border-gray-300;
+}
+
+.transcript-segment.filler {
+  @apply bg-orange-50 border-orange-200;
+}
+
+.transcript-segment.silence {
+  @apply bg-red-50 border-red-200;
+}
+
+.transcript-segment.current {
+  @apply bg-blue-50 border-blue-300 shadow-md ring-1 ring-blue-200;
+}
+
+.transcript-segment.deleted {
+  @apply opacity-30 grayscale border-dashed border-gray-300;
+}
+
+/* ==================== 类型标签 ==================== */
+.type-badge {
+  @apply text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter shadow-sm;
+}
+
+.type-badge.normal {
+  @apply bg-blue-600 text-white;
+}
+
+.type-badge.filler {
+  @apply bg-orange-500 text-white;
+}
+
+.type-badge.silence {
+  @apply bg-red-500 text-white;
+}
+
+/* ==================== 轨道片段样式 ==================== */
+.track-clip {
+  @apply absolute rounded-sm border border-white/20 flex items-center shadow-md overflow-hidden select-none;
+  /* 注意：移除 transform transition，避免拉伸时产生放大效果 */
+  transition: opacity 0.1s, box-shadow 0.1s;
+  /* 高度通过 inline style 动态设置，视频clip更高 */
+}
+
+.track-clip.video-clip {
+  height: 68px; /* 视频轨道clip高度 (轨道72px - 4px边距) */
+}
+
+.track-clip:not(.video-clip) {
+  height: 44px; /* 其他clip高度 (轨道48px - 4px边距) */
+}
+
+.track-clip.selected {
+  @apply border-2 border-[#3B82F6] z-10;
+  /* 纯色边框，无渐变阴影，无放大 */
+}
+
+.track-clip:not(.selected) {
+  @apply opacity-90 hover:opacity-100;
+}
+
+.track-clip.dragging {
+  @apply border-2 border-[#3B82F6];
+  opacity: 0.9;
+  /* 拖拽时保持原始大小，无放大效果 */
+}
+
+/* ==================== 右键菜单项 ==================== */
+.context-menu-item {
+  @apply w-full px-4 py-3 text-xs flex items-center space-x-4 hover:bg-gray-100 transition-all text-gray-700;
+}
+
+.context-menu-item.primary {
+  @apply text-blue-600 font-black;
+}
+
+.context-menu-item.danger {
+  @apply text-red-500 hover:bg-red-50;
+}
+
+/* ==================== 动画效果 ==================== */
+@keyframes fadeInZoom {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in-zoom {
+  animation: fadeInZoom 0.15s ease-out;
+}
+
+/* ==================== 工具栏按钮 ==================== */
+.toolbar-btn {
+  @apply p-2 rounded-lg transition-colors;
+}
+
+.toolbar-btn:hover {
+  @apply bg-gray-100;
+}
+
+.toolbar-btn.active {
+  @apply text-blue-600 bg-blue-50;
+}
+
+/* ==================== ASR 进度条动画 ==================== */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s infinite;
+}
