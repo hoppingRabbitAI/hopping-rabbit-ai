@@ -9,18 +9,27 @@ import {
   Download,
   ExternalLink,
   X,
-  RefreshCw
+  RefreshCw,
+  FolderPlus,
+  ChevronDown
 } from 'lucide-react';
 import { 
   getAITaskStatus, 
   AITaskResponse, 
   AITaskStatus,
-  AITaskType 
+  AITaskType,
+  addAITaskToProject
 } from '@/features/editor/lib/rabbit-hole-api';
+import { projectApi } from '@/lib/api';
 
 // ============================================
 // 类型定义
 // ============================================
+
+interface Project {
+  id: string;
+  name: string;
+}
 
 interface AITaskProgressProps {
   taskId: string;
@@ -29,6 +38,7 @@ interface AITaskProgressProps {
   onClose?: () => void;
   autoClose?: boolean;
   pollInterval?: number;
+  onAddedToProject?: (assetId: string, projectId: string) => void;
 }
 
 // ============================================
@@ -106,10 +116,53 @@ export function AITaskProgress({
   onClose,
   autoClose = false,
   pollInterval = 3000,
+  onAddedToProject,
 }: AITaskProgressProps) {
   const [task, setTask] = useState<AITaskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(true);
+  
+  // 添加到项目相关状态
+  const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [addingToProject, setAddingToProject] = useState(false);
+  const [addedProjectId, setAddedProjectId] = useState<string | null>(null);
+
+  // 加载项目列表
+  const loadProjects = useCallback(async () => {
+    setLoadingProjects(true);
+    try {
+      const response = await projectApi.getProjects({ limit: 50 });
+      if (response.data?.items) {
+        setProjects(response.data.items);
+      }
+    } catch (err) {
+      console.error('加载项目列表失败:', err);
+    } finally {
+      setLoadingProjects(false);
+    }
+  }, []);
+
+  // 添加到项目
+  const handleAddToProject = useCallback(async (projectId: string) => {
+    if (!taskId || addingToProject) return;
+    
+    setAddingToProject(true);
+    try {
+      const result = await addAITaskToProject(taskId, projectId);
+      if (result.success) {
+        setAddedProjectId(projectId);
+        setShowProjectSelector(false);
+        onAddedToProject?.(result.asset_id, projectId);
+      }
+    } catch (err) {
+      console.error('添加到项目失败:', err);
+      setError(err instanceof Error ? err.message : '添加到项目失败');
+    } finally {
+      setAddingToProject(false);
+    }
+  }, [taskId, addingToProject, onAddedToProject]);
 
   // 轮询任务状态
   useEffect(() => {
@@ -241,7 +294,7 @@ export function AITaskProgress({
               <span className="text-sm text-green-700">生成完成！</span>
             </div>
             
-            {/* 预览/下载 */}
+            {/* 预览/下载/添加到项目 */}
             <div className="flex gap-2">
               <a
                 href={task.output_url}
@@ -255,11 +308,68 @@ export function AITaskProgress({
               <a
                 href={task.output_url}
                 download
-                className="flex-1 flex items-center justify-center gap-2 py-2 px-4 bg-violet-500 hover:bg-violet-600 rounded-lg text-sm text-white transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 py-2 px-4 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors"
               >
                 <Download size={16} />
                 下载
               </a>
+            </div>
+            
+            {/* 添加到项目按钮 */}
+            <div className="relative">
+              {addedProjectId ? (
+                <div className="flex items-center justify-center gap-2 py-2 px-4 bg-green-100 rounded-lg text-sm text-green-700">
+                  <CheckCircle size={16} />
+                  已添加到项目
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      setShowProjectSelector(!showProjectSelector);
+                      if (!showProjectSelector && projects.length === 0) {
+                        loadProjects();
+                      }
+                    }}
+                    disabled={addingToProject}
+                    className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-violet-500 hover:bg-violet-600 disabled:bg-violet-300 rounded-lg text-sm text-white transition-colors"
+                  >
+                    {addingToProject ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <FolderPlus size={16} />
+                    )}
+                    添加到项目
+                    <ChevronDown size={14} className={`transition-transform ${showProjectSelector ? 'rotate-180' : ''}`} />
+                  </button>
+                  
+                  {/* 项目选择下拉 */}
+                  {showProjectSelector && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
+                      {loadingProjects ? (
+                        <div className="flex items-center justify-center py-4">
+                          <Loader2 size={16} className="animate-spin text-gray-400" />
+                          <span className="ml-2 text-sm text-gray-500">加载中...</span>
+                        </div>
+                      ) : projects.length === 0 ? (
+                        <div className="py-4 text-center text-sm text-gray-500">
+                          暂无项目
+                        </div>
+                      ) : (
+                        projects.map((project) => (
+                          <button
+                            key={project.id}
+                            onClick={() => handleAddToProject(project.id)}
+                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
+                          >
+                            {project.name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}

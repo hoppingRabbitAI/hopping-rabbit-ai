@@ -304,6 +304,20 @@ export async function cancelAITask(taskId: string): Promise<{ success: boolean; 
   });
 }
 
+/**
+ * 添加 AI 任务到项目
+ */
+export async function addAITaskToProject(
+  taskId: string, 
+  projectId: string, 
+  name?: string
+): Promise<{ success: boolean; asset_id: string; message: string }> {
+  return request(`/kling/ai-task/${taskId}/add-to-project`, {
+    method: 'POST',
+    body: JSON.stringify({ project_id: projectId, name }),
+  });
+}
+
 // ============================================
 // 2. 文生视频 (Text-to-Video)
 // ============================================

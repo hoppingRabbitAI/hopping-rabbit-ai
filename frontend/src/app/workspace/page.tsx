@@ -6,6 +6,7 @@ import { Sidebar, type SidebarTab } from '../../components/workspace/Sidebar';
 import { AssetsView } from '../../components/workspace/AssetsView';
 import { RabbitHoleView } from '../../components/workspace/RabbitHoleView';
 import { ExportsView } from '../../components/workspace/ExportsView';
+import { AICreationsView } from '../../components/workspace/AICreationsView';
 import { ProcessingView } from '../../components/workspace/ProcessingView';
 import { SmartProcessingView } from '../../components/workspace/SmartProcessingView';
 import { ReviewView } from '../../components/workspace/ReviewView';
@@ -75,7 +76,7 @@ export default function WorkspacePage() {
   // 根据 URL 参数初始化 tab
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    if (tabParam && ['home', 'videos', 'trash', 'rabbit-hole', 'exports'].includes(tabParam)) {
+    if (tabParam && ['home', 'videos', 'ai-creations', 'trash', 'rabbit-hole', 'exports'].includes(tabParam)) {
       setActiveTab(tabParam as SidebarTab);
     }
   }, [searchParams]);
@@ -185,6 +186,9 @@ export default function WorkspacePage() {
                 initialFeatureId={selectedRabbitHoleFeature}
                 onFeatureChange={setSelectedRabbitHoleFeature}
               />
+            )}
+            {activeTab === 'ai-creations' && (
+              <AICreationsView />
             )}
             {activeTab === 'exports' && (
               <ExportsView />

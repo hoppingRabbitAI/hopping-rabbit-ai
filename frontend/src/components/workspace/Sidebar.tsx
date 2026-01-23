@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-export type SidebarTab = 'home' | 'videos' | 'trash' | 'rabbit-hole' | 'exports';
+export type SidebarTab = 'home' | 'videos' | 'ai-creations' | 'trash' | 'rabbit-hole' | 'exports';
 
 // Rabbit Hole 功能列表配置
 const rabbitHoleFeatures = {
@@ -78,6 +78,12 @@ export function Sidebar({ activeTab, onTabChange, onRabbitHoleFeatureSelect }: S
       id: 'videos' as SidebarTab,
       label: '视频',
       icon: Video,
+    },
+    {
+      id: 'ai-creations' as SidebarTab,
+      label: 'AI 创作',
+      icon: Sparkles,
+      badge: 'new',
     },
     {
       id: 'exports' as SidebarTab,

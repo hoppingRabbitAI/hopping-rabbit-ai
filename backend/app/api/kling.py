@@ -577,6 +577,108 @@ async def cancel_ai_task(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class AddToProjectRequest(BaseModel):
+    """添加到项目请求"""
+    project_id: str = Field(..., description="目标项目 ID")
+    name: Optional[str] = Field(None, description="素材名称（可选，默认使用任务类型）")
+
+
+@router.post("/ai-task/{task_id}/add-to-project", summary="添加到项目", tags=["任务管理"])
+async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
+    """
+    将 AI 任务的输出添加到项目素材库
+    - 从 ai_tasks 表获取 output_url
+    - 在 assets 表创建记录，关联 ai_task_id
+    """
+    user_id = _get_current_user_id()
+    
+    try:
+        supabase = _get_supabase()
+        
+        # 1. 获取 AI 任务信息
+        task_result = supabase.table("ai_tasks").select("*").eq("id", task_id).single().execute()
+        if not task_result.data:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        task = task_result.data
+        
+        # 2. 检查任务状态和输出
+        if task["status"] != "completed":
+            raise HTTPException(status_code=400, detail="任务尚未完成")
+        
+        if not task.get("output_url"):
+            raise HTTPException(status_code=400, detail="任务没有输出文件")
+        
+        # 3. 确定文件类型和素材名称
+        task_type = task["task_type"]
+        is_image = task_type in ["image_generation", "omni_image"]
+        file_type = "image" if is_image else "video"
+        
+        task_type_labels = {
+            "lip_sync": "口型同步",
+            "text_to_video": "文生视频",
+            "image_to_video": "图生视频",
+            "multi_image_to_video": "多图生视频",
+            "motion_control": "动作控制",
+            "video_extend": "视频延长",
+            "image_generation": "AI生成图片",
+            "omni_image": "Omni-Image",
+            "face_swap": "AI换脸",
+        }
+        default_name = f"{task_type_labels.get(task_type, 'AI生成')}_{task_id[:8]}"
+        asset_name = request.name or default_name
+        
+        # 4. 创建 asset 记录
+        asset_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+        
+        asset_data = {
+            "id": asset_id,
+            "project_id": request.project_id,
+            "user_id": user_id,
+            "name": asset_name,
+            "original_filename": f"{asset_name}.{'png' if is_image else 'mp4'}",
+            "file_type": file_type,
+            "mime_type": "image/png" if is_image else "video/mp4",
+            "storage_path": task["output_url"],  # 使用 AI 生成的 URL
+            "status": "ready",
+            "ai_task_id": task_id,
+            "ai_generated": True,
+            "created_at": now,
+            "updated_at": now,
+        }
+        
+        # 从 result_metadata 获取视频信息（如果有）
+        metadata = task.get("result_metadata") or {}
+        if metadata.get("duration"):
+            asset_data["duration"] = metadata["duration"]
+        if metadata.get("width"):
+            asset_data["width"] = metadata["width"]
+        if metadata.get("height"):
+            asset_data["height"] = metadata["height"]
+        
+        supabase.table("assets").insert(asset_data).execute()
+        
+        # 5. 更新 ai_tasks 表的 output_asset_id
+        supabase.table("ai_tasks").update({
+            "output_asset_id": asset_id,
+        }).eq("id", task_id).execute()
+        
+        logger.info(f"[KlingAPI] AI任务添加到项目: task_id={task_id}, asset_id={asset_id}, project_id={request.project_id}")
+        
+        return {
+            "success": True,
+            "asset_id": asset_id,
+            "message": f"已添加到项目",
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KlingAPI] 添加到项目失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================
 # 口播场景封装接口
 # ============================================
