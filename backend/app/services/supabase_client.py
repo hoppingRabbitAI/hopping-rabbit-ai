@@ -79,7 +79,7 @@ def get_file_url(bucket: str, path: str, expires_in: int = SIGNED_URL_EXPIRES_SE
     
     Args:
         bucket: 存储桶名称 (如 'clips', 'videos')
-        path: 文件路径
+        path: 文件路径（可以是相对路径或完整 URL）
         expires_in: 签名 URL 有效期（秒），默认 7 天
         
     Returns:
@@ -88,6 +88,10 @@ def get_file_url(bucket: str, path: str, expires_in: int = SIGNED_URL_EXPIRES_SE
     # 空路径检查
     if not path:
         return ""
+    
+    # 如果 path 已经是完整的 URL，直接返回
+    if path.startswith('http://') or path.startswith('https://'):
+        return path
     
     cache_key = f"{bucket}:{path}"
     now = time.time()

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Cpu, ArrowLeft, LogOut, ChevronDown } from 'lucide-react';
+import { Cpu, ArrowLeft, LogOut, ChevronDown, Settings } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEditorStore } from '../store/editor-store';
 import { useAuthStore } from '@/features/editor/store/auth-store';
@@ -93,6 +94,14 @@ export function Header() {
                 <div className="px-2 py-1.5 border-b border-gray-100">
                   <p className="text-[9px] text-gray-500 truncate">{user?.email}</p>
                 </div>
+                <Link
+                  href="/settings"
+                  className="w-full px-2 py-1.5 text-left text-[10px] text-gray-600 hover:bg-gray-50 flex items-center space-x-1.5 transition-colors"
+                  onClick={() => setShowUserMenu(false)}
+                >
+                  <Settings size={12} />
+                  <span>账户设置</span>
+                </Link>
                 <button
                   onClick={handleLogout}
                   className="w-full px-2 py-1.5 text-left text-[10px] text-red-500 hover:bg-red-50 flex items-center space-x-1.5 transition-colors"

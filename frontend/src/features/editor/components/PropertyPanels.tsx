@@ -7,6 +7,7 @@ import { TextStylePanel } from './TextStylePanel';
 import { AudioPanel } from './AudioPanel';
 import { AIToolsPanel } from './AIToolsPanel';
 import { SpeedPanel } from './SpeedPanel';
+import { ImageAdjustPanel } from './ImageAdjustPanel';
 
 export function PropertyPanels() {
   const activeSidebarPanel = useEditorStore((s) => s.activeSidebarPanel);
@@ -68,6 +69,11 @@ export function PropertyPanels() {
       {/* AI 工具面板 */}
       {activeSidebarPanel === 'ai-tools' && selectedVideoClips.length > 0 && (
         <AIToolsPanel onClose={closePanel} clipIds={selectedVideoClips.map(c => c.id)} />
+      )}
+
+      {/* 图片调节面板 */}
+      {activeSidebarPanel === 'image-adjust' && (
+        <ImageAdjustPanel onClose={closePanel} />
       )}
     </div>
   );

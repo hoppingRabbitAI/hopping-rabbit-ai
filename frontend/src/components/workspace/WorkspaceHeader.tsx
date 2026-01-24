@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ArrowLeft, LogOut, ChevronDown } from 'lucide-react';
+import { ArrowLeft, LogOut, ChevronDown, Settings } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/features/editor/store/auth-store';
 
@@ -79,6 +80,14 @@ export function WorkspaceHeader() {
                 <div className="px-4 py-2 border-b border-gray-200">
                   <p className="text-xs text-gray-600 truncate">{user?.email}</p>
                 </div>
+                <Link
+                  href="/settings"
+                  className="w-full px-4 py-2.5 text-left text-sm text-gray-600 hover:bg-gray-50 flex items-center space-x-2 transition-colors"
+                  onClick={() => setShowUserMenu(false)}
+                >
+                  <Settings size={16} />
+                  <span>账户设置</span>
+                </Link>
                 <button
                   onClick={handleLogout}
                   className="w-full px-4 py-2.5 text-left text-sm text-red-500 hover:bg-red-50 flex items-center space-x-2 transition-colors"

@@ -30,6 +30,7 @@ import { msToSec, secToMs } from '../../lib/time-utils';
 import { getClipTransformAtOffset } from '../../lib/keyframe-interpolation';
 import { TransformOverlay } from '../TransformOverlay';
 import { TextOverlay } from '../TextOverlay';
+import { ImageOverlay } from '../ImageOverlay';
 import { BlockingLoader } from '../BlockingLoader';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import type { Clip } from '../../types/clip';
@@ -3216,30 +3217,6 @@ export function VideoCanvasNew() {
                 />
               )}
 
-              {/* ★★★ 图片图层：渲染当前活跃的 image clips ★★★ */}
-              {activeImageClips.map((imgClip, index) => (
-                <div
-                  key={imgClip.id}
-                  className="absolute inset-0 flex items-center justify-center"
-                  style={{
-                    zIndex: 10 + index, // 图片在视频上层，多张图片按数组顺序叠加
-                  }}
-                >
-                  <img
-                    src={imgClip.mediaUrl || imgClip.thumbnail}
-                    alt={imgClip.name || 'Image'}
-                    className="max-w-full max-h-full object-contain"
-                    style={{
-                      // 应用 transform 如果有的话
-                      transform: imgClip.transform 
-                        ? `translate(${imgClip.transform.x || 0}px, ${imgClip.transform.y || 0}px) scale(${imgClip.transform.scale || 1}) rotate(${imgClip.transform.rotation || 0}deg)`
-                        : undefined,
-                      opacity: imgClip.transform?.opacity ?? 1,
-                    }}
-                  />
-                </div>
-              ))}
-
               {/* 加载/缓冲指示器 */}
               {videoUrl && !isVideoReady && (
                 <div className="absolute inset-0 flex items-center justify-center bg-white/80">
@@ -3282,6 +3259,14 @@ export function VideoCanvasNew() {
                 containerHeight={canvasSize.height}
                 zoom={zoom}
                 showControls={(canvasEditMode === 'text' || canvasEditMode === 'subtitle') && !isPlaying}
+              />
+
+              {/* 图片覆盖层 - 始终渲染可见的图片 clip */}
+              <ImageOverlay
+                containerWidth={canvasSize.width}
+                containerHeight={canvasSize.height}
+                zoom={zoom}
+                showControls={!isPlaying}
               />
             </div>
           ) : (

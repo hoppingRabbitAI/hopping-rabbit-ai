@@ -1,9 +1,11 @@
 -- ============================================================================
 -- HoppingRabbit AI - 完整数据库 Schema
 -- 生成日期: 2026-01-15
--- 最后更新: 2026-01-23
+-- 最后更新: 2026-01-26
 -- 说明: 纯表定义，无函数/触发器/视图
 -- 更新记录:
+--   - 2026-01-26: 添加积分系统 (ai_model_credits, user_credits, credit_transactions)
+--   - 2026-01-25: 添加用户配额系统 (user_profiles, user_quotas, subscription_plans, user_subscriptions)
 --   - 2026-01-23: 添加 ai_tasks 表 (AI 任务状态追踪)
 --   - 2026-01-23: assets 表新增 ai_task_id, ai_generated 字段
 --   - 2026-01-19: 添加 exports.created_at 索引，优化导出列表查询
@@ -528,7 +530,338 @@ CREATE INDEX idx_ai_outputs_output_type ON ai_outputs(output_type);
 CREATE INDEX idx_ai_outputs_created_at ON ai_outputs(created_at DESC);
 
 -- ============================================================================
--- 完成 - 14 张表
+-- 15. 用户资料表 (user_profiles)
+-- 存储用户的个人信息和偏好设置
+-- 创建时间: 2026-01-25
+-- ============================================================================
+CREATE TABLE user_profiles (
+    user_id UUID PRIMARY KEY,  -- 与 auth.users.id 关联
+    
+    -- 基本信息
+    display_name TEXT,
+    avatar_url TEXT,
+    bio TEXT,
+    
+    -- 联系信息
+    phone TEXT,
+    company TEXT,
+    website TEXT,
+    
+    -- 偏好设置
+    preferences JSONB DEFAULT '{
+        "language": "zh-CN",
+        "theme": "dark",
+        "notifications": {
+            "email": true,
+            "browser": true,
+            "marketing": false
+        },
+        "editor": {
+            "autoSave": true,
+            "autoSaveInterval": 30,
+            "defaultResolution": "1080p"
+        }
+    }'::jsonb,
+    
+    -- 使用统计
+    total_projects_created INTEGER DEFAULT 0,
+    total_exports INTEGER DEFAULT 0,
+    total_ai_tasks INTEGER DEFAULT 0,
+    
+    -- 时间戳
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 16. 用户配额表 (user_quotas)
+-- 追踪用户的试用次数、额度、存储限制等
+-- 创建时间: 2026-01-25
+-- ============================================================================
+CREATE TABLE user_quotas (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL UNIQUE,
+    
+    -- 会员等级
+    tier TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free', 'pro', 'enterprise')),
+    
+    -- 试用额度
+    free_trials_total INTEGER DEFAULT 6,       -- 总试用次数
+    free_trials_used INTEGER DEFAULT 0,        -- 已使用次数
+    
+    -- 月度额度 (Pro/Enterprise)
+    monthly_credits INTEGER DEFAULT 0,         -- 月度配额
+    credits_used_this_month INTEGER DEFAULT 0, -- 本月已用
+    credits_reset_at TIMESTAMPTZ,              -- 下次重置时间
+    
+    -- AI 任务限制
+    ai_tasks_daily_limit INTEGER DEFAULT 10,   -- 每日 AI 任务上限
+    ai_tasks_used_today INTEGER DEFAULT 0,     -- 今日已用
+    ai_tasks_reset_at DATE DEFAULT CURRENT_DATE, -- 下次重置日期
+    
+    -- 存储限制 (MB)
+    storage_limit_mb INTEGER DEFAULT 500,      -- 存储上限
+    storage_used_mb INTEGER DEFAULT 0,         -- 已用存储
+    
+    -- 项目限制
+    max_projects INTEGER DEFAULT 3,            -- 最大项目数
+    
+    -- 时间戳
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_quotas_user_id ON user_quotas(user_id);
+CREATE INDEX idx_user_quotas_tier ON user_quotas(tier);
+
+-- ============================================================================
+-- 17. 订阅计划表 (subscription_plans)
+-- 创建时间: 2026-01-25
+-- ============================================================================
+CREATE TABLE subscription_plans (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    
+    -- 计划信息
+    name TEXT NOT NULL,           -- Free, Pro, Enterprise
+    slug TEXT NOT NULL UNIQUE,    -- free, pro, enterprise
+    description TEXT,
+    
+    -- 定价 (美元)
+    price_monthly DECIMAL(10,2),
+    price_yearly DECIMAL(10,2),
+    
+    -- 功能配置
+    features JSONB NOT NULL DEFAULT '{}'::jsonb,
+    
+    -- 显示设置
+    display_order INTEGER DEFAULT 0,
+    is_popular BOOLEAN DEFAULT false,  -- 推荐标签
+    is_active BOOLEAN DEFAULT true,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 预置订阅计划数据
+INSERT INTO subscription_plans (name, slug, price_monthly, price_yearly, features, display_order, is_popular) VALUES
+('Free', 'free', 0, 0, '{
+    "free_trials": 6,
+    "ai_tasks_daily": 10,
+    "storage_mb": 500,
+    "max_projects": 3,
+    "export_quality": ["720p"],
+    "watermark_free": false,
+    "priority_support": false
+}'::jsonb, 1, false),
+
+('Pro', 'pro', 19.99, 199.99, '{
+    "free_trials": -1,
+    "ai_tasks_daily": 100,
+    "storage_mb": 10240,
+    "max_projects": 20,
+    "export_quality": ["1080p", "4k"],
+    "watermark_free": true,
+    "priority_support": false
+}'::jsonb, 2, true),
+
+('Enterprise', 'enterprise', 49.99, 499.99, '{
+    "free_trials": -1,
+    "ai_tasks_daily": -1,
+    "storage_mb": 102400,
+    "max_projects": -1,
+    "export_quality": ["1080p", "4k", "8k"],
+    "watermark_free": true,
+    "priority_support": true,
+    "api_access": true
+}'::jsonb, 3, false)
+ON CONFLICT (slug) DO NOTHING;
+
+-- ============================================================================
+-- 18. 用户订阅表 (user_subscriptions)
+-- 创建时间: 2026-01-25
+-- ============================================================================
+CREATE TABLE user_subscriptions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL,
+    plan_id UUID NOT NULL REFERENCES subscription_plans(id),
+    
+    -- 订阅状态
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+        'active', 'cancelled', 'expired', 'past_due', 'trialing'
+    )),
+    
+    -- 订阅周期
+    billing_cycle TEXT CHECK (billing_cycle IN ('monthly', 'yearly')),
+    current_period_start TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    cancel_at_period_end BOOLEAN DEFAULT false,
+    
+    -- Stripe 集成 (预留)
+    stripe_customer_id TEXT,
+    stripe_subscription_id TEXT,
+    stripe_price_id TEXT,
+    
+    -- 时间戳
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_subscriptions_user_id ON user_subscriptions(user_id);
+CREATE INDEX idx_user_subscriptions_status ON user_subscriptions(status);
+
+-- ============================================================================
+-- 19. AI 模型积分配置表 (ai_model_credits)
+-- 创建时间: 2026-01-26
+-- 定义每种 AI 操作消耗的积分数
+-- ============================================================================
+CREATE TABLE ai_model_credits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    
+    -- 模型标识
+    model_key TEXT NOT NULL UNIQUE,  -- 'whisper', 'gpt4', 'kling_lip_sync', 'kling_face_swap'
+    model_name TEXT NOT NULL,        -- 显示名称
+    provider TEXT NOT NULL,          -- 'openai', 'kling', 'internal'
+    
+    -- 积分消耗配置
+    credits_per_call INTEGER,        -- 固定积分/次 (简单操作)
+    credits_per_second DECIMAL(10,4),-- 积分/秒 (音视频时长计费)
+    credits_per_minute DECIMAL(10,4),-- 积分/分钟 (替代方案)
+    min_credits INTEGER DEFAULT 1,   -- 最小消耗积分
+    max_credits INTEGER,             -- 最大消耗积分上限 (防止超长视频)
+    
+    -- 成本追踪
+    estimated_cost_usd DECIMAL(10,4),-- 预估单次成本 (USD)
+    cost_updated_at TIMESTAMPTZ,     -- 成本更新时间
+    
+    -- 状态
+    is_active BOOLEAN DEFAULT true,
+    category TEXT,                   -- 'transcription', 'generation', 'enhancement', 'analysis', 'editing'
+    description TEXT,                -- 功能描述
+    
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 预置 AI 模型积分配置
+INSERT INTO ai_model_credits (model_key, model_name, provider, credits_per_call, credits_per_minute, credits_per_second, min_credits, max_credits, estimated_cost_usd, category, description) VALUES
+('whisper_transcribe', '语音转文字', 'openai', NULL, 1.5, NULL, 1, 100, 0.006, 'transcription', '将视频/音频中的语音转换为文字'),
+('filler_detection', '填充词检测', 'internal', 2, NULL, NULL, 2, NULL, 0.01, 'analysis', '检测"嗯"、"啊"等填充词'),
+('vad', '语音活动检测', 'internal', 1, NULL, NULL, 1, NULL, 0.005, 'analysis', '检测视频中的静音片段'),
+('stem_separation', '人声分离', 'internal', NULL, 0.5, NULL, 3, 50, 0.02, 'enhancement', '分离人声和背景音乐'),
+('diarization', '说话人识别', 'internal', NULL, 1.0, NULL, 3, 80, 0.015, 'analysis', '识别视频中的不同说话人'),
+('gpt4_analysis', 'AI 智能分析', 'openai', 8, NULL, NULL, 5, 20, 0.04, 'analysis', '使用 GPT-4 分析视频内容'),
+('smart_clip', '智能剪辑', 'internal', 15, NULL, NULL, 10, 50, 0.08, 'editing', '一键智能剪辑视频'),
+('smart_camera', '智能运镜', 'internal', 10, NULL, NULL, 8, 40, 0.05, 'editing', '自动添加镜头运动效果'),
+('smart_clean', '智能清理', 'internal', 12, NULL, NULL, 8, 45, 0.06, 'editing', '自动去除静音和填充词'),
+('dalle3', 'AI 图片生成', 'openai', 12, NULL, NULL, 10, NULL, 0.08, 'generation', 'DALL-E 3 文生图'),
+('sd_generate', 'SD 图片生成', 'internal', 8, NULL, NULL, 6, NULL, 0.04, 'generation', 'Stable Diffusion 文生图'),
+('kling_lip_sync', 'AI 口型同步', 'kling', NULL, NULL, 8.0, 50, 500, 0.40, 'generation', '让视频中的人物口型匹配新音频'),
+('kling_face_swap', 'AI 换脸', 'kling', NULL, NULL, 10.0, 60, 600, 0.50, 'generation', '替换视频中的人脸'),
+('kling_i2v', '图生视频', 'kling', 100, NULL, NULL, 80, 200, 0.60, 'generation', '将图片转换为动态视频'),
+('kling_t2v', '文生视频', 'kling', 200, NULL, NULL, 150, 400, 1.20, 'generation', '根据文字描述生成视频'),
+('kling_motion', '运动控制', 'kling', 80, NULL, NULL, 60, 180, 0.45, 'generation', '控制视频中物体的运动轨迹'),
+('kling_omni_image', '全能图像', 'kling', 50, NULL, NULL, 40, 120, 0.30, 'generation', 'Kling 全能图像处理')
+ON CONFLICT (model_key) DO NOTHING;
+
+-- ============================================================================
+-- 20. 用户积分账户表 (user_credits)
+-- 创建时间: 2026-01-26
+-- ============================================================================
+CREATE TABLE user_credits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL UNIQUE,
+    
+    -- 会员等级
+    tier TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free', 'pro', 'enterprise')),
+    
+    -- 积分余额
+    credits_balance INTEGER DEFAULT 0,          -- 当前可用积分
+    credits_total_granted INTEGER DEFAULT 0,    -- 历史总获得积分
+    credits_total_consumed INTEGER DEFAULT 0,   -- 历史总消耗积分
+    
+    -- 月度配额
+    monthly_credits_limit INTEGER DEFAULT 100,  -- 每月配额上限
+    monthly_credits_used INTEGER DEFAULT 0,     -- 本月已用
+    monthly_reset_at TIMESTAMPTZ,               -- 下次重置时间
+    
+    -- 免费试用
+    free_trial_credits INTEGER DEFAULT 50,      -- 免费试用积分 (一次性)
+    free_trial_used BOOLEAN DEFAULT FALSE,      -- 是否已使用试用
+    
+    -- 充值积分 (非订阅购买)
+    paid_credits INTEGER DEFAULT 0,             -- 充值积分 (永不过期)
+    
+    -- 存储配额 (保留)
+    storage_limit_mb INTEGER DEFAULT 500,
+    storage_used_mb INTEGER DEFAULT 0,
+    
+    -- 项目配额 (保留)
+    max_projects INTEGER DEFAULT 3,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_credits_user_id ON user_credits(user_id);
+CREATE INDEX idx_user_credits_tier ON user_credits(tier);
+
+-- ============================================================================
+-- 21. 积分消耗记录表 (credit_transactions)
+-- 创建时间: 2026-01-26
+-- ============================================================================
+CREATE TABLE credit_transactions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL,
+    
+    -- 交易类型
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN (
+        'consume',      -- 消耗 (使用 AI 功能)
+        'grant',        -- 发放 (订阅续费、首次赠送)
+        'refund',       -- 退款 (任务失败退回)
+        'purchase',     -- 购买 (额外充值)
+        'expire',       -- 过期 (月度积分清零)
+        'adjust',       -- 调整 (客服手动调整)
+        'hold',         -- 冻结 (任务进行中)
+        'release'       -- 释放 (冻结取消)
+    )),
+    
+    -- 积分变动
+    credits_amount INTEGER NOT NULL,  -- 正数=增加，负数=减少
+    credits_before INTEGER NOT NULL,  -- 变动前余额
+    credits_after INTEGER NOT NULL,   -- 变动后余额
+    
+    -- 关联信息
+    model_key TEXT,                   -- AI 模型 (consume 时)
+    ai_task_id UUID,                  -- 关联的 AI 任务
+    subscription_id UUID,             -- 关联的订阅 (grant 时)
+    
+    -- 详细信息
+    description TEXT,                 -- 描述
+    metadata JSONB DEFAULT '{}'::jsonb,  -- 额外信息 (时长、参数等)
+    
+    -- 状态 (用于冻结/释放)
+    status TEXT DEFAULT 'completed' CHECK (status IN ('pending', 'completed', 'cancelled')),
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_credit_transactions_user_id ON credit_transactions(user_id);
+CREATE INDEX idx_credit_transactions_created_at ON credit_transactions(created_at DESC);
+CREATE INDEX idx_credit_transactions_type ON credit_transactions(transaction_type);
+CREATE INDEX idx_credit_transactions_ai_task ON credit_transactions(ai_task_id);
+CREATE INDEX idx_credit_transactions_status ON credit_transactions(status);
+
+-- 添加 monthly_credits 到订阅计划
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS monthly_credits INTEGER DEFAULT 0;
+UPDATE subscription_plans SET monthly_credits = 100 WHERE slug = 'free';
+UPDATE subscription_plans SET monthly_credits = 700 WHERE slug = 'pro';
+UPDATE subscription_plans SET monthly_credits = 3000 WHERE slug = 'enterprise';
+
+-- AI 任务表添加积分字段
+ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS credits_consumed INTEGER DEFAULT 0;
+ALTER TABLE ai_tasks ADD COLUMN IF NOT EXISTS credits_held INTEGER DEFAULT 0;
+
+-- ============================================================================
+-- 完成 - 21 张表
 -- ============================================================================
 
 -- ============================================================================

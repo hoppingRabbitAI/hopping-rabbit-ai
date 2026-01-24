@@ -274,8 +274,8 @@ interface EditorState {
   setCanvasEditMode: (mode: 'transform' | 'text' | 'subtitle' | null) => void;
   
   /** 侧边栏激活的面板 */
-  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | null;
-  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | null) => void;
+  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | null;
+  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | null) => void;
   
   /** 左侧栏激活的面板 */
   activeLeftPanel: 'subtitles' | 'assets' | null;
@@ -522,10 +522,10 @@ export const useEditorStore = create<EditorState>()(
             isLocal: false,
             
             // 素材源信息
-            // 如果有 asset_id，优先使用代理 URL 解决 CORS 问题
-            mediaUrl: c.asset_id
-              ? getAssetStreamUrl(c.asset_id as string)
-              : (c.url as string | undefined),
+            // 图片直接使用原始 URL，视频/音频使用代理 URL 解决 CORS 问题
+            mediaUrl: clipType === 'image'
+              ? (c.url as string | undefined)
+              : (c.asset_id ? getAssetStreamUrl(c.asset_id as string) : (c.url as string | undefined)),
             sourceStart: (c.source_start ?? 0) as number,
             originDuration: c.origin_duration as number | undefined,
             assetId: c.asset_id as string | undefined,
@@ -799,14 +799,15 @@ export const useEditorStore = create<EditorState>()(
       const maxNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
       const newIndex = maxNumber + 1;
       
-      const minOrderIndex = tracks.length > 0 
-        ? Math.min(...tracks.map(t => t.orderIndex)) 
-        : 1;
+      // ★ 新 track 使用最高的 orderIndex，放在最上层（最优先显示）
+      const maxOrderIndex = tracks.length > 0 
+        ? Math.max(...tracks.map(t => t.orderIndex)) 
+        : -1;
       
       const newTrack: Track = {
         id: generateId(),
         name: name || `Track ${newIndex}`,
-        orderIndex: minOrderIndex - 1,
+        orderIndex: maxOrderIndex + 1,  // ★ 最高层
         color: 'text-blue-400', // 统一使用蓝色
         isVisible: true,
         isLocked: false,

@@ -2,6 +2,8 @@
 
 import { useEffect, useCallback, useMemo } from 'react';
 import {
+  Play,
+  Pause,
   Scissors,
   Copy,
   Trash2,
@@ -69,6 +71,8 @@ export function ClipToolbar() {
   const historyIndex = useEditorStore((s) => s.historyIndex);
   const historyLength = useEditorStore((s) => s.history.length);
   const currentTime = useEditorStore((s) => s.currentTime);
+  const isPlaying = useEditorStore((s) => s.isPlaying);
+  const setIsPlaying = useEditorStore((s) => s.setIsPlaying);
   const splitClip = useEditorStore((s) => s.splitClip);
   const splitAllAtTime = useEditorStore((s) => s.splitAllAtTime);
   const duplicateClip = useEditorStore((s) => s.duplicateClip);
@@ -131,11 +135,20 @@ export function ClipToolbar() {
     if (canRedoNow) redo();
   }, [redo, canRedoNow]);
 
+  // 播放/暂停
+  const handlePlayPause = useCallback(() => {
+    setIsPlaying(!isPlaying);
+  }, [isPlaying, setIsPlaying]);
+
   // 键盘快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
+      // 空格键播放/暂停
+      if (e.code === 'Space' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        e.preventDefault(); e.stopPropagation(); handlePlayPause(); return;
+      }
       if (e.shiftKey && e.code === 'KeyF' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault(); e.stopPropagation(); handleSplit(); return;
       }
@@ -158,7 +171,7 @@ export function ClipToolbar() {
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [handleSplit, handleDelete, handleDuplicate, handleUndo, handleRedo, setToolMode]);
+  }, [handleSplit, handleDelete, handleDuplicate, handleUndo, handleRedo, handlePlayPause, setToolMode]);
 
   return (
     <div className="flex items-center justify-between h-11 px-4 bg-white border-b border-gray-100">
@@ -175,6 +188,12 @@ export function ClipToolbar() {
 
       {/* 中间：工具按钮 */}
       <div className="flex items-center space-x-1">
+        <ToolButton
+          icon={isPlaying ? <Pause size={15} /> : <Play size={15} />}
+          label={isPlaying ? '暂停' : '播放'}
+          onClick={handlePlayPause}
+          shortcut="Space"
+        />
         <ToolButton
           icon={<Scissors size={15} />}
           label="分割"

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { 
   Mail, 
   Lock, 
@@ -15,6 +16,7 @@ import {
   Rabbit
 } from 'lucide-react';
 import { useAuthStore } from '@/features/editor/store/auth-store';
+import { GoogleLoginButton, AuthDivider } from '@/components/auth/GoogleLoginButton';
 
 function FeatureItem({ text, icon }: { text: string; icon: React.ReactNode }) {
   return (
@@ -29,12 +31,13 @@ function FeatureItem({ text, icon }: { text: string; icon: React.ReactNode }) {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, isAuthenticated, isLoading: authLoading } = useAuthStore();
+  const { login, loginWithGoogle, isAuthenticated, isLoading: authLoading } = useAuthStore();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState('');
 
@@ -189,7 +192,7 @@ export default function LoginPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between items-center ml-1">
                     <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">密码</label>
-                    <a href="#" className="text-[10px] text-gray-500/60 hover:text-gray-400 transition-colors font-bold uppercase tracking-tighter">找回密码?</a>
+                    <Link href="/forgot-password" className="text-[10px] text-gray-500/60 hover:text-gray-400 transition-colors font-bold uppercase tracking-tighter">找回密码?</Link>
                   </div>
                   <div className="relative group">
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-500 group-focus-within:text-gray-500 transition-colors">
@@ -216,7 +219,7 @@ export default function LoginPage() {
                 <div className="pt-6">
                   <button 
                     type="submit"
-                    disabled={isLoading}
+                    disabled={isLoading || isGoogleLoading}
                     className="w-full bg-gray-700 text-white font-black py-4 rounded-2xl flex items-center justify-center space-x-2 hover:bg-gray-600 transition-all shadow-xl shadow-gray-900/20 group disabled:opacity-50 relative overflow-hidden"
                   >
                     {isLoading ? (
@@ -231,16 +234,39 @@ export default function LoginPage() {
                 </div>
               </form>
 
-              <div className="mt-10 flex items-center justify-center space-x-3 text-[11px] text-gray-600 bg-white/[0.02] py-2.5 rounded-full border border-white/5">
+              {/* Google 登录 */}
+              <AuthDivider />
+              <GoogleLoginButton 
+                onClick={async () => {
+                  setIsGoogleLoading(true);
+                  setError('');
+                  try {
+                    await loginWithGoogle();
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Google 登录失败');
+                    setIsGoogleLoading(false);
+                  }
+                }}
+                isLoading={isGoogleLoading}
+              />
+
+              <div className="mt-8 text-center text-sm text-gray-500">
+                还没有账号？
+                <Link href="/signup" className="text-gray-400 hover:text-white transition-colors ml-1 font-medium">
+                  立即注册
+                </Link>
+              </div>
+
+              <div className="mt-6 flex items-center justify-center space-x-3 text-[11px] text-gray-600 bg-white/[0.02] py-2.5 rounded-full border border-white/5">
                 <ShieldCheck size={14} className="text-gray-500/50" />
                 <span className="font-medium">HoppingRabbit 保护您的每一帧创意安全</span>
               </div>
 
-              <div className="mt-auto pt-10 border-t border-white/5 flex justify-between items-center text-[10px] text-gray-600 font-bold uppercase tracking-widest">
+              <div className="mt-auto pt-8 border-t border-white/5 flex justify-between items-center text-[10px] text-gray-600 font-bold uppercase tracking-widest">
                 <span>© 2026 HoppingRabbit AI</span>
                 <div className="flex space-x-6">
-                  <a href="#" className="hover:text-gray-400 transition-colors">使用条款</a>
-                  <a href="#" className="hover:text-gray-400 transition-colors">隐私声明</a>
+                  <Link href="/terms" className="hover:text-gray-400 transition-colors">使用条款</Link>
+                  <Link href="/privacy" className="hover:text-gray-400 transition-colors">隐私声明</Link>
                 </div>
               </div>
             </>

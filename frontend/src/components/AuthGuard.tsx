@@ -9,7 +9,7 @@ interface AuthGuardProps {
 }
 
 // 不需要认证的公开路由
-const PUBLIC_ROUTES = ['/login'];
+const PUBLIC_ROUTES = ['/login', '/signup', '/forgot-password', '/reset-password', '/settings', '/pricing'];
 
 // 加载超时时间（毫秒）
 const HYDRATION_TIMEOUT = 3000;  // 3秒（缩短超时）

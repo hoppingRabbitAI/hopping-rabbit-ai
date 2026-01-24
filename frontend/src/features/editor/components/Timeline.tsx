@@ -83,6 +83,7 @@ function pixelsToMs(px: number, zoomLevel: number): number {
 const CLIP_TYPE_ICONS: Record<ClipType, React.ReactNode> = {
   video: <Film size={14} />,
   audio: <Music size={14} />,
+  image: <Image size={14} />,   // 图片
   text: <Type size={14} />,
   subtitle: <Type size={14} />,
   voice: <Music size={14} />,   // 配音
@@ -1426,7 +1427,7 @@ export function Timeline() {
   // 片段点击处理
   const handleClipClick = (e: React.MouseEvent, clipId: string) => {
     e.stopPropagation();
-    const isMultiSelect = e.metaKey || e.ctrlKey;
+    const isMultiSelect = e.shiftKey;
     selectClip(clipId, isMultiSelect);
 
     // 如果是字幕或文本类型，自动打开对应面板

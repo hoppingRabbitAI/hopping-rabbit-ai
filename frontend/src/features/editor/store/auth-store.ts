@@ -28,6 +28,12 @@ export interface AuthUser {
   id: string;
   email: string;
   created_at?: string;
+  user_metadata?: {
+    display_name?: string;
+    bio?: string;
+    avatar_url?: string;
+    [key: string]: unknown;
+  };
 }
 
 interface AuthState {
@@ -39,8 +45,12 @@ interface AuthState {
   
   // Actions
   login: (email: string, password: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
+  resetPasswordForEmail: (email: string) => Promise<void>;
+  updatePassword: (newPassword: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -121,6 +131,75 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
+      loginWithGoogle: async () => {
+        set({ isLoading: true, error: null });
+        
+        try {
+          const supabase = getSupabase();
+          
+          const { error } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+              redirectTo: `${window.location.origin}/workspace`,
+              queryParams: {
+                access_type: 'offline',
+                prompt: 'consent',
+              },
+            },
+          });
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          // OAuth 会重定向，所以这里不需要设置状态
+          // 用户会在回调后通过 checkSession 获取状态
+        } catch (err) {
+          const rawMessage = err instanceof Error ? err.message : 'Google 登录失败';
+          const message = mapAuthError(rawMessage);
+          set({ 
+            isLoading: false, 
+            error: message,
+          });
+          throw new Error(message);
+        }
+      },
+
+      signUp: async (email: string, password: string) => {
+        set({ isLoading: true, error: null });
+        
+        try {
+          const supabase = getSupabase();
+          
+          const { data, error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              emailRedirectTo: `${window.location.origin}/login?verified=true`,
+            },
+          });
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          // 注册成功但需要验证邮箱
+          // Supabase 会自动发送验证邮件
+          set({
+            isLoading: false,
+            error: null,
+          });
+        } catch (err) {
+          const rawMessage = err instanceof Error ? err.message : '注册失败';
+          const message = mapAuthError(rawMessage);
+          set({ 
+            isLoading: false, 
+            error: message,
+          });
+          throw new Error(message);
+        }
+      },
+
       logout: async () => {
         set({ isLoading: true });
         
@@ -162,24 +241,36 @@ export const useAuthStore = create<AuthState>()(
           if (error) {
             // 刷新失败，尝试获取现有 session
             console.warn('[AuthStore] Refresh failed, trying getSession:', error.message);
-            const { data: { session: existingSession } } = await supabase.auth.getSession();
-            
-            if (existingSession?.user) {
-              const authUser: AuthUser = {
-                id: existingSession.user.id,
-                email: existingSession.user.email || '',
-                created_at: existingSession.user.created_at,
-              };
+            try {
+              const { data: { session: existingSession } } = await supabase.auth.getSession();
+              
+              if (existingSession?.user) {
+                const authUser: AuthUser = {
+                  id: existingSession.user.id,
+                  email: existingSession.user.email || '',
+                  created_at: existingSession.user.created_at,
+                };
 
-              set({
-                user: authUser,
-                accessToken: existingSession.access_token,
-                isAuthenticated: true,
-                isLoading: false,
-              });
-              return;
+                set({
+                  user: authUser,
+                  accessToken: existingSession.access_token,
+                  isAuthenticated: true,
+                  isLoading: false,
+                });
+                return;
+              }
+            } catch (sessionErr) {
+              // 忽略 AuthSessionMissingError，用户未登录时正常情况
+              console.warn('[AuthStore] getSession failed:', sessionErr);
             }
-            throw error;
+            // 没有有效 session，清除状态
+            set({
+              user: null,
+              accessToken: null,
+              isAuthenticated: false,
+              isLoading: false,
+            });
+            return;
           }
 
           if (session?.user) {
@@ -212,6 +303,58 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: false,
             isLoading: false,
           });
+        }
+      },
+
+      resetPasswordForEmail: async (email: string) => {
+        set({ isLoading: true, error: null });
+        
+        try {
+          const supabase = getSupabase();
+          
+          const { error } = await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: `${window.location.origin}/reset-password`,
+          });
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          set({ isLoading: false, error: null });
+        } catch (err) {
+          const rawMessage = err instanceof Error ? err.message : '发送重置邮件失败';
+          const message = mapAuthError(rawMessage);
+          set({ 
+            isLoading: false, 
+            error: message,
+          });
+          throw new Error(message);
+        }
+      },
+
+      updatePassword: async (newPassword: string) => {
+        set({ isLoading: true, error: null });
+        
+        try {
+          const supabase = getSupabase();
+          
+          const { error } = await supabase.auth.updateUser({
+            password: newPassword,
+          });
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          set({ isLoading: false, error: null });
+        } catch (err) {
+          const rawMessage = err instanceof Error ? err.message : '更新密码失败';
+          const message = mapAuthError(rawMessage);
+          set({ 
+            isLoading: false, 
+            error: message,
+          });
+          throw new Error(message);
         }
       },
 

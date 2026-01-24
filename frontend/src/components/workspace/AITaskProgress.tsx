@@ -163,7 +163,7 @@ export function AITaskProgress({
         onAddedToProject?.(result.asset_id, result.project_id);
         
         // 添加成功后跳转到编辑器页面
-        window.location.href = `/editor/${result.project_id}`;
+        window.location.href = `/editor?project=${result.project_id}`;
       }
     } catch (err) {
       console.error('添加到项目失败:', err);

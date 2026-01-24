@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import NextLink from 'next/link';
 import { RabbitLoader } from '../common/RabbitLoader';
 import { 
   Plus,
@@ -315,10 +316,14 @@ export function AssetsView({ onCreateProject, activeTab = 'home' }: AssetsViewPr
                 
                 {/* Menu Items */}
                 <div className="py-1">
-                  <button className="w-full flex items-center space-x-3 px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors text-sm">
+                  <NextLink 
+                    href="/settings" 
+                    className="w-full flex items-center space-x-3 px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors text-sm"
+                    onClick={() => setShowUserMenu(false)}
+                  >
                     <Settings size={16} />
                     <span>设置</span>
-                  </button>
+                  </NextLink>
                   <button
                     onClick={handleLogout}
                     className="w-full flex items-center space-x-3 px-4 py-2.5 text-red-600 hover:bg-red-50 transition-colors text-sm"
