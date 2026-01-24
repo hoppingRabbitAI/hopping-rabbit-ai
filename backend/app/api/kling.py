@@ -618,16 +618,21 @@ class AddToProjectRequest(BaseModel):
 
 
 def _get_or_create_track(supabase, project_id: str, track_type: str, user_id: str) -> str:
-    """获取或创建轨道，返回 track_id"""
+    """获取或创建轨道，返回 track_id
+    
+    逻辑：
+    1. 优先找已有同类型 clip 所在的 track（通过 clips.clip_type 判断）
+    2. 找不到则创建新轨道
+    """
     now = datetime.utcnow().isoformat()
     
-    # 查找该项目同类型的第一个轨道
-    existing = supabase.table("tracks").select("id").eq("project_id", project_id).eq("type", track_type).order("order_index").limit(1).execute()
+    # 1. 查找已有同类型 clip 所在的 track
+    existing_clip = supabase.table("clips").select("track_id, tracks!inner(project_id)").eq("clip_type", track_type).eq("tracks.project_id", project_id).order("created_at", desc=True).limit(1).execute()
     
-    if existing.data:
-        return existing.data[0]["id"]
+    if existing_clip.data:
+        return existing_clip.data[0]["track_id"]
     
-    # 不存在则创建新轨道
+    # 2. 没有同类型 clip，创建新轨道
     track_id = str(uuid.uuid4())
     
     # 获取当前最大 order_index
@@ -638,7 +643,6 @@ def _get_or_create_track(supabase, project_id: str, track_type: str, user_id: st
         "id": track_id,
         "project_id": project_id,
         "name": f"AI {track_type.capitalize()} Track",
-        "type": track_type,
         "order_index": order_index,
         "is_muted": False,
         "is_locked": False,
@@ -647,7 +651,7 @@ def _get_or_create_track(supabase, project_id: str, track_type: str, user_id: st
     }
     
     supabase.table("tracks").insert(track_data).execute()
-    logger.info(f"[KlingAPI] 创建新轨道: track_id={track_id}, type={track_type}")
+    logger.info(f"[KlingAPI] 创建新轨道: track_id={track_id}, name={track_data['name']}")
     
     return track_id
 
@@ -699,8 +703,8 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
         # 3. 确定文件类型和素材名称
         task_type = task["task_type"]
         is_image = task_type in ["image_generation", "omni_image"]
-        file_type = "image" if is_image else "video"
-        track_type = "image" if is_image else "video"
+        file_type = "image" if is_image else "video"  # 用于 assets.file_type
+        clip_type = "image" if is_image else "video"   # 用于 clips.clip_type
         
         task_type_labels = {
             "lip_sync": "口型同步",
@@ -776,28 +780,28 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
         
         if request.create_clip:
             # 获取或创建轨道
-            track_id = _get_or_create_track(supabase, project_id, track_type, user_id)
+            track_id = _get_or_create_track(supabase, project_id, clip_type, user_id)
             
-            # 获取轨道末尾时间
-            start_time = _get_track_end_time(supabase, track_id)
+            # 获取轨道末尾时间 (毫秒)
+            start_time_ms = int(_get_track_end_time(supabase, track_id))
             
-            # 图片默认显示 5 秒
-            clip_duration = duration if not is_image else 5.0
-            end_time = start_time + clip_duration
+            # 图片默认显示 5 秒 = 5000 毫秒，视频使用实际时长
+            clip_duration_ms = int((duration if not is_image else 5.0) * 1000)
+            end_time_ms = start_time_ms + clip_duration_ms
             
             clip_id = str(uuid.uuid4())
             
+            # clips 表字段 - 只包含数据库实际存在的字段
             clip_data = {
                 "id": clip_id,
                 "track_id": track_id,
                 "asset_id": asset_id,
-                "clip_type": file_type,
-                "start_time": start_time,
-                "end_time": end_time,
+                "clip_type": clip_type,  # image 或 video
+                "start_time": start_time_ms,
+                "end_time": end_time_ms,
                 "source_start": 0,
-                "source_end": clip_duration,
-                "origin_duration": clip_duration,
-                "volume": 1.0,
+                "source_end": clip_duration_ms,
+                "volume": 1.0 if not is_image else None,  # 图片没有音量
                 "is_muted": False,
                 "speed": 1.0,
                 "name": asset_name,

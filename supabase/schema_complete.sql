@@ -199,7 +199,7 @@ CREATE TABLE clips (
     asset_id UUID,
     
     -- 片段类型 (核心字段：区分不同类型的clip)
-    clip_type TEXT NOT NULL DEFAULT 'video' CHECK (clip_type IN ('video', 'audio', 'subtitle', 'text', 'voice', 'effect', 'filter', 'sticker', 'transition')),
+    clip_type TEXT NOT NULL DEFAULT 'video' CHECK (clip_type IN ('video', 'image', 'audio', 'subtitle', 'text', 'voice', 'effect', 'filter', 'sticker', 'transition')),
     
     -- 时间信息 (毫秒)
     start_time INTEGER NOT NULL,

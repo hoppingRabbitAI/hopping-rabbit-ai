@@ -6,13 +6,14 @@
 /**
  * 内容块类型 - 所有类型都挂载在轨道上
  */
-export type ClipType = 'video' | 'audio' | 'text' | 'subtitle' | 'voice' | 'effect' | 'filter' | 'transition' | 'sticker';
+export type ClipType = 'video' | 'image' | 'audio' | 'text' | 'subtitle' | 'voice' | 'effect' | 'filter' | 'transition' | 'sticker';
 
 /**
  * 素材类型颜色映射
  */
 export const CLIP_TYPE_COLORS: Record<ClipType, string> = {
   video: 'bg-transparent',  // 视频使用透明背景显示缩略图
+  image: 'bg-transparent',  // 图片也使用透明背景显示缩略图
   audio: 'bg-green-600',
   text: 'bg-purple-600',
   subtitle: 'bg-yellow-600',
