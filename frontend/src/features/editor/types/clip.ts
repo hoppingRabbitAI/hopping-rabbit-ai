@@ -13,7 +13,7 @@ export type ClipType = 'video' | 'image' | 'audio' | 'text' | 'subtitle' | 'voic
  */
 export const CLIP_TYPE_COLORS: Record<ClipType, string> = {
   video: 'bg-transparent',  // 视频使用透明背景显示缩略图
-  image: 'bg-transparent',  // 图片也使用透明背景显示缩略图
+  image: 'bg-violet-600',   // 图片使用紫色背景
   audio: 'bg-green-600',
   text: 'bg-purple-600',
   subtitle: 'bg-yellow-600',

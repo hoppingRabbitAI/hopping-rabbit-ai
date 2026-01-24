@@ -1235,9 +1235,9 @@ export function Timeline() {
       const dropTimeMs = pixelsToMs(dropX, zoomLevel);
       
       // 计算素材时长（秒转毫秒）
-      // 图片默认显示 5 秒
+      // 图片默认显示 3 秒
       const isImage = asset.type === 'image';
-      const durationMs = isImage ? 5000 : (asset.metadata?.duration || 10) * 1000;
+      const durationMs = isImage ? 3000 : (asset.metadata?.duration || 10) * 1000;
       
       // 获取素材的宽高比
       let aspectRatio: '16:9' | '9:16' | '1:1' | undefined;

@@ -162,10 +162,8 @@ export function AITaskProgress({
         setShowProjectSelector(false);
         onAddedToProject?.(result.asset_id, result.project_id);
         
-        // 如果是新建项目，跳转到编辑器
-        if (result.is_new_project) {
-          window.location.href = `/editor/${result.project_id}`;
-        }
+        // 添加成功后跳转到编辑器页面
+        window.location.href = `/editor/${result.project_id}`;
       }
     } catch (err) {
       console.error('添加到项目失败:', err);

@@ -1204,6 +1204,7 @@ function calcClipTransformStyle(
 export function VideoCanvasNew() {
   // Store 状态
   const clips = useEditorStore((s) => s.clips);
+  const tracks = useEditorStore((s) => s.tracks);
   const currentTime = useEditorStore((s) => s.currentTime);
   const isPlaying = useEditorStore((s) => s.isPlaying);
   const setIsPlaying = useEditorStore((s) => s.setIsPlaying);
@@ -1271,19 +1272,21 @@ export function VideoCanvasNew() {
     setVideoElement(node);
   }, []);
 
-  // 分离视频和音频 clips
-  const { videoClips, audioClips } = useMemo(() => {
+  // 分离视频、音频和图片 clips
+  const { videoClips, audioClips, imageClips } = useMemo(() => {
     const video: Clip[] = [];
     const audio: Clip[] = [];
+    const image: Clip[] = [];
     clips.forEach(c => {
       // ★ 修复：只要有 mediaUrl 或 assetId 就可以播放
       // assetId 可以用来动态生成代理 URL
       if (!c.mediaUrl && !c.assetId) return;
       if (c.clipType === 'video') video.push(c);
       else if (c.clipType === 'audio') audio.push(c);
+      else if (c.clipType === 'image') image.push(c);
     });
-    bufferLog('📋 Clips 过滤结果: video=', video.length, 'audio=', audio.length, 'total=', clips.length);
-    return { videoClips: video, audioClips: audio };
+    bufferLog('📋 Clips 过滤结果: video=', video.length, 'audio=', audio.length, 'image=', image.length, 'total=', clips.length);
+    return { videoClips: video, audioClips: audio, imageClips: image };
   }, [clips]);
 
   const primaryVideoClip = videoClips[0] || null;
@@ -1300,9 +1303,24 @@ export function VideoCanvasNew() {
     [videoClips, currentTime]
   );
   
+  // 当前活跃的图片 clips（可能有多个，按 track.orderIndex 排序）
+  const activeImageClips = useMemo(() => {
+    return imageClips
+      .filter(c => currentTime >= c.start && currentTime < c.start + c.duration)
+      .sort((a, b) => {
+        // 按 trackId 找到 track 的 orderIndex，越高越靠上
+        const trackA = tracks.find(t => t.id === a.trackId);
+        const trackB = tracks.find(t => t.id === b.trackId);
+        return (trackB?.orderIndex || 0) - (trackA?.orderIndex || 0);
+      });
+  }, [imageClips, currentTime, tracks]);
+  
   // ★★★ 关键修复：使用 activeVideoClip 的 URL，而不是固定使用第一个 ★★★
   // 如果当前时间没有活跃的 clip，退回到第一个 clip
   const currentVideoClip = activeVideoClip || primaryVideoClip;
+  
+  // 是否有可视内容（视频或图片）
+  const hasVisualContent = videoClips.length > 0 || imageClips.length > 0;
   
   // ★ 仅在开发调试时启用：播放头在第一个 clip 之前的警告
   useEffect(() => {
@@ -3164,7 +3182,7 @@ export function VideoCanvasNew() {
 
       {/* 视频画布区域 - 裁剪超出画布边界的内容（只显示绿框内） */}
       <div ref={videoAreaRef} className="flex-1 flex items-center justify-center min-h-0 p-4" onClick={handleCanvasBackgroundClick}>
-        {videoUrl ? (
+        {hasVisualContent ? (
           canvasSize.width > 0 && canvasSize.height > 0 ? (
             <div 
               className="relative rounded-2xl shadow-lg"
@@ -3185,19 +3203,45 @@ export function VideoCanvasNew() {
               />
               
               {/* ★★★ 视频容器：动态挂载预热的视频元素 ★★★ */}
-              <div 
-                ref={videoContainerCallback}
-                className="relative w-full h-full cursor-pointer"
-                style={{
-                  ...videoStyle,
-                  willChange: 'transform, opacity',
-                  backfaceVisibility: 'hidden',
-                }}
-                onClick={handleVideoClick}
-              />
+              {videoUrl && (
+                <div 
+                  ref={videoContainerCallback}
+                  className="relative w-full h-full cursor-pointer"
+                  style={{
+                    ...videoStyle,
+                    willChange: 'transform, opacity',
+                    backfaceVisibility: 'hidden',
+                  }}
+                  onClick={handleVideoClick}
+                />
+              )}
+
+              {/* ★★★ 图片图层：渲染当前活跃的 image clips ★★★ */}
+              {activeImageClips.map((imgClip, index) => (
+                <div
+                  key={imgClip.id}
+                  className="absolute inset-0 flex items-center justify-center"
+                  style={{
+                    zIndex: 10 + index, // 图片在视频上层，多张图片按数组顺序叠加
+                  }}
+                >
+                  <img
+                    src={imgClip.mediaUrl || imgClip.thumbnail}
+                    alt={imgClip.name || 'Image'}
+                    className="max-w-full max-h-full object-contain"
+                    style={{
+                      // 应用 transform 如果有的话
+                      transform: imgClip.transform 
+                        ? `translate(${imgClip.transform.x || 0}px, ${imgClip.transform.y || 0}px) scale(${imgClip.transform.scale || 1}) rotate(${imgClip.transform.rotation || 0}deg)`
+                        : undefined,
+                      opacity: imgClip.transform?.opacity ?? 1,
+                    }}
+                  />
+                </div>
+              ))}
 
               {/* 加载/缓冲指示器 */}
-              {!isVideoReady && (
+              {videoUrl && !isVideoReady && (
                 <div className="absolute inset-0 flex items-center justify-center bg-white/80">
                   <div className="text-center space-y-2">
                     <RabbitLoader size={48} />

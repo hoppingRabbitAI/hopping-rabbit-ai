@@ -785,8 +785,8 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
             # 获取轨道末尾时间 (毫秒)
             start_time_ms = int(_get_track_end_time(supabase, track_id))
             
-            # 图片默认显示 5 秒 = 5000 毫秒，视频使用实际时长
-            clip_duration_ms = int((duration if not is_image else 5.0) * 1000)
+            # 图片默认显示 3 秒 = 3000 毫秒，视频使用实际时长
+            clip_duration_ms = int((duration if not is_image else 3.0) * 1000)
             end_time_ms = start_time_ms + clip_duration_ms
             
             clip_id = str(uuid.uuid4())
@@ -811,7 +811,7 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
             }
             
             supabase.table("clips").insert(clip_data).execute()
-            logger.info(f"[KlingAPI] 创建 clip: clip_id={clip_id}, start={start_time}, end={end_time}")
+            logger.info(f"[KlingAPI] 创建 clip: clip_id={clip_id}, start={start_time_ms}, end={end_time_ms}")
         
         # 7. 更新 ai_tasks 表
         supabase.table("ai_tasks").update({

@@ -309,7 +309,7 @@ const DEFAULT_TRACKS: Track[] = [
 // 内容块类型颜色映射 - 按类型区分
 const CLIP_TYPE_COLORS: Record<ClipType, string[]> = {
   video: ['from-blue-500/80 to-indigo-600/60', 'from-blue-600/80 to-indigo-700/60', 'from-indigo-500/80 to-blue-600/60'],
-  image: ['from-sky-500/80 to-blue-600/60', 'from-blue-500/80 to-sky-600/60', 'from-cyan-500/80 to-blue-600/60'],
+  image: ['from-violet-500/80 to-purple-600/60', 'from-purple-500/80 to-violet-600/60', 'from-fuchsia-500/80 to-violet-600/60'],
   audio: ['from-green-500/80 to-emerald-600/60', 'from-emerald-500/80 to-green-600/60', 'from-teal-500/80 to-green-600/60'],
   text: ['from-purple-500/80 to-violet-600/60', 'from-violet-500/80 to-purple-600/60', 'from-fuchsia-500/80 to-purple-600/60'],
   subtitle: ['from-yellow-500/80 to-amber-600/60', 'from-amber-500/80 to-yellow-600/60'],
