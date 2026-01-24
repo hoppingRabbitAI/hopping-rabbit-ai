@@ -470,6 +470,7 @@ CREATE TABLE ai_tasks (
     
     -- 输出（第一个结果的 URL，详细结果在 ai_outputs 表）
     output_url TEXT,
+    output_asset_id UUID,  -- 关联到素材库的 Asset ID
     result_metadata JSONB,  -- {total_outputs, output_ids}
     
     -- 错误信息

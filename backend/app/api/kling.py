@@ -611,21 +611,76 @@ async def cancel_ai_task(task_id: str):
 
 class AddToProjectRequest(BaseModel):
     """添加到项目请求"""
-    project_id: str = Field(..., description="目标项目 ID")
+    project_id: Optional[str] = Field(None, description="目标项目 ID（为空则创建新项目）")
     name: Optional[str] = Field(None, description="素材名称（可选，默认使用任务类型）")
+    create_clip: bool = Field(True, description="是否自动创建 clip 添加到轨道")
+    track_type: str = Field("video", description="轨道类型: video/audio/image")
+
+
+def _get_or_create_track(supabase, project_id: str, track_type: str, user_id: str) -> str:
+    """获取或创建轨道，返回 track_id"""
+    now = datetime.utcnow().isoformat()
+    
+    # 查找该项目同类型的第一个轨道
+    existing = supabase.table("tracks").select("id").eq("project_id", project_id).eq("type", track_type).order("order_index").limit(1).execute()
+    
+    if existing.data:
+        return existing.data[0]["id"]
+    
+    # 不存在则创建新轨道
+    track_id = str(uuid.uuid4())
+    
+    # 获取当前最大 order_index
+    max_order = supabase.table("tracks").select("order_index").eq("project_id", project_id).order("order_index", desc=True).limit(1).execute()
+    order_index = (max_order.data[0]["order_index"] + 1) if max_order.data else 0
+    
+    track_data = {
+        "id": track_id,
+        "project_id": project_id,
+        "name": f"AI {track_type.capitalize()} Track",
+        "type": track_type,
+        "order_index": order_index,
+        "is_muted": False,
+        "is_locked": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    
+    supabase.table("tracks").insert(track_data).execute()
+    logger.info(f"[KlingAPI] 创建新轨道: track_id={track_id}, type={track_type}")
+    
+    return track_id
+
+
+def _get_track_end_time(supabase, track_id: str) -> float:
+    """获取轨道上最后一个 clip 的结束时间"""
+    result = supabase.table("clips").select("end_time").eq("track_id", track_id).order("end_time", desc=True).limit(1).execute()
+    
+    if result.data:
+        return result.data[0]["end_time"]
+    return 0
 
 
 @router.post("/ai-task/{task_id}/add-to-project", summary="添加到项目", tags=["任务管理"])
 async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
     """
-    将 AI 任务的输出添加到项目素材库
-    - 从 ai_tasks 表获取 output_url
-    - 在 assets 表创建记录，关联 ai_task_id
+    将 AI 任务的输出添加到项目
+    
+    支持两种模式：
+    1. project_id 为空：创建新项目，自动添加 asset 和 clip
+    2. project_id 有值：添加到现有项目，自动创建 clip 添加到轨道末尾
+    
+    返回:
+    - project_id: 项目 ID（新建或现有）
+    - asset_id: 素材 ID
+    - clip_id: 片段 ID（如果 create_clip=true）
+    - is_new_project: 是否新建了项目
     """
     user_id = _get_current_user_id()
     
     try:
         supabase = _get_supabase()
+        now = datetime.utcnow().isoformat()
         
         # 1. 获取 AI 任务信息
         task_result = supabase.table("ai_tasks").select("*").eq("id", task_id).single().execute()
@@ -645,6 +700,7 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
         task_type = task["task_type"]
         is_image = task_type in ["image_generation", "omni_image"]
         file_type = "image" if is_image else "video"
+        track_type = "image" if is_image else "video"
         
         task_type_labels = {
             "lip_sync": "口型同步",
@@ -660,19 +716,50 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
         default_name = f"{task_type_labels.get(task_type, 'AI生成')}_{task_id[:8]}"
         asset_name = request.name or default_name
         
-        # 4. 创建 asset 记录
+        # 从 result_metadata 获取媒体信息
+        metadata = task.get("result_metadata") or {}
+        duration = metadata.get("duration", 5.0)  # 默认 5 秒
+        width = metadata.get("width", 1920)
+        height = metadata.get("height", 1080)
+        
+        is_new_project = False
+        project_id = request.project_id
+        
+        # 4. 如果没有 project_id，创建新项目
+        if not project_id:
+            is_new_project = True
+            project_id = str(uuid.uuid4())
+            
+            project_data = {
+                "id": project_id,
+                "user_id": user_id,
+                "name": f"新项目 - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                "description": f"由 AI 任务 {task_type_labels.get(task_type, 'AI')} 创建",
+                "resolution": {"width": width, "height": height},
+                "fps": 30,
+                "status": "draft",
+                "created_at": now,
+                "updated_at": now,
+            }
+            
+            supabase.table("projects").insert(project_data).execute()
+            logger.info(f"[KlingAPI] 创建新项目: project_id={project_id}")
+        
+        # 5. 创建 asset 记录
         asset_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
         
         asset_data = {
             "id": asset_id,
-            "project_id": request.project_id,
+            "project_id": project_id,
             "user_id": user_id,
             "name": asset_name,
             "original_filename": f"{asset_name}.{'png' if is_image else 'mp4'}",
             "file_type": file_type,
             "mime_type": "image/png" if is_image else "video/mp4",
-            "storage_path": task["output_url"],  # 使用 AI 生成的 URL
+            "storage_path": task["output_url"],
+            "duration": duration if not is_image else None,
+            "width": width,
+            "height": height,
             "status": "ready",
             "ai_task_id": task_id,
             "ai_generated": True,
@@ -680,28 +767,69 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
             "updated_at": now,
         }
         
-        # 从 result_metadata 获取视频信息（如果有）
-        metadata = task.get("result_metadata") or {}
-        if metadata.get("duration"):
-            asset_data["duration"] = metadata["duration"]
-        if metadata.get("width"):
-            asset_data["width"] = metadata["width"]
-        if metadata.get("height"):
-            asset_data["height"] = metadata["height"]
-        
         supabase.table("assets").insert(asset_data).execute()
+        logger.info(f"[KlingAPI] 创建 asset: asset_id={asset_id}")
         
-        # 5. 更新 ai_tasks 表的 output_asset_id
+        # 6. 创建 clip（如果需要）
+        clip_id = None
+        track_id = None
+        
+        if request.create_clip:
+            # 获取或创建轨道
+            track_id = _get_or_create_track(supabase, project_id, track_type, user_id)
+            
+            # 获取轨道末尾时间
+            start_time = _get_track_end_time(supabase, track_id)
+            
+            # 图片默认显示 5 秒
+            clip_duration = duration if not is_image else 5.0
+            end_time = start_time + clip_duration
+            
+            clip_id = str(uuid.uuid4())
+            
+            clip_data = {
+                "id": clip_id,
+                "track_id": track_id,
+                "asset_id": asset_id,
+                "clip_type": file_type,
+                "start_time": start_time,
+                "end_time": end_time,
+                "source_start": 0,
+                "source_end": clip_duration,
+                "origin_duration": clip_duration,
+                "volume": 1.0,
+                "is_muted": False,
+                "speed": 1.0,
+                "name": asset_name,
+                "cached_url": task["output_url"],
+                "created_at": now,
+                "updated_at": now,
+            }
+            
+            supabase.table("clips").insert(clip_data).execute()
+            logger.info(f"[KlingAPI] 创建 clip: clip_id={clip_id}, start={start_time}, end={end_time}")
+        
+        # 7. 更新 ai_tasks 表
         supabase.table("ai_tasks").update({
             "output_asset_id": asset_id,
+            "updated_at": now,
         }).eq("id", task_id).execute()
         
-        logger.info(f"[KlingAPI] AI任务添加到项目: task_id={task_id}, asset_id={asset_id}, project_id={request.project_id}")
+        # 8. 更新项目时间戳
+        supabase.table("projects").update({
+            "updated_at": now,
+        }).eq("id", project_id).execute()
+        
+        logger.info(f"[KlingAPI] AI任务添加完成: task_id={task_id}, project_id={project_id}, is_new={is_new_project}")
         
         return {
             "success": True,
+            "project_id": project_id,
             "asset_id": asset_id,
-            "message": f"已添加到项目",
+            "clip_id": clip_id,
+            "track_id": track_id,
+            "is_new_project": is_new_project,
+            "message": "已创建新项目并添加" if is_new_project else "已添加到项目",
         }
         
     except HTTPException:

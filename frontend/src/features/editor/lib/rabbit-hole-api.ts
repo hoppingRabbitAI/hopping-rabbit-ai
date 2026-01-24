@@ -308,15 +308,33 @@ export async function cancelAITask(taskId: string): Promise<{ success: boolean; 
 
 /**
  * 添加 AI 任务到项目
+ * @param taskId - AI 任务 ID
+ * @param projectId - 项目 ID（为空则创建新项目）
+ * @param options - 可选配置
  */
 export async function addAITaskToProject(
   taskId: string, 
-  projectId: string, 
-  name?: string
-): Promise<{ success: boolean; asset_id: string; message: string }> {
+  projectId?: string | null, 
+  options?: {
+    name?: string;
+    createClip?: boolean;
+  }
+): Promise<{ 
+  success: boolean; 
+  project_id: string;
+  asset_id: string; 
+  clip_id?: string;
+  track_id?: string;
+  is_new_project: boolean;
+  message: string;
+}> {
   return request(`/kling/ai-task/${taskId}/add-to-project`, {
     method: 'POST',
-    body: JSON.stringify({ project_id: projectId, name }),
+    body: JSON.stringify({ 
+      project_id: projectId || null,
+      name: options?.name,
+      create_clip: options?.createClip ?? true,
+    }),
   });
 }
 

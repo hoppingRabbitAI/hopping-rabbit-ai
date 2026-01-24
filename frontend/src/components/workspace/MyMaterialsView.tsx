@@ -17,7 +17,8 @@ import {
   CheckSquare,
   Square,
   CheckCheck,
-  Play
+  Play,
+  Plus
 } from 'lucide-react';
 import { 
   getAITaskList, 
@@ -333,7 +334,7 @@ export function MyMaterialsView() {
   }, [projects.length, loadProjects]);
 
   // 确认添加到项目
-  const confirmAddToProject = useCallback(async (projectId: string) => {
+  const confirmAddToProject = useCallback(async (projectId: string | null) => {
     if (!selectedTaskId || addingToProject) return;
     
     setAddingToProject(true);
@@ -343,6 +344,11 @@ export function MyMaterialsView() {
         setAddedTaskIds(prev => new Set(prev).add(selectedTaskId));
         setShowProjectSelector(false);
         setSelectedTaskId(null);
+        
+        // 如果是新建项目，跳转到编辑器
+        if (result.is_new_project) {
+          window.location.href = `/editor/${result.project_id}`;
+        }
       }
     } catch (err) {
       console.error('添加到项目失败:', err);
@@ -586,16 +592,31 @@ export function MyMaterialsView() {
             </div>
             
             <div className="max-h-80 overflow-y-auto">
+              {/* 新建项目按钮 - 始终显示在最上面 */}
+              <button
+                onClick={() => confirmAddToProject(null)}
+                disabled={addingToProject}
+                className="w-full px-4 py-3 text-left hover:bg-violet-50 transition-colors flex items-center gap-3 disabled:opacity-50 border-b border-gray-200"
+              >
+                <div className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center">
+                  <Plus size={16} className="text-violet-600" />
+                </div>
+                <span className="text-sm text-violet-600 font-medium">新建项目并编辑</span>
+              </button>
+              
               {loadingProjects ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 size={24} className="animate-spin text-gray-400" />
                 </div>
               ) : projects.length === 0 ? (
-                <div className="py-8 text-center text-gray-500">
-                  暂无项目
+                <div className="py-6 text-center text-gray-500 text-sm">
+                  暂无其他项目
                 </div>
               ) : (
                 <div className="py-2">
+                  <div className="px-4 py-1.5 text-xs text-gray-400 bg-gray-50">
+                    添加到现有项目
+                  </div>
                   {projects.map((project) => (
                     <button
                       key={project.id}

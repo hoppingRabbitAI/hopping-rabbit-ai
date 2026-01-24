@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   Loader2, 
   CheckCircle, 
@@ -11,7 +12,8 @@ import {
   X,
   RefreshCw,
   FolderPlus,
-  ChevronDown
+  ChevronDown,
+  Plus
 } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 import { 
@@ -149,16 +151,21 @@ export function AITaskProgress({
   }, []);
 
   // 添加到项目
-  const handleAddToProject = useCallback(async (projectId: string) => {
+  const handleAddToProject = useCallback(async (projectId: string | null) => {
     if (!taskId || addingToProject) return;
     
     setAddingToProject(true);
     try {
       const result = await addAITaskToProject(taskId, projectId);
       if (result.success) {
-        setAddedProjectId(projectId);
+        setAddedProjectId(result.project_id);
         setShowProjectSelector(false);
-        onAddedToProject?.(result.asset_id, projectId);
+        onAddedToProject?.(result.asset_id, result.project_id);
+        
+        // 如果是新建项目，跳转到编辑器
+        if (result.is_new_project) {
+          window.location.href = `/editor/${result.project_id}`;
+        }
       }
     } catch (err) {
       console.error('添加到项目失败:', err);
@@ -402,25 +409,39 @@ export function AITaskProgress({
                   {/* 项目选择下拉 */}
                   {showProjectSelector && (
                     <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
+                      {/* 新建项目按钮 - 始终显示在最上面 */}
+                      <button
+                        onClick={() => handleAddToProject(null)}
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-violet-50 transition-colors border-b border-gray-200 flex items-center gap-2 text-violet-600 font-medium"
+                      >
+                        <Plus size={16} />
+                        新建项目并编辑
+                      </button>
+                      
                       {loadingProjects ? (
                         <div className="flex items-center justify-center py-4">
                           <Loader2 size={16} className="animate-spin text-gray-400" />
                           <span className="ml-2 text-sm text-gray-500">加载中...</span>
                         </div>
                       ) : projects.length === 0 ? (
-                        <div className="py-4 text-center text-sm text-gray-500">
-                          暂无项目
+                        <div className="py-3 text-center text-sm text-gray-500">
+                          暂无其他项目
                         </div>
                       ) : (
-                        projects.map((project) => (
-                          <button
-                            key={project.id}
-                            onClick={() => handleAddToProject(project.id)}
-                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
-                          >
-                            {project.name}
-                          </button>
-                        ))
+                        <>
+                          <div className="px-3 py-1.5 text-xs text-gray-400 bg-gray-50">
+                            添加到现有项目
+                          </div>
+                          {projects.map((project) => (
+                            <button
+                              key={project.id}
+                              onClick={() => handleAddToProject(project.id)}
+                              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
+                            >
+                              {project.name}
+                            </button>
+                          ))}
+                        </>
                       )}
                     </div>
                   )}
