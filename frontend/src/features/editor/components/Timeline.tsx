@@ -1225,8 +1225,8 @@ export function Timeline() {
       
       const asset = data.asset;
       
-      // 只处理视频和音频素材
-      if (asset.type !== 'video' && asset.type !== 'audio') return;
+      // 处理视频、音频和图片素材
+      if (asset.type !== 'video' && asset.type !== 'audio' && asset.type !== 'image') return;
       
       if (!timelineRef.current) return;
       
@@ -1235,7 +1235,9 @@ export function Timeline() {
       const dropTimeMs = pixelsToMs(dropX, zoomLevel);
       
       // 计算素材时长（秒转毫秒）
-      const durationMs = (asset.metadata?.duration || 10) * 1000;
+      // 图片默认显示 5 秒
+      const isImage = asset.type === 'image';
+      const durationMs = isImage ? 5000 : (asset.metadata?.duration || 10) * 1000;
       
       // 获取素材的宽高比
       let aspectRatio: '16:9' | '9:16' | '1:1' | undefined;
@@ -1246,8 +1248,11 @@ export function Timeline() {
         else aspectRatio = '1:1';
       }
       
-      // 确定 clip 类型
-      const clipType = asset.type === 'video' ? 'video' : 'audio';
+      // 确定 clip 类型 (video/audio/image)
+      let clipType: ClipType;
+      if (asset.type === 'video') clipType = 'video';
+      else if (asset.type === 'audio') clipType = 'audio';
+      else clipType = 'image';
       
       // 创建新的 clip ID（必须是 UUID 格式，后端会验证）
       const clipId = crypto.randomUUID();

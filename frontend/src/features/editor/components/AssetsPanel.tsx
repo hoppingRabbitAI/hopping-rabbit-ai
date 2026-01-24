@@ -64,8 +64,8 @@ function AssetItem({ asset, index, isSelected, onSelect, setItemRef }: AssetItem
     }
   };
 
-  // 判断是否可拖拽
-  const isDraggable = asset.type === 'video' || asset.type === 'audio';
+  // 判断是否可拖拽 (video, audio, image 都可以拖拽到时间轴)
+  const isDraggable = asset.type === 'video' || asset.type === 'audio' || asset.type === 'image';
 
   return (
     <div
