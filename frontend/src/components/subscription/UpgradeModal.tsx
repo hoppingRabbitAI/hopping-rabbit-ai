@@ -215,7 +215,7 @@ async function subscribeToplan(
   message: string;
   credits_granted?: number;
 }> {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/subscriptions/subscribe`, {
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/subscriptions/subscribe`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
