@@ -7,7 +7,7 @@ HoppingRabbit AI - 任务 API
 - tasks: 移除 current_step 字段
 - assets: type → file_type, 移除 url/subtype/metadata
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from typing import Optional, List
 from datetime import datetime
 from uuid import uuid4
@@ -18,11 +18,9 @@ logger = logging.getLogger(__name__)
 
 from ..models import ASRRequest, ASRClipRequest, StemSeparationRequest, SmartCleanRequest, ExtractAudioRequest
 from ..services.supabase_client import supabase, get_file_url
+from .auth import get_current_user_id
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
-
-# 默认用户 ID（TODO: 从认证获取）
-DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 
 # ============================================
@@ -30,10 +28,13 @@ DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 # ============================================
 
 @router.get("/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取任务状态"""
     try:
-        result = supabase.table("tasks").select("*").eq("id", task_id).single().execute()
+        result = supabase.table("tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="任务不存在")
@@ -50,11 +51,12 @@ async def list_tasks(
     project_id: Optional[str] = None,
     asset_id: Optional[str] = None,
     status: Optional[str] = None,
-    limit: int = 20
+    limit: int = 20,
+    user_id: str = Depends(get_current_user_id)
 ):
     """获取任务列表"""
     try:
-        query = supabase.table("tasks").select("*").order("created_at", desc=True).limit(limit)
+        query = supabase.table("tasks").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit)
         
         if project_id:
             query = query.eq("project_id", project_id)
@@ -71,13 +73,16 @@ async def list_tasks(
 
 
 @router.delete("/{task_id}")
-async def cancel_task(task_id: str):
+async def cancel_task(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """取消任务"""
     try:
         result = supabase.table("tasks").update({
             "status": "cancelled",
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).eq("status", "pending").execute()
+        }).eq("id", task_id).eq("user_id", user_id).eq("status", "pending").execute()
         
         if not result.data:
             raise HTTPException(status_code=400, detail="任务无法取消")
@@ -94,14 +99,18 @@ async def cancel_task(task_id: str):
 # ============================================
 
 @router.post("/asr")
-async def start_asr_task(request: ASRRequest, background_tasks: BackgroundTasks):
+async def start_asr_task(
+    request: ASRRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """启动语音转文字任务"""
     try:
         task_id = str(uuid4())
         now = datetime.utcnow().isoformat()
         
         # 从 asset 获取 project_id
-        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).single().execute()
+        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).eq("user_id", user_id).single().execute()
         if not asset_result.data:
             raise HTTPException(status_code=404, detail="Asset not found")
         project_id = asset_result.data.get("project_id")
@@ -109,7 +118,7 @@ async def start_asr_task(request: ASRRequest, background_tasks: BackgroundTasks)
         supabase.table("tasks").insert({
             "id": task_id,
             "project_id": project_id,
-            "user_id": DEFAULT_USER_ID,
+            "user_id": user_id,
             "task_type": "transcribe",
             "asset_id": request.asset_id,
             "status": "pending",
@@ -133,7 +142,11 @@ async def start_asr_task(request: ASRRequest, background_tasks: BackgroundTasks)
 # ============================================
 
 @router.post("/asr-clip")
-async def start_asr_clip_task(request: ASRClipRequest, background_tasks: BackgroundTasks):
+async def start_asr_clip_task(
+    request: ASRClipRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """对特定 clip 进行语音转文字，只转写 clip 对应的时间范围"""
     try:
         task_id = str(uuid4())
@@ -159,14 +172,14 @@ async def start_asr_clip_task(request: ASRClipRequest, background_tasks: Backgro
         if not clip_data.get("asset_id"):
             raise HTTPException(status_code=400, detail="Clip has no associated asset")
         
-        asset_result = supabase.table("assets").select("storage_path").eq("id", clip_data["asset_id"]).single().execute()
+        asset_result = supabase.table("assets").select("storage_path").eq("id", clip_data["asset_id"]).eq("user_id", user_id).single().execute()
         if not asset_result.data:
             raise HTTPException(status_code=404, detail="Asset not found")
         
         supabase.table("tasks").insert({
             "id": task_id,
             "project_id": project_id,
-            "user_id": DEFAULT_USER_ID,
+            "user_id": user_id,
             "task_type": "transcribe",  # 复用 transcribe 类型，通过 params.clip_id 区分
             "asset_id": clip_data["asset_id"],
             "status": "pending",
@@ -209,11 +222,15 @@ async def start_asr_clip_task(request: ASRClipRequest, background_tasks: Backgro
 # ============================================
 
 @router.post("/extract-audio")
-async def start_extract_audio(request: ExtractAudioRequest, background_tasks: BackgroundTasks):
+async def start_extract_audio(
+    request: ExtractAudioRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """从视频中提取音频轨道"""
     try:
         # 通过 asset_id 查询 project_id（满足 schema NOT NULL 约束）
-        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).single().execute()
+        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).eq("user_id", user_id).single().execute()
         if not asset_result.data:
             raise HTTPException(status_code=404, detail="Asset not found")
         project_id = asset_result.data["project_id"]
@@ -224,7 +241,7 @@ async def start_extract_audio(request: ExtractAudioRequest, background_tasks: Ba
         supabase.table("tasks").insert({
             "id": task_id,
             "project_id": project_id,
-            "user_id": DEFAULT_USER_ID,
+            "user_id": user_id,
             "task_type": "asset_processing",
             "asset_id": request.asset_id,
             "status": "pending",
@@ -258,11 +275,15 @@ async def start_extract_audio(request: ExtractAudioRequest, background_tasks: Ba
 # ============================================
 
 @router.post("/stem-separation")
-async def start_stem_separation(request: StemSeparationRequest, background_tasks: BackgroundTasks):
+async def start_stem_separation(
+    request: StemSeparationRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """启动人声分离任务"""
     try:
         # 通过 asset_id 查询 project_id
-        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).single().execute()
+        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).eq("user_id", user_id).single().execute()
         if not asset_result.data:
             raise HTTPException(status_code=404, detail="Asset not found")
         project_id = asset_result.data["project_id"]
@@ -272,7 +293,7 @@ async def start_stem_separation(request: StemSeparationRequest, background_tasks
         
         supabase.table("tasks").insert({
             "id": task_id,
-            "user_id": DEFAULT_USER_ID,
+            "user_id": user_id,
             "project_id": project_id,
             "task_type": "stem_separation",
             "asset_id": request.asset_id,
@@ -295,7 +316,11 @@ async def start_stem_separation(request: StemSeparationRequest, background_tasks
 # ============================================
 
 @router.post("/smart-clean")
-async def start_smart_clean(request: SmartCleanRequest, background_tasks: BackgroundTasks):
+async def start_smart_clean(
+    request: SmartCleanRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """启动智能清洗任务"""
     try:
         task_id = str(uuid4())
@@ -303,7 +328,7 @@ async def start_smart_clean(request: SmartCleanRequest, background_tasks: Backgr
         
         supabase.table("tasks").insert({
             "id": task_id,
-            "user_id": DEFAULT_USER_ID,
+            "user_id": user_id,
             "task_type": "smart_clean",
             "project_id": request.project_id,
             "status": "pending",
@@ -946,6 +971,10 @@ async def execute_extract_audio(
     import os
     
     try:
+        # 从任务记录获取 user_id
+        task_result = supabase.table("tasks").select("user_id").eq("id", task_id).single().execute()
+        task_user_id = task_result.data.get("user_id") if task_result.data else None
+        
         supabase.table("tasks").update({
             "status": "running",
             "progress": 10,
@@ -1063,7 +1092,7 @@ async def execute_extract_audio(
             
             supabase.table("assets").insert({
                 "id": audio_asset_id,
-                "user_id": DEFAULT_USER_ID,
+                "user_id": task_user_id,
                 "project_id": asset.data.get("project_id"),
                 "name": audio_filename,  # schema 要求的 name 字段
                 "file_type": "audio",
@@ -1112,6 +1141,10 @@ async def execute_extract_audio(
 async def execute_stem_separation(task_id: str, asset_id: str, stems: List[str]):
     """执行人声分离任务"""
     try:
+        # 从任务记录获取 user_id
+        task_result = supabase.table("tasks").select("user_id").eq("id", task_id).single().execute()
+        task_user_id = task_result.data.get("user_id") if task_result.data else None
+        
         supabase.table("tasks").update({
             "status": "running",
             "progress": 10,
@@ -1142,7 +1175,7 @@ async def execute_stem_separation(task_id: str, asset_id: str, stems: List[str])
             
             supabase.table("assets").insert({
                 "id": stem_asset_id,
-                "user_id": DEFAULT_USER_ID,
+                "user_id": task_user_id,
                 "project_id": asset.data.get("project_id"),
                 "file_type": "audio",  # 新字段名
                 "storage_path": stem_storage_path,

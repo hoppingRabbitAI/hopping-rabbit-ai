@@ -71,6 +71,37 @@ def get_supabase() -> Client:
 # 导出单例实例
 supabase = get_supabase()
 
+# Admin 客户端（使用 service_role key，绕过 RLS）
+_admin_client: Optional[Client] = None
+
+def get_supabase_admin_client() -> Client:
+    """
+    获取 Supabase Admin 客户端（使用 service_role key）
+    用于需要绕过 RLS 的操作，如积分管理、用户配额等
+    """
+    global _admin_client
+    
+    if _admin_client is None:
+        if not settings.supabase_url:
+            raise RuntimeError("Supabase URL is required. Check your .env file.")
+        
+        # 优先使用 service key，否则降级到 anon key
+        api_key = settings.supabase_service_key or settings.supabase_anon_key
+        if not api_key:
+            raise RuntimeError("Supabase API key is required. Check your .env file.")
+        
+        _admin_client = create_client(
+            settings.supabase_url,
+            api_key,
+            options=ClientOptions(
+                postgrest_client_timeout=30,
+                storage_client_timeout=60,
+            )
+        )
+        logger.info(f"Admin client connected to: {settings.supabase_url}")
+    
+    return _admin_client
+
 
 def get_file_url(bucket: str, path: str, expires_in: int = SIGNED_URL_EXPIRES_SECONDS) -> str:
     """

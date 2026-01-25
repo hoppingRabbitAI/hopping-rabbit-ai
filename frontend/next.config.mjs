@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // 关闭 React Strict Mode (避免开发模式下 useEffect 双重调用)
+  reactStrictMode: false,
+  
   // 允许从 Supabase Storage 加载视频和图片
   images: {
     remotePatterns: [
@@ -15,12 +18,23 @@ const nextConfig = {
       bodySizeLimit: '100mb', // 支持大视频上传
     },
   },
-  // 代理 Supabase Storage 请求以解决 CORS 问题（开发环境）
+  // 代理 API 请求到后端
   async rewrites() {
+    // 注意: NEXT_PUBLIC_API_URL 应该是 http://localhost:8000 (不含 /api)
+    // 如果环境变量包含 /api，需要去掉
+    let backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    backendUrl = backendUrl.replace(/\/api\/?$/, ''); // 去掉末尾的 /api
+    
     return [
+      // 代理 Supabase Storage 请求
       {
         source: '/api/storage/:path*',
         destination: 'https://rduiyxvzknaxomrrehzs.supabase.co/storage/v1/:path*',
+      },
+      // 代理后端 API 请求
+      {
+        source: '/api/:path*',
+        destination: `${backendUrl}/api/:path*`,
       },
     ];
   },

@@ -5,6 +5,9 @@
 -- 说明: 纯表定义，无函数/触发器/视图
 -- 更新记录:
 --   - 2026-01-26: 添加积分系统 (ai_model_credits, user_credits, credit_transactions)
+--   - 2026-01-25: 重构订阅系统 (subscription_plans 新增 credits_per_month/bonus_credits/badge 等字段)
+--   - 2026-01-25: 添加 subscription_history 订阅历史表
+--   - 2026-01-25: 订阅计划改为 Free/Basic/Pro/Ultimate/Creator 五档
 --   - 2026-01-25: 添加用户配额系统 (user_profiles, user_quotas, subscription_plans, user_subscriptions)
 --   - 2026-01-23: 添加 ai_tasks 表 (AI 任务状态追踪)
 --   - 2026-01-23: assets 表新增 ai_task_id, ai_generated 字段
@@ -617,96 +620,156 @@ CREATE INDEX idx_user_quotas_tier ON user_quotas(tier);
 -- ============================================================================
 -- 17. 订阅计划表 (subscription_plans)
 -- 创建时间: 2026-01-25
+-- 更新时间: 2026-01-25 (完整重构)
 -- ============================================================================
 CREATE TABLE subscription_plans (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 计划信息
-    name TEXT NOT NULL,           -- Free, Pro, Enterprise
-    slug TEXT NOT NULL UNIQUE,    -- free, pro, enterprise
-    description TEXT,
+    -- 基本信息
+    name TEXT NOT NULL,                    -- 'Free', 'Basic', 'Pro', 'Ultimate', 'Creator'
+    slug TEXT NOT NULL UNIQUE,             -- 'free', 'basic', 'pro', 'ultimate', 'creator'
+    description TEXT,                      -- 方案描述
     
     -- 定价 (美元)
-    price_monthly DECIMAL(10,2),
-    price_yearly DECIMAL(10,2),
+    price_monthly DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    price_yearly DECIMAL(10, 2) NOT NULL DEFAULT 0,
     
-    -- 功能配置
+    -- 积分配额
+    credits_per_month INTEGER NOT NULL DEFAULT 0,    -- 每月发放积分
+    bonus_credits INTEGER DEFAULT 0,                  -- 首次订阅奖励积分
+    
+    -- 功能限制
     features JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- 结构:
+    -- {
+    --   "concurrent_videos": 2,
+    --   "concurrent_images": 2,
+    --   "concurrent_characters": 1,
+    --   "ai_create_free_gens": 8,
+    --   "access_all_models": false,
+    --   "access_all_features": false,
+    --   "early_access_advanced": false,
+    --   "extra_credits_discount": 0,
+    --   "storage_mb": 2000,
+    --   "max_projects": 10,
+    --   "watermark": false,
+    --   "unlimited_access": []
+    -- }
     
-    -- 显示设置
+    -- Stripe 集成 (预留)
+    stripe_price_id_monthly TEXT,
+    stripe_price_id_yearly TEXT,
+    stripe_product_id TEXT,
+    
+    -- 显示控制
     display_order INTEGER DEFAULT 0,
-    is_popular BOOLEAN DEFAULT false,  -- 推荐标签
     is_active BOOLEAN DEFAULT true,
+    is_popular BOOLEAN DEFAULT false,
+    badge_text TEXT,                       -- '85% OFF', 'MOST POPULAR'
+    badge_color TEXT,                      -- 'pink', 'green'
     
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    -- 元数据
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 预置订阅计划数据
-INSERT INTO subscription_plans (name, slug, price_monthly, price_yearly, features, display_order, is_popular) VALUES
-('Free', 'free', 0, 0, '{
-    "free_trials": 6,
-    "ai_tasks_daily": 10,
-    "storage_mb": 500,
-    "max_projects": 3,
-    "export_quality": ["720p"],
-    "watermark_free": false,
-    "priority_support": false
-}'::jsonb, 1, false),
-
-('Pro', 'pro', 19.99, 199.99, '{
-    "free_trials": -1,
-    "ai_tasks_daily": 100,
-    "storage_mb": 10240,
-    "max_projects": 20,
-    "export_quality": ["1080p", "4k"],
-    "watermark_free": true,
-    "priority_support": false
-}'::jsonb, 2, true),
-
-('Enterprise', 'enterprise', 49.99, 499.99, '{
-    "free_trials": -1,
-    "ai_tasks_daily": -1,
-    "storage_mb": 102400,
-    "max_projects": -1,
-    "export_quality": ["1080p", "4k", "8k"],
-    "watermark_free": true,
-    "priority_support": true,
-    "api_access": true
-}'::jsonb, 3, false)
+INSERT INTO subscription_plans (
+    slug, name, description, 
+    price_monthly, price_yearly, 
+    credits_per_month, bonus_credits,
+    features, 
+    display_order, is_active, is_popular, badge_text
+) VALUES 
+('free', 'Free', '免费体验基础功能', 0, 0, 100, 0,
+ '{"concurrent_videos": 1, "concurrent_images": 1, "concurrent_characters": 0, "ai_create_free_gens": 3, "access_all_models": false, "access_all_features": false, "early_access_advanced": false, "extra_credits_discount": 0, "storage_mb": 500, "max_projects": 3, "watermark": true, "unlimited_access": []}'::jsonb,
+ 0, true, false, NULL),
+('basic', 'Basic', '适合初次体验 AI 视频创作', 9, 108, 150, 0,
+ '{"concurrent_videos": 2, "concurrent_images": 2, "concurrent_characters": 1, "ai_create_free_gens": 8, "access_all_models": false, "access_all_features": false, "early_access_advanced": false, "extra_credits_discount": 0, "storage_mb": 2000, "max_projects": 10, "watermark": false, "unlimited_access": []}'::jsonb,
+ 1, true, false, NULL),
+('pro', 'Pro', '适合日常内容创作者', 29, 208.8, 600, 50,
+ '{"concurrent_videos": 3, "concurrent_images": 4, "concurrent_characters": 2, "ai_create_free_gens": 13, "access_all_models": true, "access_all_features": true, "early_access_advanced": false, "extra_credits_discount": 0, "storage_mb": 10000, "max_projects": 50, "watermark": false, "unlimited_access": ["image_generation", "ai_create"]}'::jsonb,
+ 2, true, false, NULL),
+('ultimate', 'Ultimate', '专业创作者的明智之选', 49, 294, 1200, 100,
+ '{"concurrent_videos": 4, "concurrent_images": 8, "concurrent_characters": 3, "ai_create_free_gens": 35, "access_all_models": true, "access_all_features": true, "early_access_advanced": true, "extra_credits_discount": 10, "storage_mb": 50000, "max_projects": 200, "watermark": false, "unlimited_access": ["image_generation", "ai_create", "kling_all"]}'::jsonb,
+ 3, true, true, 'MOST POPULAR'),
+('creator', 'Creator', '专家级大规模生产', 249, 448.8, 6000, 500,
+ '{"concurrent_videos": 8, "concurrent_images": 8, "concurrent_characters": 6, "ai_create_free_gens": 35, "access_all_models": true, "access_all_features": true, "early_access_advanced": true, "extra_credits_discount": 15, "storage_mb": 200000, "max_projects": -1, "watermark": false, "unlimited_access": ["image_generation", "ai_create", "kling_all", "all_models"]}'::jsonb,
+ 4, true, false, '2 YEAR OFFER')
 ON CONFLICT (slug) DO NOTHING;
 
 -- ============================================================================
 -- 18. 用户订阅表 (user_subscriptions)
 -- 创建时间: 2026-01-25
+-- 更新时间: 2026-01-25 (完整重构)
 -- ============================================================================
 CREATE TABLE user_subscriptions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,  -- REFERENCES auth.users(id) ON DELETE CASCADE
     plan_id UUID NOT NULL REFERENCES subscription_plans(id),
     
     -- 订阅状态
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
-        'active', 'cancelled', 'expired', 'past_due', 'trialing'
-    )),
+    status TEXT NOT NULL DEFAULT 'active',
+    -- 可选值: 'active', 'canceled', 'past_due', 'expired', 'trialing'
     
-    -- 订阅周期
-    billing_cycle TEXT CHECK (billing_cycle IN ('monthly', 'yearly')),
-    current_period_start TIMESTAMPTZ,
-    current_period_end TIMESTAMPTZ,
-    cancel_at_period_end BOOLEAN DEFAULT false,
+    -- 计费周期
+    billing_cycle TEXT NOT NULL DEFAULT 'monthly',  -- 'monthly' | 'yearly'
     
-    -- Stripe 集成 (预留)
+    -- 时间信息
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    current_period_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    current_period_end TIMESTAMPTZ NOT NULL,
+    canceled_at TIMESTAMPTZ,
+    
+    -- 自动续期
+    auto_renew BOOLEAN DEFAULT true,
+    
+    -- 支付信息 (Stripe 预留)
     stripe_customer_id TEXT,
     stripe_subscription_id TEXT,
-    stripe_price_id TEXT,
+    payment_method TEXT,                   -- 'stripe', 'manual', 'dev_mode'
     
-    -- 时间戳
+    -- 实际支付金额 (记录折扣后的价格)
+    amount_paid DECIMAL(10, 2),
+    currency TEXT DEFAULT 'USD',
+    
+    -- 元数据
+    metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_user_subscriptions_user_id ON user_subscriptions(user_id);
 CREATE INDEX idx_user_subscriptions_status ON user_subscriptions(status);
+CREATE INDEX idx_user_subscriptions_plan_id ON user_subscriptions(plan_id);
+CREATE INDEX idx_user_subscriptions_period_end ON user_subscriptions(current_period_end);
+
+-- ============================================================================
+-- 18.1 订阅历史表 (subscription_history)
+-- 创建时间: 2026-01-25
+-- ============================================================================
+CREATE TABLE subscription_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,  -- REFERENCES auth.users(id) ON DELETE CASCADE
+    subscription_id UUID REFERENCES user_subscriptions(id),
+    
+    -- 变更信息
+    action TEXT NOT NULL,                  -- 'created', 'upgraded', 'downgraded', 'canceled', 'renewed', 'expired'
+    from_plan_id UUID REFERENCES subscription_plans(id),
+    to_plan_id UUID REFERENCES subscription_plans(id),
+    
+    -- 金额信息
+    amount DECIMAL(10, 2),
+    currency TEXT DEFAULT 'USD',
+    
+    -- 详情
+    reason TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_subscription_history_user_id ON subscription_history(user_id);
 
 -- ============================================================================
 -- 19. AI 模型积分配置表 (ai_model_credits)

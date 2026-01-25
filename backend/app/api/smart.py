@@ -4,7 +4,7 @@ HoppingRabbit AI - 智能功能 API (Phase 6)
 """
 import bisect
 import logging
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.responses import Response
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
@@ -14,6 +14,7 @@ import json
 
 from ..services.supabase_client import supabase
 from ..services.smart_analyzer import normalize_classification
+from .auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,11 @@ class SubtitleBurnRequest(BaseModel):
 # ============================================
 
 @router.post("/detect-silence")
-async def detect_silence(request: SilenceDetectionRequest, background_tasks: BackgroundTasks):
+async def detect_silence(
+    request: SilenceDetectionRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     检测音频中的静音片段
     
@@ -87,6 +92,7 @@ async def detect_silence(request: SilenceDetectionRequest, background_tasks: Bac
             "id": task_id,
             "type": "silence_detection",
             "project_id": request.project_id,
+            "user_id": user_id,
             "status": "pending",
             "progress": 0,
             "params": request.model_dump(),
@@ -119,7 +125,10 @@ async def detect_silence(request: SilenceDetectionRequest, background_tasks: Bac
 # ============================================
 
 @router.post("/detect-fillers")
-async def detect_fillers(request: FillerDetectionRequest):
+async def detect_fillers(
+    request: FillerDetectionRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     检测转录文本中的填充词（口头禅、语气词）
     
@@ -146,6 +155,7 @@ async def detect_fillers(request: FillerDetectionRequest):
             "id": task_id,
             "type": "filler_detection",
             "project_id": request.project_id,
+            "user_id": user_id,
             "status": "completed",
             "progress": 100,
             "result": result,
@@ -163,7 +173,11 @@ async def detect_fillers(request: FillerDetectionRequest):
 # ============================================
 
 @router.post("/diarize")
-async def diarize_audio(request: DiarizeRequest, background_tasks: BackgroundTasks):
+async def diarize_audio(
+    request: DiarizeRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     说话人分离 - 识别音频中的不同说话人
     
@@ -180,6 +194,7 @@ async def diarize_audio(request: DiarizeRequest, background_tasks: BackgroundTas
             "id": task_id,
             "type": "diarization",
             "project_id": request.project_id,
+            "user_id": user_id,
             "status": "pending",
             "progress": 0,
             "params": {
@@ -212,7 +227,11 @@ async def diarize_audio(request: DiarizeRequest, background_tasks: BackgroundTas
 # ============================================
 
 @router.post("/separate-stems")
-async def separate_stems(request: StemSeparateRequest, background_tasks: BackgroundTasks):
+async def separate_stems(
+    request: StemSeparateRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     音轨分离 - 将音频分离为人声、伴奏等独立轨道
     
@@ -233,6 +252,7 @@ async def separate_stems(request: StemSeparateRequest, background_tasks: Backgro
             "id": task_id,
             "type": "stem_separation",
             "project_id": request.project_id,
+            "user_id": user_id,
             "status": "pending",
             "progress": 0,
             "params": request.model_dump(),
@@ -271,7 +291,11 @@ async def separate_stems(request: StemSeparateRequest, background_tasks: Backgro
 # ============================================
 
 @router.post("/burn-subtitles")
-async def burn_subtitles(request: SubtitleBurnRequest, background_tasks: BackgroundTasks):
+async def burn_subtitles(
+    request: SubtitleBurnRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     字幕烧录 - 将字幕硬编码到视频中
     
@@ -288,6 +312,7 @@ async def burn_subtitles(request: SubtitleBurnRequest, background_tasks: Backgro
             "id": task_id,
             "type": "subtitle_burn",
             "project_id": request.project_id,
+            "user_id": user_id,
             "status": "pending",
             "progress": 0,
             "params": {
@@ -322,7 +347,8 @@ async def burn_subtitles(request: SubtitleBurnRequest, background_tasks: Backgro
 async def export_subtitles(
     project_id: str,
     format: str = Query("srt", enum=["srt", "vtt", "ass"]),
-    subtitles: Optional[str] = None  # JSON 字符串
+    subtitles: Optional[str] = None,  # JSON 字符串
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     导出字幕文件
@@ -576,7 +602,11 @@ class AIVideoCreateResponse(BaseModel):
 
 
 @router.post("/ai-create", response_model=AIVideoCreateResponse)
-async def ai_video_create(request: AIVideoCreateRequest, background_tasks: BackgroundTasks):
+async def ai_video_create(
+    request: AIVideoCreateRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     一键 AI 成片
     
@@ -597,6 +627,7 @@ async def ai_video_create(request: AIVideoCreateRequest, background_tasks: Backg
             "id": task_id,
             "type": "ai_video_create",
             "project_id": request.project_id,
+            "user_id": user_id,
             "status": "pending",
             "progress": 0,
             "params": request.model_dump(),
@@ -1168,7 +1199,10 @@ def _update_subtitle_clips_metadata(smart_segments: List, subtitle_clips: List[d
 
 
 @router.post("/reanalyze-from-clips")
-async def reanalyze_from_clips(request: ReanalyzeFromClipsRequest):
+async def reanalyze_from_clips(
+    request: ReanalyzeFromClipsRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     基于字幕片段重新运行 AI 情绪分析 (Phase 1: 字幕级情绪分析)
     
@@ -1446,7 +1480,10 @@ def _decide_video_slices(subtitle_clips: List[dict]) -> List[dict]:
 
 
 @router.post("/smart-slice")
-async def smart_slice(request: SmartSliceRequest):
+async def smart_slice(
+    request: SmartSliceRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     智能切片决策 API (Phase 2)
     
@@ -1531,7 +1568,10 @@ async def smart_slice(request: SmartSliceRequest):
 
 
 @router.post("/apply-smart-slice")
-async def apply_smart_slice(request: SmartSliceRequest):
+async def apply_smart_slice(
+    request: SmartSliceRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     应用智能切片：根据决策结果重新生成视频片段
     
@@ -1547,7 +1587,7 @@ async def apply_smart_slice(request: SmartSliceRequest):
         logger.info(f"ApplySmartSlice: 应用智能切片 - project={request.project_id}")
         
         # 1. 获取切片决策
-        slice_result = await smart_slice(request)
+        slice_result = await smart_slice(request, user_id)
         slices = slice_result.get("slices", [])
         
         if not slices:
@@ -1730,7 +1770,8 @@ class SelectionConfirmRequest(BaseModel):
 @router.post("/v2/analyze-content", response_model=ContentAnalysisResponse)
 async def analyze_content_v2(
     request: ContentAnalysisRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     智能一键成片 V2 - 内容分析
@@ -1748,12 +1789,9 @@ async def analyze_content_v2(
     
     try:
         # 获取项目信息
-        project_result = supabase.table("projects").select("*").eq("id", request.project_id).single().execute()
+        project_result = supabase.table("projects").select("*").eq("id", request.project_id).eq("user_id", user_id).single().execute()
         if not project_result.data:
             raise HTTPException(status_code=404, detail="项目不存在")
-        
-        project = project_result.data
-        user_id = project.get("user_id", "unknown")
         
         # 创建分析记录
         analysis_id = await create_content_analysis(
@@ -1785,7 +1823,10 @@ async def analyze_content_v2(
 
 
 @router.get("/v2/analysis/{analysis_id}/progress")
-async def get_analysis_progress_v2(analysis_id: str):
+async def get_analysis_progress_v2(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     获取分析进度
     
@@ -1793,7 +1834,7 @@ async def get_analysis_progress_v2(analysis_id: str):
     """
     from ..services.smart_analyzer import get_analysis_progress
     
-    progress = await get_analysis_progress(analysis_id)
+    progress = await get_analysis_progress(analysis_id, user_id)
     if not progress:
         raise HTTPException(status_code=404, detail="分析任务不存在")
     
@@ -1801,14 +1842,17 @@ async def get_analysis_progress_v2(analysis_id: str):
 
 
 @router.get("/v2/analysis/{analysis_id}/result")
-async def get_analysis_result_v2(analysis_id: str):
+async def get_analysis_result_v2(
+    analysis_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     获取分析结果
     
     分析完成后调用，返回完整的分析结果
     """
     try:
-        result = supabase.table("content_analyses").select("*").eq("id", analysis_id).single().execute()
+        result = supabase.table("content_analyses").select("*").eq("id", analysis_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="分析任务不存在")
@@ -1846,7 +1890,10 @@ async def get_analysis_result_v2(analysis_id: str):
 
 
 @router.get("/v2/project/{project_id}/latest-analysis")
-async def get_latest_analysis_by_project(project_id: str):
+async def get_latest_analysis_by_project(
+    project_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     根据项目 ID 获取最新的分析结果
     
@@ -1857,6 +1904,7 @@ async def get_latest_analysis_by_project(project_id: str):
         result = supabase.table("content_analyses") \
             .select("*") \
             .eq("project_id", project_id) \
+            .eq("user_id", user_id) \
             .in_("status", ["completed", "confirmed"]) \
             .order("created_at", desc=True) \
             .limit(1) \
@@ -1897,7 +1945,10 @@ async def get_latest_analysis_by_project(project_id: str):
 
 
 @router.post("/v2/confirm-selection")
-async def confirm_selection_v2(request: SelectionConfirmRequest):
+async def confirm_selection_v2(
+    request: SelectionConfirmRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     确认用户的选择，生成最终的 clips
     
@@ -1914,7 +1965,7 @@ async def confirm_selection_v2(request: SelectionConfirmRequest):
             logger.debug(f"   selection[{i}]: segment_id={sel.segment_id[:8] if sel.segment_id else 'N/A'}, action={sel.action}")
         
         # 获取分析结果
-        analysis_result = supabase.table("content_analyses").select("*").eq("id", request.analysis_id).single().execute()
+        analysis_result = supabase.table("content_analyses").select("*").eq("id", request.analysis_id).eq("user_id", user_id).single().execute()
         
         if not analysis_result.data:
             logger.error(f"   ❌ 分析任务不存在: {request.analysis_id}")
@@ -2043,18 +2094,19 @@ class ScriptUploadRequest(BaseModel):
 
 
 @router.post("/v2/scripts")
-async def upload_script(request: ScriptUploadRequest):
+async def upload_script(
+    request: ScriptUploadRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """上传项目脚本"""
     try:
-        # 获取项目
-        project_result = supabase.table("projects").select("user_id").eq("id", request.project_id).single().execute()
+        # 获取项目（验证用户权限）
+        project_result = supabase.table("projects").select("id").eq("id", request.project_id).eq("user_id", user_id).single().execute()
         if not project_result.data:
             raise HTTPException(status_code=404, detail="项目不存在")
         
-        user_id = project_result.data["user_id"]
-        
         # 检查是否已有脚本
-        existing = supabase.table("project_scripts").select("id").eq("project_id", request.project_id).execute()
+        existing = supabase.table("project_scripts").select("id").eq("project_id", request.project_id).eq("user_id", user_id).execute()
         
         script_id = str(uuid4())
         now = datetime.utcnow().isoformat()
@@ -2097,10 +2149,13 @@ async def upload_script(request: ScriptUploadRequest):
 
 
 @router.get("/v2/scripts/{project_id}")
-async def get_script(project_id: str):
+async def get_script(
+    project_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取项目脚本"""
     try:
-        result = supabase.table("project_scripts").select("*").eq("project_id", project_id).single().execute()
+        result = supabase.table("project_scripts").select("*").eq("project_id", project_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="脚本不存在")

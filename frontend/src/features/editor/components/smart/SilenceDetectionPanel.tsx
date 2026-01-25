@@ -7,13 +7,14 @@ import React, { useState, useMemo } from 'react';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { 
   VolumeX, Wand2, Check,
-  Scissors, Settings 
+  Scissors, Settings, AlertCircle, X 
 } from 'lucide-react';
+import { getSessionSafe } from '@/lib/supabase';
 import type { SilenceSegment, EditAction } from './types';
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
-const debugError = (...args: unknown[]) => { if (DEBUG_ENABLED) console.error(...args); };
+const debugLog = (...args: unknown[]) => { if (DEBUG_ENABLED) console.log('[SilenceDetection]', ...args); };
 
 interface SilenceDetectionPanelProps {
   projectId: string;
@@ -26,6 +27,7 @@ export function SilenceDetectionPanel({ projectId, audioUrl, onApplyEdits }: Sil
   const [silences, setSilences] = useState<SilenceSegment[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [selectedSilences, setSelectedSilences] = useState<Set<number>>(new Set());
+  const [authError, setAuthError] = useState<string | null>(null);
   
   // 配置
   const [threshold, setThreshold] = useState(-35);
@@ -36,10 +38,21 @@ export function SilenceDetectionPanel({ projectId, audioUrl, onApplyEdits }: Sil
     if (!audioUrl) return;
     
     setIsLoading(true);
+    setAuthError(null);
     try {
+      const session = await getSessionSafe();
+      if (!session) {
+        setAuthError('请先登录后再进行静音检测');
+        debugLog('未登录，无法检测静音');
+        return;
+      }
+
       const response = await fetch('/api/ai/detect-silence', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           project_id: projectId,
           audio_url: audioUrl,
@@ -54,7 +67,8 @@ export function SilenceDetectionPanel({ projectId, audioUrl, onApplyEdits }: Sil
       setStats(data.stats);
       setSelectedSilences(new Set(data.silences?.map((_: any, i: number) => i) || []));
     } catch (error) {
-      debugError('静音检测失败:', error);
+      debugLog('静音检测失败:', error);
+      setAuthError('静音检测失败，请稍后重试');
     } finally {
       setIsLoading(false);
     }
@@ -106,6 +120,20 @@ export function SilenceDetectionPanel({ projectId, audioUrl, onApplyEdits }: Sil
 
   return (
     <div className="space-y-4">
+      {/* 错误提示 */}
+      {authError && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{authError}</span>
+          <button
+            onClick={() => setAuthError(null)}
+            className="ml-auto p-1 hover:bg-red-100 rounded"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      
       {/* 配置区 */}
       <div className="bg-gray-50 rounded-lg p-4 space-y-3 border border-gray-200">
         <h4 className="text-sm font-medium text-gray-700 flex items-center gap-2">

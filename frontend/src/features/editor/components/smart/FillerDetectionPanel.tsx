@@ -7,13 +7,14 @@ import React, { useState, useMemo } from 'react';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { 
   MessageSquare, Wand2, Check,
-  Scissors, Settings, Plus, X 
+  Scissors, Settings, Plus, X, AlertCircle 
 } from 'lucide-react';
+import { getSessionSafe } from '@/lib/supabase';
 import type { FillerWord, EditAction } from './types';
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
-const debugError = (...args: unknown[]) => { if (DEBUG_ENABLED) console.error(...args); };
+const debugLog = (...args: unknown[]) => { if (DEBUG_ENABLED) console.log('[FillerDetection]', ...args); };
 
 interface FillerDetectionPanelProps {
   projectId: string;
@@ -36,14 +37,27 @@ export function FillerDetectionPanel({ projectId, audioUrl, onApplyEdits }: Fill
   const [customWord, setCustomWord] = useState('');
   const [minConfidence, setMinConfidence] = useState(0.7);
 
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const detectFillers = async () => {
     if (!audioUrl) return;
     
     setIsLoading(true);
+    setAuthError(null);
     try {
+      const session = await getSessionSafe();
+      if (!session) {
+        setAuthError('请先登录后再进行填充词检测');
+        debugLog('未登录，无法检测填充词');
+        return;
+      }
+
       const response = await fetch('/api/ai/detect-fillers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           project_id: projectId,
           audio_url: audioUrl,
@@ -56,7 +70,8 @@ export function FillerDetectionPanel({ projectId, audioUrl, onApplyEdits }: Fill
       setFillerWords(data.fillers || []);
       setSelectedFillers(new Set(data.fillers?.map((_: any, i: number) => i) || []));
     } catch (error) {
-      debugError('填充词检测失败:', error);
+      debugLog('填充词检测失败:', error);
+      setAuthError('检测失败，请稍后重试');
     } finally {
       setIsLoading(false);
     }
@@ -128,6 +143,20 @@ export function FillerDetectionPanel({ projectId, audioUrl, onApplyEdits }: Fill
 
   return (
     <div className="space-y-4">
+      {/* 错误提示 */}
+      {authError && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{authError}</span>
+          <button
+            onClick={() => setAuthError(null)}
+            className="ml-auto p-1 hover:bg-red-100 rounded"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      
       {/* 配置区 */}
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
         <h4 className="text-sm font-medium text-gray-700 flex items-center gap-2">

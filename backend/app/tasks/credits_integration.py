@@ -20,24 +20,38 @@ logger = logging.getLogger(__name__)
 # ============================================
 
 TASK_TYPE_TO_MODEL_KEY = {
-    # 基础功能
+    # ========================================
+    # 会话级收费 (创建项目时一次性收费)
+    # ========================================
+    "ai-create": "ai_create_session",      # AI 智能剪辑 - 15 积分/次
+    "voice-extract": None,                  # 提取字幕/音频 - 免费
+    
+    # ========================================
+    # 基础功能 (免费，积分设为 0)
+    # ========================================
     "transcribe": "whisper_transcribe",
     "filler_detection": "filler_detection",
     "stem_separation": "stem_separation",
     "diarization": "diarization",
     "vad": "vad",
     
-    # 智能功能
+    # ========================================
+    # 智能功能 (免费，积分设为 0)
+    # ========================================
     "smart_clip": "smart_clip",
     "smart_camera": "smart_camera",
     "smart_clean": "smart_clean",
     "ai_analysis": "gpt4_analysis",
     
-    # 图像生成
+    # ========================================
+    # 图像生成 (免费)
+    # ========================================
     "image_generation": "dalle3",
     "sd_generate": "sd_generate",
     
-    # Kling AI
+    # ========================================
+    # Kling AI (保持收费)
+    # ========================================
     "lip_sync": "kling_lip_sync",
     "face_swap": "kling_face_swap",
     "image_to_video": "kling_i2v",
@@ -48,7 +62,7 @@ TASK_TYPE_TO_MODEL_KEY = {
 }
 
 
-def get_model_key_for_task(task_type: str) -> str:
+def get_model_key_for_task(task_type: str) -> Optional[str]:
     """
     根据任务类型获取模型 key
     
@@ -56,9 +70,27 @@ def get_model_key_for_task(task_type: str) -> str:
         task_type: 任务类型 (如 'lip_sync', 'smart_clip')
         
     Returns:
-        模型 key (如 'kling_lip_sync')
+        模型 key (如 'kling_lip_sync')，免费任务返回 None
     """
-    return TASK_TYPE_TO_MODEL_KEY.get(task_type, task_type)
+    # 检查是否在映射表中
+    if task_type in TASK_TYPE_TO_MODEL_KEY:
+        return TASK_TYPE_TO_MODEL_KEY[task_type]  # 可能是 None (免费)
+    # 未知任务类型，默认使用 task_type 作为 model_key
+    return task_type
+
+
+def is_free_task(task_type: str) -> bool:
+    """
+    判断任务是否免费
+    
+    Args:
+        task_type: 任务类型
+        
+    Returns:
+        True 如果任务免费，False 如果需要收费
+    """
+    model_key = get_model_key_for_task(task_type)
+    return model_key is None
 
 
 async def calculate_task_credits(
@@ -73,11 +105,16 @@ async def calculate_task_credits(
         params: 参数 (可包含 duration_seconds, count 等)
         
     Returns:
-        所需积分数
+        所需积分数 (免费任务返回 0)
     """
     model_key = get_model_key_for_task(task_type)
-    service = get_credit_service()
     
+    # 免费任务直接返回 0
+    if model_key is None:
+        logger.info(f"[Credits] 任务类型 {task_type} 为免费，无需积分")
+        return 0
+    
+    service = get_credit_service()
     return await service.calculate_credits(model_key, params or {})
 
 
@@ -94,6 +131,8 @@ async def hold_credits_for_task(
     任务完成后调用 confirm_task_credits 确认扣除，
     任务失败后调用 refund_task_credits 退还。
     
+    免费任务会跳过冻结步骤，直接返回成功。
+    
     Args:
         user_id: 用户 ID
         task_type: 任务类型
@@ -104,17 +143,39 @@ async def hold_credits_for_task(
         {
             "success": True,
             "credits_held": 65,
-            "model_key": "kling_lip_sync"
+            "model_key": "kling_lip_sync",
+            "is_free": False
         }
         
     Raises:
         InsufficientCreditsError: 积分不足
     """
     model_key = get_model_key_for_task(task_type)
+    
+    # 免费任务直接返回成功，跳过积分冻结
+    if model_key is None:
+        logger.info(f"[Credits] 任务 {task_id} ({task_type}) 为免费，跳过积分冻结")
+        return {
+            "success": True,
+            "credits_held": 0,
+            "model_key": None,
+            "is_free": True,
+        }
+    
     service = get_credit_service()
     
     # 计算所需积分
     credits = await service.calculate_credits(model_key, params or {})
+    
+    # 积分为 0 也视为免费
+    if credits <= 0:
+        logger.info(f"[Credits] 任务 {task_id} ({task_type}) 积分为 0，跳过积分冻结")
+        return {
+            "success": True,
+            "credits_held": 0,
+            "model_key": model_key,
+            "is_free": True,
+        }
     
     logger.info(f"[Credits] 任务 {task_id} ({task_type}) 需要 {credits} 积分")
     
@@ -131,6 +192,7 @@ async def hold_credits_for_task(
         "credits_held": credits,
         "model_key": model_key,
         "transaction_id": result.get("transaction_id"),
+        "is_free": False,
     }
 
 

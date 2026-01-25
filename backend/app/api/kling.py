@@ -23,6 +23,7 @@ import logging
 from datetime import datetime
 
 from ..services.kling_ai_service import kling_client, koubo_service
+from .auth import get_current_user_id
 
 # 导入所有 Celery 任务
 from ..tasks.lip_sync import process_lip_sync
@@ -49,11 +50,6 @@ def _get_supabase():
     """延迟导入 supabase 客户端"""
     from ..services.supabase_client import supabase
     return supabase
-
-
-def _get_current_user_id(authorization: str = None) -> str:
-    """获取当前用户 ID - TODO: 集成真实认证"""
-    return "00000000-0000-0000-0000-000000000001"
 
 
 def _get_callback_url() -> Optional[str]:
@@ -237,14 +233,15 @@ class ProductShowcaseRequest(BaseModel):
 # ============================================
 
 @router.post("/lip-sync", summary="口型同步", tags=["视频生成"])
-async def create_lip_sync(request: LipSyncRequest):
+async def create_lip_sync(
+    request: LipSyncRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     创建口型同步任务
     
     流程: 人脸识别 → 创建对口型任务 → 轮询状态 → 下载上传
     """
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "lip_sync", request.model_dump())
         
@@ -269,10 +266,11 @@ async def create_lip_sync(request: LipSyncRequest):
 
 
 @router.post("/text-to-video", summary="文生视频", tags=["视频生成"])
-async def create_text_to_video(request: TextToVideoRequest):
+async def create_text_to_video(
+    request: TextToVideoRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建文生视频任务"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "text_to_video", request.model_dump())
         
@@ -298,10 +296,11 @@ async def create_text_to_video(request: TextToVideoRequest):
 
 
 @router.post("/image-to-video", summary="图生视频", tags=["视频生成"])
-async def create_image_to_video(request: ImageToVideoRequest):
+async def create_image_to_video(
+    request: ImageToVideoRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建图生视频任务"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "image_to_video", request.model_dump())
         
@@ -327,10 +326,11 @@ async def create_image_to_video(request: ImageToVideoRequest):
 
 
 @router.post("/multi-image-to-video", summary="多图生视频", tags=["视频生成"])
-async def create_multi_image_to_video(request: MultiImageToVideoRequest):
+async def create_multi_image_to_video(
+    request: MultiImageToVideoRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建多图生视频任务（2-4张图片场景转换）"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "multi_image_to_video", request.model_dump())
         
@@ -355,10 +355,11 @@ async def create_multi_image_to_video(request: MultiImageToVideoRequest):
 
 
 @router.post("/motion-control", summary="动作控制", tags=["视频生成"])
-async def create_motion_control(request: MotionControlRequest):
+async def create_motion_control(
+    request: MotionControlRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建动作控制任务（参考视频驱动图片人物）"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "motion_control", request.model_dump())
         
@@ -383,10 +384,11 @@ async def create_motion_control(request: MotionControlRequest):
 
 
 @router.post("/video-extend", summary="视频延长", tags=["视频生成"])
-async def create_video_extend(request: VideoExtendRequest):
+async def create_video_extend(
+    request: VideoExtendRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建视频延长任务（延长 4-5 秒）"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "video_extend", request.model_dump())
         
@@ -415,10 +417,11 @@ async def create_video_extend(request: VideoExtendRequest):
 # ============================================
 
 @router.post("/image-generation", summary="图像生成", tags=["图像生成"])
-async def create_image_generation(request: ImageGenerationRequest):
+async def create_image_generation(
+    request: ImageGenerationRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建图像生成任务（文生图/图生图）"""
-    user_id = _get_current_user_id()
-    
     try:
         # 使用用户指定模型或默认 kling-v2-1
         model_name = request.model_name or "kling-v2-1"
@@ -460,10 +463,11 @@ async def create_image_generation(request: ImageGenerationRequest):
 
 
 @router.post("/omni-image", summary="Omni-Image", tags=["图像生成"])
-async def create_omni_image(request: OmniImageRequest):
+async def create_omni_image(
+    request: OmniImageRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建 Omni-Image 任务（高级多模态图像生成）"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "omni_image", request.model_dump())
         
@@ -490,10 +494,11 @@ async def create_omni_image(request: OmniImageRequest):
 
 
 @router.post("/face-swap", summary="AI换脸", tags=["视频生成"])
-async def create_face_swap(request: FaceSwapRequest):
+async def create_face_swap(
+    request: FaceSwapRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """创建 AI 换脸任务"""
-    user_id = _get_current_user_id()
-    
     try:
         ai_task_id = _create_ai_task(user_id, "face_swap", request.model_dump())
         
@@ -523,11 +528,14 @@ async def create_face_swap(request: FaceSwapRequest):
 # ============================================
 
 @router.get("/ai-task/{task_id}", summary="查询任务状态", tags=["任务管理"])
-async def get_ai_task_status(task_id: str):
+async def get_ai_task_status(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """查询 AI 任务状态（前端轮询）"""
     try:
         supabase = _get_supabase()
-        result = supabase.table("ai_tasks").select("*").eq("id", task_id).single().execute()
+        result = supabase.table("ai_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="任务不存在")
@@ -562,10 +570,9 @@ async def list_ai_tasks(
     task_type: Optional[str] = Query(None, description="筛选类型"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id)
 ):
     """获取用户的 AI 任务列表"""
-    user_id = _get_current_user_id()
-    
     try:
         supabase = _get_supabase()
         query = supabase.table("ai_tasks").select("*").eq("user_id", user_id)
@@ -593,14 +600,17 @@ async def list_ai_tasks(
 
 
 @router.post("/ai-task/{task_id}/cancel", summary="取消任务", tags=["任务管理"])
-async def cancel_ai_task(task_id: str):
+async def cancel_ai_task(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """取消 AI 任务"""
     try:
         supabase = _get_supabase()
         supabase.table("ai_tasks").update({
             "status": "cancelled",
             "completed_at": datetime.utcnow().isoformat(),
-        }).eq("id", task_id).execute()
+        }).eq("id", task_id).eq("user_id", user_id).execute()
         
         return {"success": True, "message": "任务已取消"}
         
@@ -666,7 +676,11 @@ def _get_track_end_time(supabase, track_id: str) -> float:
 
 
 @router.post("/ai-task/{task_id}/add-to-project", summary="添加到项目", tags=["任务管理"])
-async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
+async def add_ai_task_to_project(
+    task_id: str,
+    request: AddToProjectRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     将 AI 任务的输出添加到项目
     
@@ -680,14 +694,12 @@ async def add_ai_task_to_project(task_id: str, request: AddToProjectRequest):
     - clip_id: 片段 ID（如果 create_clip=true）
     - is_new_project: 是否新建了项目
     """
-    user_id = _get_current_user_id()
-    
     try:
         supabase = _get_supabase()
         now = datetime.utcnow().isoformat()
         
         # 1. 获取 AI 任务信息
-        task_result = supabase.table("ai_tasks").select("*").eq("id", task_id).single().execute()
+        task_result = supabase.table("ai_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
         if not task_result.data:
             raise HTTPException(status_code=404, detail="任务不存在")
         
@@ -853,23 +865,19 @@ class BatchDeleteRequest(BaseModel):
 
 
 @router.delete("/ai-task/{task_id}", summary="删除单个任务", tags=["任务管理"])
-async def delete_ai_task(task_id: str):
+async def delete_ai_task(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """删除单个 AI 任务"""
-    user_id = _get_current_user_id()
-    
     try:
         supabase = _get_supabase()
         
-        # 验证任务属于当前用户
-        task_result = supabase.table("ai_tasks").select("id, user_id").eq("id", task_id).single().execute()
-        if not task_result.data:
-            raise HTTPException(status_code=404, detail="任务不存在")
+        # 验证任务属于当前用户并删除
+        result = supabase.table("ai_tasks").delete().eq("id", task_id).eq("user_id", user_id).execute()
         
-        if task_result.data.get("user_id") != user_id:
-            raise HTTPException(status_code=403, detail="无权删除此任务")
-        
-        # 删除任务
-        supabase.table("ai_tasks").delete().eq("id", task_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="任务不存在或无权删除")
         
         logger.info(f"[KlingAPI] 删除任务: task_id={task_id}")
         return {"success": True, "deleted_count": 1}
@@ -882,10 +890,11 @@ async def delete_ai_task(task_id: str):
 
 
 @router.post("/ai-tasks/batch-delete", summary="批量删除任务", tags=["任务管理"])
-async def batch_delete_ai_tasks(request: BatchDeleteRequest):
+async def batch_delete_ai_tasks(
+    request: BatchDeleteRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """批量删除 AI 任务"""
-    user_id = _get_current_user_id()
-    
     if not request.task_ids:
         raise HTTPException(status_code=400, detail="任务 ID 列表不能为空")
     
@@ -895,24 +904,18 @@ async def batch_delete_ai_tasks(request: BatchDeleteRequest):
     try:
         supabase = _get_supabase()
         
-        # 验证所有任务都属于当前用户
-        tasks_result = supabase.table("ai_tasks").select("id, user_id").in_("id", request.task_ids).execute()
+        # 批量删除属于当前用户的任务
+        result = supabase.table("ai_tasks").delete().in_("id", request.task_ids).eq("user_id", user_id).execute()
         
-        valid_task_ids = []
-        for task in tasks_result.data:
-            if task.get("user_id") == user_id:
-                valid_task_ids.append(task["id"])
+        deleted_count = len(result.data) if result.data else 0
         
-        if not valid_task_ids:
+        if deleted_count == 0:
             raise HTTPException(status_code=404, detail="没有找到可删除的任务")
         
-        # 批量删除
-        supabase.table("ai_tasks").delete().in_("id", valid_task_ids).execute()
-        
-        logger.info(f"[KlingAPI] 批量删除任务: count={len(valid_task_ids)}")
+        logger.info(f"[KlingAPI] 批量删除任务: count={deleted_count}")
         return {
             "success": True,
-            "deleted_count": len(valid_task_ids),
+            "deleted_count": deleted_count,
             "requested_count": len(request.task_ids),
         }
         
@@ -928,7 +931,10 @@ async def batch_delete_ai_tasks(request: BatchDeleteRequest):
 # ============================================
 
 @router.post("/koubo/digital-human", summary="数字人口播", tags=["口播场景"])
-async def generate_digital_human_video(request: DigitalHumanRequest):
+async def generate_digital_human_video(
+    request: DigitalHumanRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """数字人口播视频生成（完整工作流）"""
     task_id = str(uuid.uuid4())
     
@@ -946,7 +952,10 @@ async def generate_digital_human_video(request: DigitalHumanRequest):
 
 
 @router.post("/koubo/batch-avatars", summary="批量换脸", tags=["口播场景"])
-async def batch_generate_avatars(request: BatchAvatarRequest):
+async def batch_generate_avatars(
+    request: BatchAvatarRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """批量生成不同数字人版本"""
     task_id = str(uuid.uuid4())
     
@@ -963,7 +972,10 @@ async def batch_generate_avatars(request: BatchAvatarRequest):
 
 
 @router.post("/koubo/product-showcase", summary="产品展示", tags=["口播场景"])
-async def generate_product_showcase(request: ProductShowcaseRequest):
+async def generate_product_showcase(
+    request: ProductShowcaseRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """产品展示视频生成"""
     task_id = str(uuid.uuid4())
     

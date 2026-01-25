@@ -108,6 +108,8 @@ class CreditService:
                 "storage_used_mb": 0,
                 "max_projects": 3,
                 "monthly_reset_at": None,
+                "credits_total_granted": 0,
+                "credits_total_consumed": 0,
             }
     
     async def calculate_credits(self, model_key: str, params: Dict[str, Any] = None) -> int:

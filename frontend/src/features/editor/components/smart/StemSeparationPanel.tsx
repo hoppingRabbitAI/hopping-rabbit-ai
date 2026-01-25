@@ -7,13 +7,14 @@ import React, { useState } from 'react';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { 
   Music, Wand2, Settings, 
-  Volume2, VolumeX, Download, Play, Pause 
+  Volume2, VolumeX, Download, Play, Pause, AlertCircle, X 
 } from 'lucide-react';
+import { getSessionSafe } from '@/lib/supabase';
 import type { StemTrack } from './types';
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
-const debugError = (...args: unknown[]) => { if (DEBUG_ENABLED) console.error(...args); };
+const debugLog = (...args: unknown[]) => { if (DEBUG_ENABLED) console.log('[StemSeparation]', ...args); };
 
 interface StemSeparationPanelProps {
   projectId: string;
@@ -50,6 +51,7 @@ export function StemSeparationPanel({ projectId, audioUrl, onApplyStems }: StemS
   const [stems, setStems] = useState<StemTrack[]>([]);
   const [mutedStems, setMutedStems] = useState<Set<string>>(new Set());
   const [playingPreview, setPlayingPreview] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   
   // 配置
   const [model, setModel] = useState<'spleeter' | 'demucs'>('demucs');
@@ -59,10 +61,21 @@ export function StemSeparationPanel({ projectId, audioUrl, onApplyStems }: StemS
     if (!audioUrl) return;
     
     setIsLoading(true);
+    setAuthError(null);
     try {
+      const session = await getSessionSafe();
+      if (!session) {
+        setAuthError('请先登录后再进行音轨分离');
+        debugLog('未登录，无法分离音轨');
+        return;
+      }
+
       const response = await fetch('/api/ai/separate-stems', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           project_id: projectId,
           audio_url: audioUrl,
@@ -82,7 +95,8 @@ export function StemSeparationPanel({ projectId, audioUrl, onApplyStems }: StemS
       setStems(stemList);
       setMutedStems(new Set());
     } catch (error) {
-      debugError('音轨分离失败:', error);
+      debugLog('音轨分离失败:', error);
+      setAuthError('音轨分离失败，请稍后重试');
     } finally {
       setIsLoading(false);
     }
@@ -124,6 +138,20 @@ export function StemSeparationPanel({ projectId, audioUrl, onApplyStems }: StemS
 
   return (
     <div className="space-y-4">
+      {/* 错误提示 */}
+      {authError && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{authError}</span>
+          <button
+            onClick={() => setAuthError(null)}
+            className="ml-auto p-1 hover:bg-red-100 rounded"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      
       {/* 配置区 */}
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
         <h4 className="text-sm font-medium text-gray-700 flex items-center gap-2">

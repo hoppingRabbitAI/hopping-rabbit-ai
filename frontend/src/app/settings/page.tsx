@@ -25,7 +25,7 @@ import {
   Clock
 } from 'lucide-react';
 import { useAuthStore } from '@/features/editor/store/auth-store';
-import { QuotaDisplay } from '@/components/subscription/QuotaDisplay';
+import { SubscriptionStatus } from '@/components/subscription/SubscriptionStatus';
 import { UpgradeModal } from '@/components/subscription/UpgradeModal';
 import { CreditsDisplay } from '@/components/subscription/CreditsDisplay';
 import { useCreditTransactions, useModelPricing, CreditTransaction, ModelPricing } from '@/lib/hooks/useCredits';
@@ -66,26 +66,31 @@ interface AvatarUploadProps {
   currentUrl: string;
   onUpload: (url: string) => void;
   disabled?: boolean;
+  accessToken?: string | null;
 }
 
-function AvatarUpload({ currentUrl, onUpload, disabled }: AvatarUploadProps) {
+function AvatarUpload({ currentUrl, onUpload, disabled, accessToken }: AvatarUploadProps) {
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // 清除之前的错误
+    setError(null);
+
     // 验证文件类型
     if (!file.type.startsWith('image/')) {
-      alert('请选择图片文件');
+      setError('请选择图片文件');
       return;
     }
 
     // 验证文件大小 (最大 2MB)
     if (file.size > 2 * 1024 * 1024) {
-      alert('图片大小不能超过 2MB');
+      setError('图片大小不能超过 2MB');
       return;
     }
 
@@ -102,21 +107,31 @@ function AvatarUpload({ currentUrl, onUpload, disabled }: AvatarUploadProps) {
       const formData = new FormData();
       formData.append('file', file);
 
+      const headers: HeadersInit = {};
+      if (accessToken) {
+        headers['Authorization'] = `Bearer ${accessToken}`;
+      }
+
       const response = await fetch('/api/users/me/avatar', {
         method: 'POST',
         credentials: 'include',
+        headers,
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('上传失败');
+        // 尝试从响应中获取错误信息
+        const errorData = await response.json().catch(() => null);
+        const errorMessage = errorData?.detail || errorData?.message || '上传失败，请重试';
+        throw new Error(errorMessage);
       }
 
       const { url } = await response.json();
       onUpload(url);
-    } catch (error) {
-      console.error('Avatar upload failed:', error);
-      alert('头像上传失败，请重试');
+      setError(null);
+    } catch (err) {
+      console.error('Avatar upload failed:', err);
+      setError(err instanceof Error ? err.message : '头像上传失败，请重试');
       setPreview(null);
     } finally {
       setUploading(false);
@@ -130,7 +145,7 @@ function AvatarUpload({ currentUrl, onUpload, disabled }: AvatarUploadProps) {
     <div className="flex flex-col items-center gap-4">
       <div className="relative group">
         {/* 头像显示 */}
-        <div className="w-24 h-24 rounded-full overflow-hidden bg-gray-700 flex items-center justify-center">
+        <div className={`w-24 h-24 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center border-2 ${error ? 'border-red-300' : 'border-gray-200'}`}>
           {displayUrl ? (
             <img 
               src={displayUrl} 
@@ -146,7 +161,7 @@ function AvatarUpload({ currentUrl, onUpload, disabled }: AvatarUploadProps) {
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || uploading}
-          className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 
+          className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 
                      transition-opacity flex items-center justify-center cursor-pointer
                      disabled:cursor-not-allowed"
         >
@@ -161,15 +176,29 @@ function AvatarUpload({ currentUrl, onUpload, disabled }: AvatarUploadProps) {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png,image/gif,image/webp"
           onChange={handleFileSelect}
           className="hidden"
         />
       </div>
 
-      <p className="text-sm text-gray-500">
-        点击上传头像 (最大 2MB)
-      </p>
+      {/* 错误提示 */}
+      {error ? (
+        <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg max-w-xs">
+          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+          <p className="text-sm text-red-600">{error}</p>
+          <button 
+            onClick={() => setError(null)}
+            className="ml-auto text-red-400 hover:text-red-600 text-lg leading-none"
+          >
+            ×
+          </button>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">
+          点击上传头像 (支持 jpg, png, gif, webp，最大 2MB)
+        </p>
+      )}
     </div>
   );
 }
@@ -185,28 +214,30 @@ interface ProfileTabProps {
   onSave: () => void;
   saving: boolean;
   saved: boolean;
+  accessToken?: string | null;
 }
 
-function ProfileTab({ profile, email, onChange, onSave, saving, saved }: ProfileTabProps) {
+function ProfileTab({ profile, email, onChange, onSave, saving, saved, accessToken }: ProfileTabProps) {
   return (
     <div className="space-y-6">
       {/* 头像 */}
-      <div className="bg-[#121214] rounded-lg p-6">
-        <h3 className="text-lg font-medium text-gray-200 mb-4">头像</h3>
+      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">头像</h3>
         <AvatarUpload
           currentUrl={profile.avatar_url}
           onUpload={(url) => onChange('avatar_url', url)}
+          accessToken={accessToken}
         />
       </div>
 
       {/* 基本信息 */}
-      <div className="bg-[#121214] rounded-lg p-6">
-        <h3 className="text-lg font-medium text-gray-200 mb-4">基本信息</h3>
+      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">基本信息</h3>
         
         <div className="space-y-4">
           {/* 邮箱 (只读) */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               <Mail className="w-4 h-4 inline mr-1" />
               邮箱
             </label>
@@ -214,15 +245,15 @@ function ProfileTab({ profile, email, onChange, onSave, saving, saved }: Profile
               type="email"
               value={email}
               disabled
-              className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg 
-                         text-gray-400 cursor-not-allowed"
+              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg 
+                         text-gray-500 cursor-not-allowed"
             />
-            <p className="text-xs text-gray-500 mt-1">邮箱地址无法修改</p>
+            <p className="text-xs text-gray-400 mt-1">邮箱地址无法修改</p>
           </div>
 
           {/* 显示名称 */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               <User className="w-4 h-4 inline mr-1" />
               显示名称
             </label>
@@ -232,26 +263,26 @@ function ProfileTab({ profile, email, onChange, onSave, saving, saved }: Profile
               onChange={(e) => onChange('display_name', e.target.value)}
               placeholder="输入您的名称"
               maxLength={50}
-              className="w-full px-4 py-2 bg-[#050505] border border-gray-700 rounded-lg 
-                         text-gray-200 placeholder-gray-500 focus:outline-none focus:border-gray-500
-                         transition-colors"
+              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg 
+                         text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 
+                         focus:ring-gray-900/10 focus:border-gray-400 transition-all"
             />
           </div>
 
           {/* 个人简介 */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">个人简介</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">个人简介</label>
             <textarea
               value={profile.bio}
               onChange={(e) => onChange('bio', e.target.value)}
               placeholder="介绍一下自己..."
               maxLength={200}
               rows={3}
-              className="w-full px-4 py-2 bg-[#050505] border border-gray-700 rounded-lg 
-                         text-gray-200 placeholder-gray-500 focus:outline-none focus:border-gray-500
-                         transition-colors resize-none"
+              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg 
+                         text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 
+                         focus:ring-gray-900/10 focus:border-gray-400 transition-all resize-none"
             />
-            <p className="text-xs text-gray-500 mt-1">{profile.bio.length}/200</p>
+            <p className="text-xs text-gray-400 mt-1">{profile.bio.length}/200</p>
           </div>
         </div>
 
@@ -260,9 +291,9 @@ function ProfileTab({ profile, email, onChange, onSave, saving, saved }: Profile
           <button
             onClick={onSave}
             disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 bg-white text-black font-medium 
-                       rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50
-                       disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 text-white font-medium 
+                       rounded-lg hover:bg-gray-800 transition-colors disabled:opacity-50
+                       disabled:cursor-not-allowed shadow-sm"
           >
             {saving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -290,40 +321,21 @@ interface SubscriptionTabProps {
 function SubscriptionTab({ onUpgradeClick }: SubscriptionTabProps) {
   return (
     <div className="space-y-6">
-      {/* 当前配额 */}
+      {/* 当前订阅状态 */}
       <div>
-        <h3 className="text-lg font-medium text-gray-200 mb-4">当前配额</h3>
-        <QuotaDisplay onUpgradeClick={onUpgradeClick} />
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">当前订阅</h3>
+        <SubscriptionStatus onUpgradeClick={onUpgradeClick} />
       </div>
 
-      {/* 订阅管理 */}
-      <div className="bg-[#121214] rounded-lg p-6">
-        <h3 className="text-lg font-medium text-gray-200 mb-4">订阅管理</h3>
-        
-        <div className="space-y-4">
-          <div className="flex items-center justify-between p-4 bg-[#050505] rounded-lg border border-gray-700">
-            <div>
-              <p className="text-gray-200 font-medium">当前计划</p>
-              <p className="text-sm text-gray-500">免费版</p>
-            </div>
-            <button
-              onClick={onUpgradeClick}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-500 
-                         text-white font-medium rounded-lg hover:opacity-90 transition-opacity"
-            >
-              升级 Pro
-            </button>
-          </div>
-
-          <p className="text-sm text-gray-500">
-            升级到 Pro 版本，解锁更多 AI 功能和存储空间。
-          </p>
-        </div>
+      {/* 积分余额 */}
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">积分余额</h3>
+        <CreditsDisplay />
       </div>
 
       {/* 使用历史 */}
-      <div className="bg-[#121214] rounded-lg p-6">
-        <h3 className="text-lg font-medium text-gray-200 mb-4">使用统计</h3>
+      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">使用统计</h3>
         <p className="text-gray-500 text-sm">使用统计功能即将上线...</p>
       </div>
     </div>
@@ -342,17 +354,17 @@ function CreditsTab() {
   const getTransactionStyle = (type: string) => {
     switch (type) {
       case 'consume':
-        return { icon: <TrendingDown className="w-4 h-4" />, color: 'text-red-400', bg: 'bg-red-500/10' };
+        return { icon: <TrendingDown className="w-4 h-4" />, color: 'text-red-500', bg: 'bg-red-50' };
       case 'grant':
-        return { icon: <Gift className="w-4 h-4" />, color: 'text-green-400', bg: 'bg-green-500/10' };
+        return { icon: <Gift className="w-4 h-4" />, color: 'text-green-500', bg: 'bg-green-50' };
       case 'refund':
-        return { icon: <RefreshCw className="w-4 h-4" />, color: 'text-blue-400', bg: 'bg-blue-500/10' };
+        return { icon: <RefreshCw className="w-4 h-4" />, color: 'text-blue-500', bg: 'bg-blue-50' };
       case 'purchase':
-        return { icon: <ShoppingCart className="w-4 h-4" />, color: 'text-purple-400', bg: 'bg-purple-500/10' };
+        return { icon: <ShoppingCart className="w-4 h-4" />, color: 'text-purple-500', bg: 'bg-purple-50' };
       case 'expire':
-        return { icon: <Clock className="w-4 h-4" />, color: 'text-gray-400', bg: 'bg-gray-500/10' };
+        return { icon: <Clock className="w-4 h-4" />, color: 'text-gray-500', bg: 'bg-gray-100' };
       default:
-        return { icon: <Gem className="w-4 h-4" />, color: 'text-gray-400', bg: 'bg-gray-500/10' };
+        return { icon: <Gem className="w-4 h-4" />, color: 'text-gray-500', bg: 'bg-gray-100' };
     }
   };
 
@@ -390,15 +402,15 @@ function CreditsTab() {
       <CreditsDisplay />
 
       {/* 交易记录 */}
-      <div className="bg-[#121214] border border-[#2a2a2c] rounded-xl p-5">
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-white">积分明细</h3>
+          <h3 className="text-lg font-semibold text-gray-900">积分明细</h3>
           <button
             onClick={() => refetch()}
-            className="p-2 hover:bg-[#2a2a2c] rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             title="刷新"
           >
-            <RefreshCw className={`w-4 h-4 text-gray-400 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
@@ -408,38 +420,38 @@ function CreditsTab() {
           </div>
         ) : transactions.length === 0 ? (
           <div className="py-12 text-center">
-            <Gem className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-400">暂无积分记录</p>
-            <p className="text-sm text-gray-500 mt-1">使用 AI 功能后会产生积分消耗记录</p>
+            <Gem className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500">暂无积分记录</p>
+            <p className="text-sm text-gray-400 mt-1">使用 AI 功能后会产生积分消耗记录</p>
           </div>
         ) : (
           <div className="space-y-6">
             {Object.entries(groupedTransactions).map(([date, txs]) => (
               <div key={date}>
-                <p className="text-xs text-gray-500 mb-2">{date}</p>
+                <p className="text-xs text-gray-400 mb-2 font-medium">{date}</p>
                 <div className="space-y-2">
                   {txs.map((tx) => {
                     const style = getTransactionStyle(tx.transaction_type);
                     return (
                       <div
                         key={tx.id}
-                        className="flex items-center justify-between p-3 bg-[#1a1a1c] rounded-lg"
+                        className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100"
                       >
                         <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-lg ${style.bg} flex items-center justify-center ${style.color}`}>
+                          <div className={`w-9 h-9 rounded-lg ${style.bg} flex items-center justify-center ${style.color}`}>
                             {style.icon}
                           </div>
                           <div>
-                            <p className="text-sm text-white">
+                            <p className="text-sm font-medium text-gray-900">
                               {tx.description || tx.model_name || tx.model_key || '积分变动'}
                             </p>
-                            <p className="text-xs text-gray-500">
+                            <p className="text-xs text-gray-400">
                               {formatTime(tx.created_at)}
                             </p>
                           </div>
                         </div>
-                        <span className={`text-sm font-medium ${
-                          tx.credits_amount > 0 ? 'text-green-400' : 'text-red-400'
+                        <span className={`text-sm font-semibold ${
+                          tx.credits_amount > 0 ? 'text-green-500' : 'text-red-500'
                         }`}>
                           {tx.credits_amount > 0 ? '+' : ''}{tx.credits_amount}
                         </span>
@@ -454,7 +466,8 @@ function CreditsTab() {
               <button
                 onClick={loadMore}
                 disabled={loading}
-                className="w-full py-3 text-sm text-gray-400 hover:text-white transition-colors"
+                className="w-full py-3 text-sm text-gray-500 hover:text-gray-900 hover:bg-gray-50 
+                           rounded-lg transition-colors"
               >
                 {loading ? '加载中...' : '加载更多'}
               </button>
@@ -464,8 +477,8 @@ function CreditsTab() {
       </div>
 
       {/* 积分定价表 */}
-      <div className="bg-[#121214] border border-[#2a2a2c] rounded-xl p-5">
-        <h3 className="text-lg font-semibold text-white mb-4">功能消耗参考</h3>
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">功能消耗参考</h3>
         
         {pricingLoading ? (
           <div className="py-8 flex justify-center">
@@ -473,28 +486,41 @@ function CreditsTab() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {pricing.slice(0, 8).map((item) => (
-              <div
-                key={item.model_key}
-                className="flex items-center justify-between p-3 bg-[#1a1a1c] rounded-lg"
-              >
-                <div>
-                  <p className="text-sm text-white">{item.model_name}</p>
-                  <p className="text-xs text-gray-500">{item.description}</p>
+            {pricing.slice(0, 8).map((item) => {
+              // 判断是否免费
+              const isFree = item.credits_rate === 0 && (!item.min_credits || item.min_credits === 0);
+              
+              return (
+                <div
+                  key={item.model_key}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{item.model_name}</p>
+                    <p className="text-xs text-gray-400">{item.description}</p>
+                  </div>
+                  <div className="text-right">
+                    {isFree ? (
+                      <span className="text-sm font-semibold text-green-600">
+                        ✨ 免费
+                      </span>
+                    ) : (
+                      <>
+                        <span className="text-sm font-semibold text-gray-700">
+                          {item.pricing_type === 'per_call' && `${item.credits_rate} 积分/次`}
+                          {item.pricing_type === 'per_second' && `${item.credits_rate} 积分/秒`}
+                          {item.pricing_type === 'per_minute' && `${item.credits_rate} 积分/分钟`}
+                          {item.pricing_type === 'fixed' && `${item.min_credits} 积分`}
+                        </span>
+                        {item.min_credits > 1 && item.pricing_type !== 'per_call' && (
+                          <p className="text-xs text-gray-400">最低 {item.min_credits}</p>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-sm font-medium text-purple-400">
-                    {item.pricing_type === 'per_call' && `${item.credits_rate} 积分/次`}
-                    {item.pricing_type === 'per_second' && `${item.credits_rate} 积分/秒`}
-                    {item.pricing_type === 'per_minute' && `${item.credits_rate} 积分/分钟`}
-                    {item.pricing_type === 'fixed' && `${item.min_credits} 积分`}
-                  </span>
-                  {item.min_credits > 1 && item.pricing_type !== 'per_call' && (
-                    <p className="text-xs text-gray-500">最低 {item.min_credits}</p>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -514,55 +540,55 @@ function NotificationsTab() {
   });
 
   return (
-    <div className="bg-[#121214] rounded-lg p-6">
-      <h3 className="text-lg font-medium text-gray-200 mb-4">通知偏好</h3>
+    <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">通知偏好</h3>
       
-      <div className="space-y-4">
+      <div className="space-y-3">
         {/* 邮件通知 */}
-        <label className="flex items-center justify-between p-4 bg-[#050505] rounded-lg border border-gray-700 cursor-pointer">
+        <label className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors">
           <div>
-            <p className="text-gray-200">任务完成通知</p>
+            <p className="text-gray-900 font-medium">任务完成通知</p>
             <p className="text-sm text-gray-500">AI 任务完成后发送邮件通知</p>
           </div>
           <input
             type="checkbox"
             checked={settings.taskCompletionAlerts}
             onChange={(e) => setSettings({ ...settings, taskCompletionAlerts: e.target.checked })}
-            className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 
-                       focus:ring-blue-500 focus:ring-offset-gray-900"
+            className="w-5 h-5 rounded bg-white border-gray-300 text-gray-900 
+                       focus:ring-gray-900 focus:ring-offset-0"
           />
         </label>
 
-        <label className="flex items-center justify-between p-4 bg-[#050505] rounded-lg border border-gray-700 cursor-pointer">
+        <label className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors">
           <div>
-            <p className="text-gray-200">产品更新</p>
+            <p className="text-gray-900 font-medium">产品更新</p>
             <p className="text-sm text-gray-500">接收新功能和更新通知</p>
           </div>
           <input
             type="checkbox"
             checked={settings.emailNotifications}
             onChange={(e) => setSettings({ ...settings, emailNotifications: e.target.checked })}
-            className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 
-                       focus:ring-blue-500 focus:ring-offset-gray-900"
+            className="w-5 h-5 rounded bg-white border-gray-300 text-gray-900 
+                       focus:ring-gray-900 focus:ring-offset-0"
           />
         </label>
 
-        <label className="flex items-center justify-between p-4 bg-[#050505] rounded-lg border border-gray-700 cursor-pointer">
+        <label className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors">
           <div>
-            <p className="text-gray-200">营销邮件</p>
+            <p className="text-gray-900 font-medium">营销邮件</p>
             <p className="text-sm text-gray-500">接收优惠和促销信息</p>
           </div>
           <input
             type="checkbox"
             checked={settings.marketingEmails}
             onChange={(e) => setSettings({ ...settings, marketingEmails: e.target.checked })}
-            className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 
-                       focus:ring-blue-500 focus:ring-offset-gray-900"
+            className="w-5 h-5 rounded bg-white border-gray-300 text-gray-900 
+                       focus:ring-gray-900 focus:ring-offset-0"
           />
         </label>
       </div>
 
-      <p className="text-sm text-gray-500 mt-4">
+      <p className="text-sm text-gray-400 mt-4">
         * 通知设置功能即将上线
       </p>
     </div>
@@ -587,8 +613,8 @@ function SecurityTab() {
   return (
     <div className="space-y-6">
       {/* 修改密码 */}
-      <div className="bg-[#121214] rounded-lg p-6">
-        <h3 className="text-lg font-medium text-gray-200 mb-4">修改密码</h3>
+      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">修改密码</h3>
         
         <p className="text-gray-500 text-sm mb-4">
           通过邮箱重置密码来更改您的登录密码。
@@ -596,8 +622,8 @@ function SecurityTab() {
 
         <Link
           href="/forgot-password"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-gray-700 text-gray-200 
-                     rounded-lg hover:bg-gray-600 transition-colors"
+          className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-100 text-gray-700 
+                     font-medium rounded-lg hover:bg-gray-200 transition-colors"
         >
           <Shield className="w-4 h-4" />
           重置密码
@@ -605,29 +631,29 @@ function SecurityTab() {
       </div>
 
       {/* 登录设备 */}
-      <div className="bg-[#121214] rounded-lg p-6">
-        <h3 className="text-lg font-medium text-gray-200 mb-4">登录会话</h3>
+      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">登录会话</h3>
         
-        <div className="p-4 bg-[#050505] rounded-lg border border-gray-700">
+        <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-200">当前设备</p>
+              <p className="text-gray-900 font-medium">当前设备</p>
               <p className="text-sm text-gray-500">活跃中</p>
             </div>
-            <div className="w-2 h-2 rounded-full bg-green-500" />
+            <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
           </div>
         </div>
       </div>
 
       {/* 危险区域 */}
-      <div className="bg-[#121214] rounded-lg p-6 border border-red-900/30">
-        <h3 className="text-lg font-medium text-red-400 mb-4">危险区域</h3>
+      <div className="bg-white rounded-xl p-6 border border-red-200 shadow-sm">
+        <h3 className="text-lg font-semibold text-red-600 mb-4">危险区域</h3>
         
         <div className="space-y-4">
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 bg-red-500/10 text-red-400 
-                       border border-red-500/30 rounded-lg hover:bg-red-500/20 transition-colors"
+            className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 
+                       border border-red-200 rounded-lg hover:bg-red-100 transition-colors font-medium"
           >
             <LogOut className="w-4 h-4" />
             退出登录
@@ -648,7 +674,7 @@ function SecurityTab() {
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { user, isAuthenticated, isLoading } = useAuthStore();
+  const { user, accessToken, isAuthenticated, isLoading } = useAuthStore();
   
   const [activeTab, setActiveTab] = useState('profile');
   const [profile, setProfile] = useState<UserProfile>({
@@ -689,9 +715,14 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (accessToken) {
+        headers['Authorization'] = `Bearer ${accessToken}`;
+      }
+
       const response = await fetch('/api/users/me/profile', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         body: JSON.stringify(profile),
       });
@@ -713,52 +744,54 @@ export default function SettingsPage() {
   // 加载中
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#050505] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAFAFA] flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-gray-400 animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#050505]">
+    <div className="min-h-screen bg-[#FAFAFA]">
       {/* 顶部导航 */}
-      <header className="border-b border-gray-800">
-        <div className="max-w-5xl mx-auto px-4 py-4">
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-5xl mx-auto px-6 py-4">
           <div className="flex items-center gap-4">
             <Link
               href="/workspace"
-              className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             >
-              <ArrowLeft className="w-5 h-5 text-gray-400" />
+              <ArrowLeft className="w-5 h-5 text-gray-500" />
             </Link>
-            <h1 className="text-xl font-semibold text-gray-200">账户设置</h1>
+            <h1 className="text-xl font-bold text-gray-900">账户设置</h1>
           </div>
         </div>
       </header>
 
       {/* 主内容 */}
-      <div className="max-w-5xl mx-auto px-4 py-8">
+      <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="flex gap-8">
           {/* 侧边栏 Tab */}
-          <nav className="w-48 flex-shrink-0">
-            <ul className="space-y-1">
-              {TABS.map((tab) => (
-                <li key={tab.id}>
-                  <button
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left
-                               transition-colors ${
-                                 activeTab === tab.id
-                                   ? 'bg-gray-800 text-white'
-                                   : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-300'
-                               }`}
-                  >
-                    {tab.icon}
-                    <span>{tab.label}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+          <nav className="w-52 flex-shrink-0">
+            <div className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
+              <ul className="space-y-1">
+                {TABS.map((tab) => (
+                  <li key={tab.id}>
+                    <button
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left
+                                 transition-colors text-sm font-medium ${
+                                   activeTab === tab.id
+                                     ? 'bg-gray-900 text-white'
+                                     : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                                 }`}
+                    >
+                      {tab.icon}
+                      <span>{tab.label}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </nav>
 
           {/* 内容区 */}
@@ -771,6 +804,7 @@ export default function SettingsPage() {
                 onSave={handleSave}
                 saving={saving}
                 saved={saved}
+                accessToken={accessToken}
               />
             )}
 

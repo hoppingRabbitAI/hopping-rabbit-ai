@@ -678,12 +678,18 @@ async def update_analysis_progress(
         logger.error(f"❌ 更新进度失败: {e}")
 
 
-async def get_analysis_progress(analysis_id: str) -> Optional[Dict]:
+async def get_analysis_progress(analysis_id: str, user_id: str = None) -> Optional[Dict]:
     """获取分析进度"""
     try:
-        result = supabase.table("content_analyses").select(
+        query = supabase.table("content_analyses").select(
             "id, processing_stage, processing_progress, processing_message, status"
-        ).eq("id", analysis_id).single().execute()
+        ).eq("id", analysis_id)
+        
+        # 如果提供了 user_id，添加权限过滤
+        if user_id:
+            query = query.eq("user_id", user_id)
+        
+        result = query.single().execute()
         
         if result.data:
             return {

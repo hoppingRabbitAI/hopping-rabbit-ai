@@ -4,7 +4,7 @@ HoppingRabbit AI - 资源管理 API
 """
 import logging
 import asyncio
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Response, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Response, Request, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional, Dict, Union
 from datetime import datetime
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 from ..models import PresignUploadRequest, PresignUploadResponse, ConfirmUploadRequest
 from ..services.supabase_client import supabase, get_file_url
+from .auth import get_current_user_id
 
 router = APIRouter(prefix="/assets", tags=["Assets"])
 
@@ -37,11 +38,12 @@ def get_file_type(content_type: str) -> str:
 async def list_assets(
     project_id: Optional[str] = None,
     file_type: Optional[str] = None,
-    limit: int = 50
+    limit: int = 50,
+    user_id: str = Depends(get_current_user_id)
 ):
     """获取资源列表"""
     try:
-        query = supabase.table("assets").select("*").order("created_at", desc=True)
+        query = supabase.table("assets").select("*").eq("user_id", user_id).order("created_at", desc=True)
         
         if project_id:
             query = query.eq("project_id", project_id)
@@ -77,12 +79,15 @@ async def list_assets(
 
 
 @router.post("/presign-upload")
-async def presign_upload(request: PresignUploadRequest):
+async def presign_upload(
+    request: PresignUploadRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取预签名上传 URL"""
     try:
         asset_id = str(uuid4())
         file_ext = request.file_name.split(".")[-1] if "." in request.file_name else ""
-        storage_path = f"uploads/{request.project_id}/{asset_id}.{file_ext}"
+        storage_path = f"uploads/{user_id}/{request.project_id}/{asset_id}.{file_ext}"
         
         presign_result = supabase.storage.from_("clips").create_signed_upload_url(storage_path)
         
@@ -97,7 +102,11 @@ async def presign_upload(request: PresignUploadRequest):
 
 
 @router.post("/confirm-upload")
-async def confirm_upload(request: ConfirmUploadRequest, background_tasks: BackgroundTasks):
+async def confirm_upload(
+    request: ConfirmUploadRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """确认上传完成，创建资源记录"""
     try:
         now = datetime.utcnow().isoformat()
@@ -109,7 +118,7 @@ async def confirm_upload(request: ConfirmUploadRequest, background_tasks: Backgr
         asset_data = {
             "id": request.asset_id,
             "project_id": request.project_id,
-            "user_id": "00000000-0000-0000-0000-000000000000",  # TODO: 从认证获取
+            "user_id": user_id,
             "name": request.file_name,
             "original_filename": request.file_name,
             "file_type": get_file_type(request.content_type),  # video/audio/image/subtitle
@@ -137,10 +146,13 @@ async def confirm_upload(request: ConfirmUploadRequest, background_tasks: Backgr
 
 
 @router.get("/{asset_id}")
-async def get_asset(asset_id: str):
+async def get_asset(
+    asset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取资源详情"""
     try:
-        result = supabase.table("assets").select("*").eq("id", asset_id).single().execute()
+        result = supabase.table("assets").select("*").eq("id", asset_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="资源不存在")
@@ -161,10 +173,13 @@ async def get_asset(asset_id: str):
 
 
 @router.get("/{asset_id}/url")
-async def get_asset_url(asset_id: str):
+async def get_asset_url(
+    asset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取资源的签名 URL（用于 URL 过期后刷新）"""
     try:
-        result = supabase.table("assets").select("storage_path, thumbnail_path").eq("id", asset_id).single().execute()
+        result = supabase.table("assets").select("storage_path, thumbnail_path").eq("id", asset_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="资源不存在")
@@ -185,10 +200,13 @@ async def get_asset_url(asset_id: str):
 
 
 @router.delete("/{asset_id}")
-async def delete_asset(asset_id: str):
+async def delete_asset(
+    asset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """删除资源"""
     try:
-        asset = supabase.table("assets").select("storage_path, thumbnail_path").eq("id", asset_id).single().execute()
+        asset = supabase.table("assets").select("storage_path, thumbnail_path").eq("id", asset_id).eq("user_id", user_id).single().execute()
         
         if not asset.data:
             raise HTTPException(status_code=404, detail="资源不存在")

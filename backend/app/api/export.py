@@ -3,12 +3,13 @@ HoppingRabbit AI - 导出 API
 """
 import logging
 import asyncio
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from datetime import datetime
 from uuid import uuid4
 
 from ..models import ExportRequest
 from ..services.supabase_client import supabase, get_file_url
+from .auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,11 @@ router = APIRouter(prefix="/export", tags=["Export"])
 _active_export_tasks: dict[str, asyncio.Task] = {}
 
 @router.post("")
-async def start_export(request: ExportRequest, background_tasks: BackgroundTasks):
+async def start_export(
+    request: ExportRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """启动视频导出任务"""
     try:
         job_id = str(uuid4())
@@ -42,7 +47,7 @@ async def start_export(request: ExportRequest, background_tasks: BackgroundTasks
         job_data = {
             "id": job_id,
             "project_id": request.project_id,
-            "user_id": request.project_id,  # 暂时用 project_id，后续应从认证获取
+            "user_id": user_id,
             "format": settings.get("format", "mp4"),  # 默认 mp4，适合社交媒体发布
             "quality": settings.get("quality", "high"),
             "resolution": {"preset": request.preset, "config": export_config},  # 保存完整配置
@@ -70,12 +75,16 @@ async def start_export(request: ExportRequest, background_tasks: BackgroundTasks
 
 
 @router.get("/list/{project_id}")
-async def get_export_list(project_id: str, limit: int = 20):
+async def get_export_list(
+    project_id: str,
+    limit: int = 20,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取项目的导出历史列表"""
     try:
         result = supabase.table("exports").select("*").eq(
             "project_id", project_id
-        ).order("created_at", desc=True).limit(limit).execute()
+        ).eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
         
         return {"exports": result.data or []}
     except Exception as e:
@@ -84,7 +93,10 @@ async def get_export_list(project_id: str, limit: int = 20):
 
 
 @router.get("/user-exports")
-async def get_user_exports(limit: int = 50):
+async def get_user_exports(
+    limit: int = 50,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取用户的所有导出历史（跨项目）- 优化版"""
     try:
         # 优化：只查询列表需要的字段，避免 SELECT *
@@ -93,7 +105,7 @@ async def get_user_exports(limit: int = 50):
             "id, project_id, format, quality, status, progress, "
             "output_path, file_size, error_message, created_at, completed_at, "
             "resolution->preset"  # 只取 preset，不取整个 config
-        ).order("created_at", desc=True).limit(limit).execute()
+        ).eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
         
         exports = result.data or []
         
@@ -122,10 +134,13 @@ async def get_user_exports(limit: int = 50):
 
 
 @router.get("/{job_id}")
-async def get_export_status(job_id: str):
+async def get_export_status(
+    job_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取导出任务状态"""
     try:
-        result = supabase.table("exports").select("*").eq("id", job_id).single().execute()
+        result = supabase.table("exports").select("*").eq("id", job_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="导出任务不存在")
@@ -138,7 +153,10 @@ async def get_export_status(job_id: str):
 
 
 @router.post("/{job_id}/cancel")
-async def cancel_export(job_id: str):
+async def cancel_export(
+    job_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """取消进行中的导出任务"""
     try:
         # 1. 检查任务是否存在且正在进行
@@ -159,7 +177,7 @@ async def cancel_export(job_id: str):
         result = supabase.table("exports").update({
             "status": "failed",
             "error_message": "用户取消"
-        }).eq("id", job_id).in_("status", ["pending", "processing"]).execute()
+        }).eq("id", job_id).eq("user_id", user_id).in_("status", ["pending", "processing"]).execute()
         
         if not result.data:
             raise HTTPException(status_code=400, detail="任务无法取消或已完成")
@@ -173,11 +191,15 @@ async def cancel_export(job_id: str):
 
 
 @router.post("/{job_id}/retry")
-async def retry_export(job_id: str, background_tasks: BackgroundTasks):
+async def retry_export(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
     """重试失败的导出任务（使用原有配置）"""
     try:
         # 1. 获取原导出记录
-        result = supabase.table("exports").select("*").eq("id", job_id).single().execute()
+        result = supabase.table("exports").select("*").eq("id", job_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="导出记录不存在")
@@ -221,7 +243,7 @@ async def retry_export(job_id: str, background_tasks: BackgroundTasks):
         job_data = {
             "id": new_job_id,
             "project_id": request.project_id,
-            "user_id": original_export.get("user_id", request.project_id),
+            "user_id": user_id,  # 使用已认证的用户ID
             "format": original_export.get("format", "mov"),
             "quality": original_export.get("quality", "high"),
             "resolution": {"preset": request.preset, "config": export_config},
@@ -259,11 +281,14 @@ async def retry_export(job_id: str, background_tasks: BackgroundTasks):
 
 
 @router.delete("/{job_id}")
-async def delete_export(job_id: str):
+async def delete_export(
+    job_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """删除导出记录（仅限已完成/失败/取消的记录）"""
     try:
         # 检查记录状态
-        check = supabase.table("exports").select("status").eq("id", job_id).single().execute()
+        check = supabase.table("exports").select("status").eq("id", job_id).eq("user_id", user_id).single().execute()
         
         if not check.data:
             raise HTTPException(status_code=404, detail="导出记录不存在")
@@ -272,7 +297,7 @@ async def delete_export(job_id: str):
             raise HTTPException(status_code=400, detail="进行中的任务请使用取消接口")
         
         # 删除记录
-        supabase.table("exports").delete().eq("id", job_id).execute()
+        supabase.table("exports").delete().eq("id", job_id).eq("user_id", user_id).execute()
         
         return {"success": True, "message": "导出记录已删除"}
     except HTTPException:
@@ -283,10 +308,13 @@ async def delete_export(job_id: str):
 
 
 @router.get("/{job_id}/download-url")
-async def get_download_url(job_id: str):
+async def get_download_url(
+    job_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
     """获取导出文件的下载链接"""
     try:
-        result = supabase.table("exports").select("*").eq("id", job_id).single().execute()
+        result = supabase.table("exports").select("*").eq("id", job_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="导出任务不存在")

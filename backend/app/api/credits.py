@@ -150,7 +150,7 @@ async def get_user_credits(user: dict = Depends(get_current_user)):
     - tier: 会员等级 (free/pro/enterprise)
     """
     service = get_credit_service()
-    credits = await service.get_user_credits(user["id"])
+    credits = await service.get_user_credits(user["user_id"])
     return credits
 
 
@@ -205,7 +205,7 @@ async def check_credits(
     在执行 AI 操作前调用，确认用户有足够积分
     """
     service = get_credit_service()
-    result = await service.check_credits(user["id"], request.credits_required)
+    result = await service.check_credits(user["user_id"], request.credits_required)
     return result
 
 
@@ -224,7 +224,7 @@ async def consume_credits(
     
     try:
         result = await service.consume_credits(
-            user_id=user["id"],
+            user_id=user["user_id"],
             model_key=request.model_key,
             credits=request.credits,
             ai_task_id=request.ai_task_id,
@@ -261,7 +261,7 @@ async def hold_credits(
     
     try:
         result = await service.hold_credits(
-            user_id=user["id"],
+            user_id=user["user_id"],
             credits=request.credits,
             ai_task_id=request.ai_task_id,
             model_key=request.model_key,
@@ -307,7 +307,7 @@ async def refund_credits(
     """
     service = get_credit_service()
     result = await service.refund_credits(
-        user_id=user["id"],
+        user_id=user["user_id"],
         ai_task_id=ai_task_id,
         reason=reason,
     )
@@ -333,7 +333,7 @@ async def get_transactions(
     """
     service = get_credit_service()
     result = await service.get_transactions(
-        user_id=user["id"],
+        user_id=user["user_id"],
         limit=limit,
         offset=offset,
         transaction_type=transaction_type,

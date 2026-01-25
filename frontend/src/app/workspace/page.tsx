@@ -621,7 +621,7 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
               {!isLoading && <Wand2 size={16} className="ml-2" />}
             </button>
             <p className="text-center text-[10px] text-gray-400 mt-3">
-              预计消耗 1 个点数
+              {selectedMode === 'ai-create' ? '预计消耗 15 积分' : '✨ 免费'}
             </p>
           </div>
         </div>

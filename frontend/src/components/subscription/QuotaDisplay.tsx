@@ -9,6 +9,7 @@ import {
   ChevronRight,
   RefreshCw
 } from 'lucide-react';
+import { getSessionSafe } from '@/lib/supabase';
 
 // ============================================
 // 类型定义
@@ -158,8 +159,16 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
       setLoading(true);
       setError(null);
 
+      const session = await getSessionSafe();
+      if (!session) {
+        setError('请先登录');
+        return;
+      }
+
       const response = await fetch('/api/users/me/quota', {
-        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
       });
 
       if (!response.ok) {

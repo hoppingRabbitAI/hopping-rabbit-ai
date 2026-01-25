@@ -14,10 +14,10 @@ export function GoogleLoginButton({ onClick, isLoading, className = '' }: Google
       type="button"
       onClick={onClick}
       disabled={isLoading}
-      className={`w-full bg-white/[0.03] border border-white/10 text-white font-medium py-4 rounded-2xl flex items-center justify-center space-x-3 hover:bg-white/[0.06] hover:border-white/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed group ${className}`}
+      className={`w-full bg-white border border-gray-200 text-gray-700 font-medium py-3.5 rounded-xl flex items-center justify-center space-x-3 hover:bg-gray-50 hover:border-gray-300 hover:shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed group ${className}`}
     >
       {isLoading ? (
-        <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+        <div className="w-5 h-5 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
       ) : (
         <>
           {/* Google Logo SVG */}
@@ -54,9 +54,9 @@ export function GoogleLoginButton({ onClick, isLoading, className = '' }: Google
 export function AuthDivider() {
   return (
     <div className="flex items-center my-6">
-      <div className="flex-1 h-px bg-white/10" />
-      <span className="px-4 text-xs text-gray-600 uppercase tracking-widest font-medium">或</span>
-      <div className="flex-1 h-px bg-white/10" />
+      <div className="flex-1 h-px bg-gray-200" />
+      <span className="px-4 text-xs text-gray-400 uppercase tracking-widest font-medium">或</span>
+      <div className="flex-1 h-px bg-gray-200" />
     </div>
   );
 }

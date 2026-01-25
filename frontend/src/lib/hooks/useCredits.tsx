@@ -1,34 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-// Supabase 客户端
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-function getSupabaseClient() {
-  return createClient(supabaseUrl, supabaseAnonKey);
-}
-
-/**
- * 安全获取 session，不抛出错误
- */
-async function getSessionSafe() {
-  try {
-    const supabase = getSupabaseClient();
-    const { data: { session }, error } = await supabase.auth.getSession();
-    if (error) {
-      console.warn('Session check warning:', error.message);
-      return null;
-    }
-    return session;
-  } catch (err) {
-    // 忽略 AuthSessionMissingError
-    console.warn('Session not available');
-    return null;
-  }
-}
+import { getSessionSafe } from '@/lib/supabase';
 
 /**
  * 用户积分信息

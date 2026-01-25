@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, createContext, useContext, ReactNode } from 'react';
+import { getSessionSafe } from '@/lib/supabase';
 
 // ============================================
 // 类型定义
@@ -64,8 +65,17 @@ export function QuotaProvider({ children }: QuotaProviderProps) {
       setLoading(true);
       setError(null);
 
+      const session = await getSessionSafe();
+      if (!session) {
+        setQuota(null);
+        setLoading(false);
+        return;
+      }
+
       const response = await fetch('/api/users/me/quota', {
-        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
       });
 
       if (!response.ok) {
@@ -84,12 +94,17 @@ export function QuotaProvider({ children }: QuotaProviderProps) {
   // 检查配额是否充足
   const checkQuota = useCallback(async (type: QuotaType, amount: number = 1): Promise<QuotaCheckResult> => {
     try {
+      const session = await getSessionSafe();
+      if (!session) {
+        return { allowed: false, remaining: 0, message: '请先登录' };
+      }
+
       const response = await fetch('/api/users/me/quota/check', {
         method: 'POST',
         headers: {
+          'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
         body: JSON.stringify({ quota_type: type, amount }),
       });
 
@@ -174,8 +189,17 @@ export function useQuotaStandalone() {
       setLoading(true);
       setError(null);
 
+      const session = await getSessionSafe();
+      if (!session) {
+        setQuota(null);
+        setLoading(false);
+        return;
+      }
+
       const response = await fetch('/api/users/me/quota', {
-        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
       });
 
       if (!response.ok) {
@@ -197,10 +221,17 @@ export function useQuotaStandalone() {
 
   const checkQuota = useCallback(async (type: QuotaType, amount: number = 1): Promise<QuotaCheckResult> => {
     try {
+      const session = await getSessionSafe();
+      if (!session) {
+        return { allowed: false, remaining: 0, message: '请先登录' };
+      }
+
       const response = await fetch('/api/users/me/quota/check', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ quota_type: type, amount }),
       });
 
