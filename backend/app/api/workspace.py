@@ -11,7 +11,7 @@ from datetime import datetime
 from uuid import uuid4
 from enum import Enum
 
-from ..services.supabase_client import supabase, get_file_url
+from ..services.supabase_client import supabase, get_file_url, create_signed_upload_url
 from ..services.transform_rules import SegmentContext, transform_engine, sequence_processor, EmotionType, ImportanceLevel, TransformParams, ZoomStrategy
 from .auth import get_current_user
 
@@ -131,14 +131,21 @@ async def create_session(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    创建处理会话
-    需要用户登录
+    创建处理会话 (步骤1: 仅上传，不扣积分)
+    
+    ★ 渐进式两步流程:
+    1. create_session - 创建会话 + 上传视频 (本接口，不扣积分)
+    2. start-ai-processing - 用户确认配置后启动 AI 处理 (扣积分)
     """
     try:
+        user_id = current_user["user_id"]
+        
+        # ★ 移除积分检查！积分检查移到 start-ai-processing 接口
+        # 这样用户可以先上传视频，再决定是否使用 AI 功能
+        
         session_id = str(uuid4())
         project_id = str(uuid4())
         now = datetime.utcnow().isoformat()
-        user_id = current_user["user_id"]
         
         logger.info(f"[Session] 开始创建会话, user_id={user_id}, source_type={request.source_type.value}")
         
@@ -200,8 +207,8 @@ async def create_session(
                     file_ext = file_info.name.split(".")[-1] if "." in file_info.name else "mp4"
                     storage_path = f"uploads/{project_id}/{asset_id}.{file_ext}"
                     
-                    # 生成预签名上传 URL
-                    presign_result = supabase.storage.from_("clips").create_signed_upload_url(storage_path)
+                    # 生成预签名上传 URL（启用 upsert 避免重试失败）
+                    presign_result = create_signed_upload_url("clips", storage_path, upsert=True)
                     upload_url = presign_result.get("signedURL") or presign_result.get("signed_url", "")
                     
                     # 创建 asset 记录
@@ -264,7 +271,7 @@ async def create_session(
                 
                 logger.info(f"[Session] 正在生成预签名上传URL, storage_path={storage_path}")
                 logger.debug(f"[Session] 收到的 duration: {request.duration}")
-                presign_result = supabase.storage.from_("clips").create_signed_upload_url(storage_path)
+                presign_result = create_signed_upload_url("clips", storage_path, upsert=True)
                 upload_url = presign_result.get("signedURL") or presign_result.get("signed_url", "")
                 logger.info(f"[Session] ✅ 预签名URL生成成功, url_length={len(upload_url)}")
                 
@@ -392,6 +399,215 @@ async def notify_asset_uploaded(session_id: str, asset_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================
+# ★ 上传完成后创建基础项目结构 (新增)
+# ============================================
+
+class FinalizeUploadResponse(BaseModel):
+    """完成上传响应"""
+    status: str
+    project_id: str
+    tracks: list  # 创建的轨道信息
+    clips: list   # 创建的 clip 信息
+    message: str
+
+
+@router.post("/sessions/{session_id}/finalize-upload", response_model=FinalizeUploadResponse)
+async def finalize_upload(
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    完成上传，创建基础项目结构 (track + video clip)
+    
+    ★ 渐进式流程的关键步骤:
+    1. 用户上传视频后调用此接口
+    2. 创建基础的视频轨道和字幕轨道
+    3. 将上传的视频放到时间轴上（创建 video clip）
+    4. 此时用户可以在编辑器中预览和编辑
+    5. 后续 AI 处理是可选的增值功能
+    """
+    try:
+        user_id = current_user["user_id"]
+        now = datetime.utcnow().isoformat()
+        
+        # 1. 获取会话信息
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        session_data = session.data
+        project_id = session_data.get("project_id")
+        
+        # 校验会话归属
+        if session_data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 2. 获取所有关联的 assets
+        asset_ids = session_data.get("uploaded_asset_ids", [])
+        if not asset_ids:
+            single_asset_id = session_data.get("uploaded_asset_id")
+            if single_asset_id:
+                asset_ids = [single_asset_id]
+        
+        if not asset_ids:
+            raise HTTPException(status_code=400, detail="会话未关联任何资源")
+        
+        # 检查所有文件是否都上传完成
+        assets_result = supabase.table("assets").select("*").in_("id", asset_ids).execute()
+        assets = assets_result.data or []
+        
+        not_ready = [a for a in assets if a.get("status") not in ("uploaded", "ready")]
+        if not_ready:
+            pending_names = [a.get("name", a["id"]) for a in not_ready[:3]]
+            raise HTTPException(
+                status_code=400, 
+                detail=f"部分文件未上传完成: {', '.join(pending_names)}"
+            )
+        
+        # 3. 检查是否已创建过 track（避免重复创建）
+        existing_tracks = supabase.table("tracks").select("id").eq("project_id", project_id).execute()
+        if existing_tracks.data and len(existing_tracks.data) > 0:
+            logger.info(f"[Finalize] ⚠️ 项目 {project_id} 已存在轨道，跳过创建")
+            return FinalizeUploadResponse(
+                status="ok",
+                project_id=project_id,
+                tracks=[{"id": t["id"]} for t in existing_tracks.data],
+                clips=[],
+                message="项目结构已存在",
+            )
+        
+        # 4. 创建基础轨道
+        video_track_id = str(uuid4())
+        text_track_id = str(uuid4())
+        
+        # 视频轨道
+        supabase.table("tracks").insert({
+            "id": video_track_id,
+            "project_id": project_id,
+            "name": "视频轨道",
+            "order_index": 0,
+            "is_muted": False,
+            "is_locked": False,
+            "is_visible": True,
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+        
+        # 字幕轨道
+        supabase.table("tracks").insert({
+            "id": text_track_id,
+            "project_id": project_id,
+            "name": "字幕轨道",
+            "order_index": 1,
+            "is_muted": False,
+            "is_locked": False,
+            "is_visible": True,
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+        
+        logger.info(f"[Finalize] ✅ 创建基础轨道: video={video_track_id}, text={text_track_id}")
+        
+        # 5. 按顺序排列 assets 并创建 video clips
+        sorted_assets = sorted(assets, key=lambda a: a.get("order_index", 0))
+        
+        created_clips = []
+        timeline_position = 0  # 时间轴位置（毫秒）
+        
+        for asset in sorted_assets:
+            asset_id = asset["id"]
+            duration_sec = asset.get("duration") or 0
+            duration_ms = int(duration_sec * 1000)
+            
+            # 如果没有时长信息，使用默认值（后续可以通过 ffprobe 获取）
+            if duration_ms <= 0:
+                duration_ms = 10000  # 默认 10 秒
+                logger.warning(f"[Finalize] ⚠️ Asset {asset_id} 无时长信息，使用默认 10s")
+            
+            clip_id = str(uuid4())
+            
+            # 创建 video clip
+            clip_data = {
+                "id": clip_id,
+                "track_id": video_track_id,
+                "asset_id": asset_id,
+                "clip_type": "video",
+                "name": asset.get("name", "视频"),
+                "start_time": timeline_position,
+                "end_time": timeline_position + duration_ms,
+                "source_start": 0,
+                "source_end": duration_ms,
+                "volume": 1.0,
+                "is_muted": False,
+                "transform": {
+                    "x": 0, "y": 0,
+                    "scaleX": 1, "scaleY": 1,
+                    "rotation": 0,
+                    "opacity": 1,
+                },
+                "speed": 1.0,
+                "created_at": now,
+                "updated_at": now,
+            }
+            
+            supabase.table("clips").insert(clip_data).execute()
+            
+            created_clips.append({
+                "id": clip_id,
+                "asset_id": asset_id,
+                "start_time": timeline_position,
+                "end_time": timeline_position + duration_ms,
+            })
+            
+            logger.info(f"[Finalize] ✅ 创建 clip: {clip_id}, asset={asset_id}, duration={duration_ms}ms")
+            
+            # 更新时间轴位置（下一个 clip 紧跟着）
+            timeline_position += duration_ms
+        
+        # 6. 更新所有 assets 状态为 ready
+        for asset in assets:
+            supabase.table("assets").update({
+                "status": "ready",
+                "updated_at": now,
+            }).eq("id", asset["id"]).execute()
+        
+        # 7. 更新项目状态为 ready (数据库约束: draft/processing/ready/exported/archived)
+        supabase.table("projects").update({
+            "status": "ready",
+            "updated_at": now,
+        }).eq("id", project_id).execute()
+        
+        # 8. 更新会话状态为 completed (数据库约束: uploading/processing/completed/failed/cancelled)
+        #    表示上传阶段已完成，后续 AI 处理是可选的增值功能
+        supabase.table("workspace_sessions").update({
+            "status": "completed",
+            "updated_at": now,
+        }).eq("id", session_id).execute()
+        
+        logger.info(f"[Finalize] ✅ 完成上传，项目 {project_id} 可以编辑了")
+        logger.info(f"[Finalize]    创建了 {len(created_clips)} 个 clips")
+        
+        return FinalizeUploadResponse(
+            status="ok",
+            project_id=project_id,
+            tracks=[
+                {"id": video_track_id, "name": "视频轨道", "order_index": 0},
+                {"id": text_track_id, "name": "字幕轨道", "order_index": 1},
+            ],
+            clips=created_clips,
+            message=f"基础项目结构创建成功，包含 {len(created_clips)} 个视频片段",
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"[Finalize] ❌ 完成上传失败: {e}")
+        logger.error(f"[Finalize] ❌ 完整堆栈:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/sessions/{session_id}/confirm-upload")
 async def confirm_upload(session_id: str, background_tasks: BackgroundTasks):
     """
@@ -406,6 +622,16 @@ async def confirm_upload(session_id: str, background_tasks: BackgroundTasks):
         session_data = session.data
         project_id = session_data.get("project_id")
         now = datetime.utcnow().isoformat()
+        
+        # ★ 防止重复触发：如果已经在处理中，直接返回
+        current_status = session_data.get("status")
+        if current_status == "processing":
+            logger.info(f"[Session] ⚠️ 会话 {session_id} 已在处理中，跳过重复请求")
+            return {
+                "status": "processing",
+                "message": "任务已在处理中，请勿重复提交",
+                "asset_count": len(session_data.get("uploaded_asset_ids", [])),
+            }
         
         # === 获取所有关联的 assets ===
         asset_ids = session_data.get("uploaded_asset_ids", [])
@@ -536,6 +762,201 @@ async def cancel_session(session_id: str):
         return {"message": "会话已取消"}
         
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★ 渐进式两步流程: 启动 AI 处理 (步骤2)
+# ============================================
+
+class StartAIProcessingRequest(BaseModel):
+    """启动 AI 处理请求"""
+    task_type: TaskType = TaskType.AI_CREATE
+    # AI 配置选项 (可选)
+    output_ratio: Optional[str] = None  # 输出比例: "9:16", "16:9", "1:1"
+    template_id: Optional[str] = None   # 模板 ID
+    options: Optional[dict] = None      # 其他 AI 选项
+
+
+class StartAIProcessingResponse(BaseModel):
+    """启动 AI 处理响应"""
+    status: str
+    message: str
+    credits_consumed: int
+    credits_remaining: int
+
+
+@router.post("/sessions/{session_id}/start-ai-processing", response_model=StartAIProcessingResponse)
+async def start_ai_processing(
+    session_id: str,
+    request: StartAIProcessingRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    启动 AI 处理 (步骤2: 检查积分 + 扣除积分 + 开始处理)
+    
+    ★ 渐进式两步流程:
+    1. create_session - 创建会话 + 上传视频 (不扣积分)
+    2. start-ai-processing - 用户确认配置后启动 AI 处理 (本接口，扣积分)
+    
+    流程:
+    1. 校验会话状态 (必须是上传完成状态)
+    2. 检查积分余额
+    3. 扣除积分
+    4. 启动后台处理任务
+    """
+    try:
+        user_id = current_user["user_id"]
+        now = datetime.utcnow().isoformat()
+        
+        # 1. 获取会话信息
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        session_data = session.data
+        project_id = session_data.get("project_id")
+        
+        # 校验会话归属
+        if session_data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 校验会话状态: 必须是 completed（finalize-upload 后的状态）
+        if session_data.get("status") != "completed":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"会话状态不正确: {session_data.get('status')}，预期为 completed（请先完成上传）"
+            )
+        
+        # 2. 获取所有关联的 assets
+        asset_ids = session_data.get("uploaded_asset_ids", [])
+        if not asset_ids:
+            single_asset_id = session_data.get("uploaded_asset_id")
+            if single_asset_id:
+                asset_ids = [single_asset_id]
+        
+        if not asset_ids:
+            raise HTTPException(status_code=400, detail="会话未关联任何资源，请先上传视频")
+        
+        # 检查所有文件是否都上传完成
+        assets_result = supabase.table("assets").select("*").in_("id", asset_ids).execute()
+        assets = assets_result.data or []
+        
+        not_ready = [a for a in assets if a.get("status") not in ("uploaded", "ready", "processing")]
+        if not_ready:
+            pending_names = [a.get("name", a["id"]) for a in not_ready[:3]]
+            raise HTTPException(
+                status_code=400, 
+                detail=f"部分文件未上传完成: {', '.join(pending_names)}"
+            )
+        
+        # 3. 检查并扣除积分 (仅 AI 功能需要)
+        credits_consumed = 0
+        credits_remaining = 0
+        
+        if request.task_type.value == 'ai-create':
+            from app.services.credit_service import get_credit_service
+            credit_service = get_credit_service()
+            
+            # ai_create 固定 100 积分
+            credits_required = 100
+            
+            # 检查积分
+            check_result = await credit_service.quick_check_credits(user_id, credits_required)
+            
+            if not check_result.get("allowed"):
+                logger.warning(f"[AI Processing] ❌ 积分不足: user_id={user_id}, required={credits_required}, available={check_result.get('available')}")
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "error": "insufficient_credits",
+                        "message": f"积分不足，需要 {credits_required} 积分，当前余额 {check_result.get('available')}",
+                        "required": credits_required,
+                        "available": check_result.get("available"),
+                    }
+                )
+            
+            # ★ 扣除积分
+            consume_result = await credit_service.consume_credits(
+                user_id=user_id,
+                model_key="ai_create",
+                credits=credits_required,  # ★ 必须传入消耗的积分数
+                ai_task_id=session_id,  # 使用 session_id 作为任务 ID
+                description=f"一键 AI 成片 - {session_data.get('project_id', 'unknown')[:8]}",
+            )
+            
+            if not consume_result.get("success"):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"积分扣除失败: {consume_result.get('error', '未知错误')}"
+                )
+            
+            credits_consumed = consume_result.get("credits_consumed", credits_required)
+            credits_remaining = consume_result.get("credits_after", 0)
+            
+            logger.info(f"[AI Processing] ✅ 积分扣除成功: user_id={user_id}, consumed={credits_consumed}, remaining={credits_remaining}")
+        
+        # 4. 更新会话配置
+        update_data = {
+            "selected_tasks": [request.task_type.value],
+            "status": "processing",
+            "current_step": "fetch",
+            "progress": 0,
+            "updated_at": now,
+        }
+        
+        # 保存 AI 配置选项
+        if request.output_ratio or request.template_id or request.options:
+            update_data["ai_config"] = {
+                "output_ratio": request.output_ratio,
+                "template_id": request.template_id,
+                "options": request.options or {},
+            }
+        
+        supabase.table("workspace_sessions").update(update_data).eq("id", session_id).execute()
+        
+        # 5. 更新所有 assets 状态为处理中
+        for asset in assets:
+            supabase.table("assets").update({
+                "status": "processing",
+                "updated_at": now,
+            }).eq("id", asset["id"]).execute()
+        
+        # 6. 按顺序排列 assets
+        sorted_assets = sorted(assets, key=lambda a: a.get("order_index", 0))
+        
+        logger.info(f"[AI Processing] ========================================")
+        logger.info(f"[AI Processing] 🚀 启动 AI 处理任务")
+        logger.info(f"[AI Processing]    session_id: {session_id}")
+        logger.info(f"[AI Processing]    project_id: {project_id}")
+        logger.info(f"[AI Processing]    task_type: {request.task_type.value}")
+        logger.info(f"[AI Processing]    credits_consumed: {credits_consumed}")
+        logger.info(f"[AI Processing]    素材数量: {len(sorted_assets)}")
+        logger.info(f"[AI Processing] ========================================")
+        
+        # 7. 启动后台处理任务
+        background_tasks.add_task(
+            _process_session_multi_assets,
+            session_id=session_id,
+            project_id=project_id,
+            assets=sorted_assets,
+            task_type=request.task_type.value,
+        )
+        
+        return StartAIProcessingResponse(
+            status="processing",
+            message=f"AI 处理已启动，正在处理 {len(assets)} 个素材",
+            credits_consumed=credits_consumed,
+            credits_remaining=credits_remaining,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"[AI Processing] ❌ 启动失败: {e}")
+        logger.error(f"[AI Processing] ❌ 完整堆栈:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -988,6 +1409,7 @@ async def _run_asr(file_url: str, update_progress, current_progress: int, step_p
     try:
         from ..tasks.transcribe import transcribe_audio
         import httpx
+        import asyncio
         
         # ★★★ 优化：检查是否已有转写结果（复用 analyze-content 的转写）★★★
         # 注意：排除 clip 级别的转写任务（params 中包含 clip_id 的是 clip 转写）
@@ -1137,544 +1559,14 @@ async def _run_silence_detection(file_url: str) -> list:
         return []
 
 
-def _create_clips_from_segments(
-    project_id: str,
-    asset_id: str,
-    transcript_segments: list,
-    video_track_id: str,
-    text_track_id: str,
-) -> tuple:
-    """
-    根据 ASR segments 创建视频和字幕 clips
-    
-    策略：
-    - 视频 clip：使用原始 ASR segments，不受标点切分影响
-    - 字幕 clip：使用标点切分后的细分 segments
-    - 死寂/长停顿/卡顿：自动跳过，不创建 clip（相当于自动切除）
-    - 换气：保留让用户选择是否删除
-    
-    这样视频片段保持完整，而字幕可以按句子精细显示
-    """
-    now = datetime.utcnow().isoformat()
-    
-    # 按时间顺序排序原始 segments
-    sorted_segments = sorted(transcript_segments, key=lambda s: s.get("start", 0))
-    
-    video_clips = []
-    subtitle_clips = []
-    timeline_position = 0
-    
-    # 统计自动跳过的静音片段
-    auto_skipped = {"dead_air": 0, "long_pause": 0, "hesitation": 0}
-    auto_skipped_duration = 0
-    
-    for seg_idx, seg in enumerate(sorted_segments):
-        seg_start = seg.get("start", 0)  # 原视频中的开始位置（毫秒）
-        seg_end = seg.get("end", 0)      # 原视频中的结束位置（毫秒）
-        seg_text = seg.get("text", "").strip()
-        seg_duration = seg_end - seg_start
-        
-        if seg_duration <= 0:
-            continue
-        
-        # ========================================
-        # 检查静音信息，决定是否自动跳过
-        # ========================================
-        silence_info = seg.get("silence_info")
-        
-        if silence_info:
-            cls = silence_info.get("classification")
-            
-            # 死寂、长停顿、卡顿：自动跳过，不创建 clip
-            if cls in ("dead_air", "long_pause", "hesitation"):
-                auto_skipped[cls] = auto_skipped.get(cls, 0) + 1
-                auto_skipped_duration += seg_duration
-                logger.debug(f"[Workspace] ⏭️ 自动跳过静音: {cls}, duration={seg_duration}ms")
-                continue  # 不创建 clip，不增加 timeline_position
-        
-        # ========================================
-        # 1. 创建视频 clip（使用原始 segment，不切分）
-        # ========================================
-        clip_name = f"片段 {seg_idx + 1}"
-        
-        if silence_info:
-            cls = silence_info.get("classification")
-            if cls == "breath":
-                clip_name = "换气"
-            logger.debug(f"[Workspace] 🔇 保留静音片段: classification={cls}, name={clip_name}, duration={seg_duration}ms")
-        
-        # 生成视频 clip ID，后续字幕需要关联
-        video_clip_id = str(uuid4())
-        
-        video_clips.append({
-            "id": video_clip_id,
-            "track_id": video_track_id,
-            "asset_id": asset_id,
-            "clip_type": "video",
-            "start_time": timeline_position,
-            "end_time": timeline_position + seg_duration,
-            "source_start": seg_start,
-            "source_end": seg_end,
-            "is_muted": False,
-            "name": clip_name,
-            "created_at": now,
-            "updated_at": now,
-            "metadata": {
-                "silence_info": silence_info,
-                "original_text": seg_text
-            }
-        })
-        
-        # ========================================
-        # 2. 创建字幕 clips（按标点切分成多个子句）
-        # ========================================
-        if seg_text:
-            # 对当前 segment 进行标点切分
-            fine_subs = _split_segments_by_punctuation([seg])
-            
-            # 当前 segment 内的相对时间起点
-            relative_start = 0
-            
-            for sub_idx, sub_seg in enumerate(fine_subs):
-                sub_start = sub_seg.get("start", seg_start)
-                sub_end = sub_seg.get("end", seg_end)
-                sub_text = sub_seg.get("text", "").strip()
-                sub_duration = sub_end - sub_start
-                
-                if sub_duration <= 0 or not sub_text:
-                    continue
-                
-                # 字幕在时间轴上的位置 = 当前视频 clip 开始位置 + 相对偏移
-                subtitle_timeline_start = timeline_position + (sub_start - seg_start)
-                
-                subtitle_clips.append({
-                    "id": str(uuid4()),
-                    "track_id": text_track_id,
-                    "clip_type": "subtitle",
-                    "parent_clip_id": video_clip_id,  # 关联对应的视频 clip，方便后续覆盖
-                    "start_time": subtitle_timeline_start,
-                    "end_time": subtitle_timeline_start + sub_duration,
-                    "source_start": 0,
-                    "source_end": sub_duration,
-                    "is_muted": False,
-                    "content_text": sub_text,
-                    "text_style": {
-                        "fontSize": 15,
-                        "fontColor": "#FFFFFF",
-                        "backgroundColor": "transparent",
-                        "alignment": "center",
-                        "maxWidth": "85%",  # 字幕最大宽度 85% 画布宽度，适配各种比例
-                    },
-                    "transform": {
-                        "x": 0,
-                        "y": 150,
-                        "scale": 1,
-                    },
-                    "metadata": {
-                        "segment_id": seg.get("id"),
-                        "speaker": seg.get("speaker"),
-                        "order_index": seg_idx * 100 + sub_idx,  # 确保顺序唯一
-                        "original_start": sub_start,
-                        "original_end": sub_end,
-                    },
-                    "created_at": now,
-                    "updated_at": now,
-                })
-        
-        # 更新时间轴位置
-        timeline_position += seg_duration
-    
-    # 输出统计日志
-    total_skipped = sum(auto_skipped.values())
-    logger.info(f"[Workspace] 创建 {len(video_clips)} 个视频 Clip，{len(subtitle_clips)} 个字幕 Clip")
-    if total_skipped > 0:
-        logger.info(f"[Workspace] ✂️ 自动切除 {total_skipped} 个静音片段 (共 {auto_skipped_duration/1000:.1f}s): "
-              f"死寂={auto_skipped['dead_air']}, 长停顿={auto_skipped['long_pause']}, 卡顿={auto_skipped['hesitation']}")
-    
-    return video_clips, subtitle_clips
+# NOTE: _create_clips_from_segments 已删除 (2025-01-27)
+# 该函数从未被调用，_process_session_multi_assets 内部直接处理 clips 创建
+# 保留 _create_clips_from_segments_with_offset 供 assets.py 使用
 
 
-async def _process_session(
-    session_id: str,
-    project_id: str,
-    asset_id: str,
-    task_type: str,
-):
-    """
-    后台处理会话
-    执行 ASR 转写（已集成智能静音分级）
-    支持一键 AI 成片模式（task_type == 'ai-create'）
-    """
-    import asyncio
-    
-    # ★ 由 task_type 决定处理流程
-    ai_create_mode = task_type == "ai-create"
-    # enable_llm 是独立开关，控制是否调用 LLM 进行语义分析
-    # TODO: 后续可从请求参数或用户配置获取
-    enable_llm = False
-    
-    if ai_create_mode:
-        logger.info(f"[Workspace] 开始一键 AI 成片流程 {session_id}, enable_llm={enable_llm}")
-    else:
-        logger.info(f"[Workspace] 开始处理会话 {session_id}, task_type={task_type}, enable_llm={enable_llm}")
-    
-    try:
-        update_progress = _create_progress_updater(session_id)
-        
-        # Step 1: 获取视频数据 (0% → 20%)
-        _raise_if_cancelled(session_id, "开始处理")
-        update_progress("fetch", 5)
-        await asyncio.sleep(0.5)
-        
-        asset = supabase.table("assets").select("*").eq("id", asset_id).single().execute()
-        if not asset.data:
-            raise Exception("资源不存在")
-        
-        storage_path = asset.data.get("storage_path")
-        file_url = get_file_url("clips", storage_path)
-        
-        # 提取视频元数据（宽高、帧率等）
-        metadata = await _fetch_asset_metadata(asset_id, file_url)
-        # duration 从 asset 表获取（前端传入），不依赖 ffprobe
-        duration = asset.data.get("duration") or metadata.get("duration", 0)
-        width = metadata.get("width", 1920)
-        height = metadata.get("height", 1080)
-        # fps 必须是整数（projects 表要求）
-        fps_value = metadata.get("fps", 30)
-        fps = int(round(fps_value)) if isinstance(fps_value, (int, float)) else 30
-        
-        update_progress("fetch", 20)
-        
-        transcript_segments = []
-        
-        # Step 2: ASR 语音转写（已包含智能静音分级）
-        _raise_if_cancelled(session_id, "ASR 转写前")
-        update_progress("transcribe", 25)
-        logger.info(f"[Workspace] 开始 ASR 转写（含智能静音分级）...")
-        transcript_segments = await _run_asr(file_url, update_progress, 20, 60, asset_id=asset_id, video_duration_sec=duration)
-        _raise_if_cancelled(session_id, "ASR 转写后")
-        update_progress("transcribe", 80)
-        
-        # ==========================================
-        # 一键 AI 成片模式 - 调用 AI 成片服务
-        # ==========================================
-        if ai_create_mode:
-            _raise_if_cancelled(session_id, "AI 成片前")
-            update_progress("segment", 35)
-            logger.info(f"[Workspace] 进入一键 AI 成片流程...")
-            
-            from ..services.ai_video_creator import ai_video_creator
-            
-            # 获取本地视频路径（从 storage_path 构造）
-            video_path = f"/tmp/{storage_path}" if storage_path else file_url
-            
-            # 调用 AI 成片服务
-            update_progress("vision", 50)
-            ai_result = await ai_video_creator.process(
-                video_path=file_url,  # 使用 URL，服务内部会处理
-                audio_url=file_url,
-                options={
-                    "enable_llm": enable_llm,
-                    "transcript_segments": transcript_segments  # 传入已有的 ASR 结果
-                }
-            )
-            
-            _raise_if_cancelled(session_id, "AI 视觉分析后")
-            update_progress("transform", 70)
-            
-            # 将 AI 结果转换为 Clips
-            now = datetime.utcnow().isoformat()
-            
-            # 创建视频轨道
-            video_track_id = str(uuid4())
-            supabase.table("tracks").insert({
-                "id": video_track_id,
-                "project_id": project_id,
-                "name": "AI 视频轨道",
-                "order_index": 0,
-                "is_muted": False,
-                "is_locked": False,
-                "is_visible": True,
-                "created_at": now,
-                "updated_at": now,
-            }).execute()
-            
-            # 创建字幕轨道
-            text_track_id = str(uuid4())
-            supabase.table("tracks").insert({
-                "id": text_track_id,
-                "project_id": project_id,
-                "name": "AI 字幕轨道",
-                "order_index": 1,
-                "is_muted": False,
-                "is_locked": False,
-                "is_visible": True,
-                "created_at": now,
-                "updated_at": now,
-            }).execute()
-            
-            update_progress("subtitle", 85)
-            
-            # 从 AI 结果创建 Clips
-            video_clips = []
-            subtitle_clips = []
-            
-            timeline_position = 0
-            breath_count = 0
-            speech_count = 0
-            
-            for seg_idx, seg in enumerate(ai_result.segments):
-                clip_duration = int(seg.end - seg.start)
-                
-                # 判断是否为换气片段
-                is_breath = seg.is_breath if hasattr(seg, "is_breath") else False
-                is_silence = seg.is_silence if hasattr(seg, "is_silence") else False
-                
-                # 为片段命名
-                if is_breath:
-                    clip_name = "换气"
-                    breath_count += 1
-                elif is_silence:
-                    clip_name = "静音"
-                else:
-                    speech_count += 1
-                    clip_name = f"片段 {speech_count}"
-                
-                # 生成视频 clip ID，后续字幕需要关联
-                video_clip_id = str(uuid4())
-                
-                # 视频 Clip
-                video_clip = {
-                    "id": video_clip_id,
-                    "track_id": video_track_id,
-                    "asset_id": asset_id,
-                    "clip_type": "video",
-                    "name": clip_name,
-                    "start_time": timeline_position,
-                    "end_time": timeline_position + clip_duration,
-                    "source_start": int(seg.start),
-                    "source_end": int(seg.end),
-                    "is_muted": False,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                
-                # 添加元数据 (保留静音分级信息)
-                if hasattr(seg, "metadata") and seg.metadata:
-                    video_clip["metadata"] = seg.metadata
-                
-                # 添加运镜关键帧 (如果有)
-                if hasattr(seg, "transform") and seg.transform:
-                    video_clip["transform"] = seg.transform
-                
-                video_clips.append(video_clip)
-                
-                # 字幕 Clip (只有语音片段才生成字幕，按标点切分)
-                if seg.text and not is_breath and not is_silence:
-                    # 将 SmartSegment 转换为标准 segment dict 用于切分
-                    seg_dict = {
-                        "id": seg.id,
-                        "text": seg.text,
-                        "start": int(seg.start),
-                        "end": int(seg.end),
-                    }
-                    
-                    # 按标点切分成多个子句
-                    fine_subs = _split_segments_by_punctuation([seg_dict])
-                    
-                    # 为每个子句创建字幕 clip
-                    for sub_idx, sub_seg in enumerate(fine_subs):
-                        sub_start = sub_seg.get("start", seg.start)
-                        sub_end = sub_seg.get("end", seg.end)
-                        sub_text = sub_seg.get("text", "").strip()
-                        sub_duration = sub_end - sub_start
-                        
-                        if sub_duration <= 0 or not sub_text:
-                            continue
-                        
-                        # 字幕在时间轴上的位置 = 当前视频 clip 开始位置 + 相对偏移
-                        subtitle_timeline_start = timeline_position + (sub_start - int(seg.start))
-                        
-                        subtitle_clip = {
-                            "id": str(uuid4()),
-                            "track_id": text_track_id,
-                            "clip_type": "subtitle",
-                            "parent_clip_id": video_clip_id,  # 关联对应的视频 clip，方便后续覆盖
-                            "start_time": subtitle_timeline_start,
-                            "end_time": subtitle_timeline_start + sub_duration,
-                            "content_text": sub_text,
-                            "text_style": {
-                                "fontSize": 15,
-                                "fontColor": "#FFFFFF",
-                                "backgroundColor": "transparent",
-                                "alignment": "center",
-                                "maxWidth": "85%",  # 字幕最大宽度 85% 画布宽度
-                            },
-                            "transform": {
-                                "x": 0,
-                                "y": 150,
-                                "scale": 1,
-                            },
-                            "is_muted": False,
-                            "metadata": {
-                                "segment_id": seg.id,
-                                "order_index": seg_idx * 100 + sub_idx,  # 确保顺序唯一
-                                "original_start": sub_start,
-                                "original_end": sub_end,
-                            },
-                            "created_at": now,
-                            "updated_at": now,
-                        }
-                        subtitle_clips.append(subtitle_clip)
-                
-                timeline_position += clip_duration
-            
-            logger.info(f"[Workspace] 📊 AI 成片统计: 语音片段 {speech_count}, 换气保留 {breath_count}")
-            
-            # 批量插入前检查取消状态
-            _raise_if_cancelled(session_id, "插入 Clip 前")
-            
-            # 批量插入
-            if video_clips:
-                supabase.table("clips").insert(video_clips).execute()
-                logger.info(f"[Workspace] ✅ AI 成片创建 {len(video_clips)} 个视频 Clip")
-            if subtitle_clips:
-                supabase.table("clips").insert(subtitle_clips).execute()
-                logger.info(f"[Workspace] ✅ AI 成片创建 {len(subtitle_clips)} 个字幕 Clip")
-            
-            update_progress("prepare", 95)
-            
-            # 完成
-            now_complete = datetime.utcnow().isoformat()
-            supabase.table("workspace_sessions").update({
-                "status": "completed",
-                "progress": 100,
-                "current_step": "completed",
-                "completed_at": now_complete,
-                "updated_at": now_complete
-            }).eq("id", session_id).execute()
-            
-            logger.info(f"[Workspace] ✅ 一键 AI 成片完成！")
-            return
-        
-        # ==========================================
-        # Step 3: 准备工作台 - 创建轨道和 Clip (普通模式)
-        # ==========================================
-        _raise_if_cancelled(session_id, "创建轨道前")
-        update_progress("prepare", 90)
-        
-        now = datetime.utcnow().isoformat()
-        
-        # 创建视频轨道
-        video_track_id = str(uuid4())
-        supabase.table("tracks").insert({
-            "id": video_track_id,
-            "project_id": project_id,
-            "name": "视频轨道",
-            "order_index": 0,
-            "is_muted": False,
-            "is_locked": False,
-            "is_visible": True,
-            "created_at": now,
-            "updated_at": now,
-        }).execute()
-        
-        clip_duration_ms = int((duration if duration > 0 else 10) * 1000)
-        
-        # 如果有 ASR 结果，根据语音片段切分视频
-        if transcript_segments:
-            # 创建文本轨道
-            text_track_id = str(uuid4())
-            supabase.table("tracks").insert({
-                "id": text_track_id,
-                "project_id": project_id,
-                "name": "转写文本",
-                "order_index": 1,
-                "is_muted": False,
-                "is_locked": False,
-                "is_visible": True,
-                "created_at": now,
-                "updated_at": now,
-            }).execute()
-            
-            # 使用辅助函数创建 clips
-            video_clips, subtitle_clips = _create_clips_from_segments(
-                project_id=project_id,
-                asset_id=asset_id,
-                transcript_segments=transcript_segments,
-                video_track_id=video_track_id,
-                text_track_id=text_track_id,
-            )
-            
-            # 批量插入所有 clips
-            if video_clips:
-                supabase.table("clips").insert(video_clips).execute()
-                logger.info(f"[Workspace] ✅ 创建 {len(video_clips)} 个视频 Clip 成功")
-            
-            if subtitle_clips:
-                supabase.table("clips").insert(subtitle_clips).execute()
-                logger.info(f"[Workspace] ✅ 创建 {len(subtitle_clips)} 个字幕 Clip 成功")
-        else:
-            # 没有 ASR 结果，创建完整视频 Clip
-            video_clip_id = str(uuid4())
-            supabase.table("clips").insert({
-                "id": video_clip_id,
-                "track_id": video_track_id,
-                "asset_id": asset_id,
-                "clip_type": "video",
-                "start_time": 0,
-                "end_time": clip_duration_ms,
-                "source_start": 0,
-                "source_end": clip_duration_ms,
-                "is_muted": False,
-                "created_at": now,
-                "updated_at": now,
-            }).execute()
-        
-        # 更新项目
-        supabase.table("projects").update({
-            "status": "ready",
-            "resolution": {"width": width, "height": height},
-            "fps": fps,
-            "updated_at": now,
-        }).eq("id", project_id).execute()
-        
-        update_progress("prepare", 100)
-        
-        # 标记会话完成
-        # 计算静音片段数量（通过 silence_info 字段判断）
-        silence_count = len([s for s in transcript_segments if s.get("silence_info")])
-        
-        supabase.table("workspace_sessions").update({
-            "status": "completed",
-            "progress": 100,
-            "transcript_segments": len(transcript_segments),
-            "marked_clips": silence_count,  # 静音片段数量（已集成到 ASR）
-            "completed_at": now,
-            "updated_at": now,
-        }).eq("id", session_id).execute()
-        
-        logger.info(f"[Workspace] ✅ 会话 {session_id} 处理完成")
-        
-    except SessionCancelledException:
-        # 用户主动取消，不需要更新状态（已经是 cancelled）
-        logger.info(f"[Workspace] 🛑 会话 {session_id} 处理已被用户取消")
-        return
-    except Exception as e:
-        logger.error(f"[Workspace] ❌ 处理失败: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        supabase.table("workspace_sessions").update({
-            "status": "failed",
-            "error_message": str(e),
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", session_id).execute()
-        
-        supabase.table("projects").update({
-            "status": "draft",
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", project_id).execute()
+# NOTE: _process_session 已删除 (2025-01-27)
+# 该函数从未被调用，所有处理都使用 _process_session_multi_assets
+# 删除约 410 行冗余代码
 
 
 async def _process_session_multi_assets(
@@ -1692,22 +1584,43 @@ async def _process_session_multi_assets(
     # ★ 由 task_type 决定处理流程
     ai_create_mode = task_type == "ai-create"
     voice_extract_mode = task_type == "voice-extract"
-    # enable_llm 是独立开关，控制是否调用 LLM 进行语义分析
-    # TODO: 后续可从请求参数或用户配置获取
     enable_llm = False
     
-    logger.info(f"[Workspace] ========================================")
-    logger.info(f"[Workspace] 🚀 开始处理多素材会话")
-    logger.info(f"[Workspace]    session_id: {session_id}")
-    logger.info(f"[Workspace]    project_id: {project_id}")
-    logger.info(f"[Workspace]    task_type: {task_type}")
-    logger.info(f"[Workspace]    ai_create_mode: {ai_create_mode}")
-    logger.info(f"[Workspace]    voice_extract_mode: {voice_extract_mode}")
-    logger.info(f"[Workspace]    enable_llm: {enable_llm}")
-    logger.info(f"[Workspace]    素材数量: {len(assets)}")
-    logger.info(f"[Workspace] ========================================")
+    logger.info(f"[Workspace] 🚀 开始处理多素材会话: session={session_id}, project={project_id}, task={task_type}, assets={len(assets)}")
+    logger.debug(f"[Workspace]    ai_create_mode: {ai_create_mode}, voice_extract_mode: {voice_extract_mode}")
     
     try:
+        # ========================================
+        # ★ Step 0: 清空项目的所有 clips 和 keyframes（避免重复/残留）
+        # ========================================
+        logger.info(f"[Workspace] 🧹 清空项目 {project_id} 的所有 clips 和 keyframes...")
+        
+        # 先获取项目的所有 track_ids
+        tracks_result = supabase.table("tracks").select("id").eq("project_id", project_id).execute()
+        track_ids = [t["id"] for t in (tracks_result.data or [])]
+        
+        if track_ids:
+            # 获取所有 clip_ids（用于删除关联的 keyframes）
+            clips_result = supabase.table("clips").select("id").in_("track_id", track_ids).execute()
+            clip_ids = [c["id"] for c in (clips_result.data or [])]
+            
+            # 先删除 keyframes（有外键约束）
+            if clip_ids:
+                try:
+                    supabase.table("keyframes").delete().in_("clip_id", clip_ids).execute()
+                    logger.debug(f"[Workspace]    删除 {len(clip_ids)} 个 clips 关联的 keyframes")
+                except Exception as e:
+                    logger.warning(f"[Workspace]    删除 keyframes 失败（可能不存在）: {e}")
+            
+            # 再删除所有 clips
+            try:
+                supabase.table("clips").delete().in_("track_id", track_ids).execute()
+                logger.debug(f"[Workspace]    删除 {len(track_ids)} 个 tracks 下的所有 clips")
+            except Exception as e:
+                logger.warning(f"[Workspace]    删除 clips 失败: {e}")
+        
+        logger.info(f"[Workspace] ✅ 项目清理完成，开始全新处理")
+        
         update_progress = _create_progress_updater(session_id)
         now = datetime.utcnow().isoformat()
         
@@ -1724,14 +1637,14 @@ async def _process_session_multi_assets(
         for idx_asset, asset in enumerate(assets):
             asset_id = asset["id"]
             storage_path = asset.get("storage_path")
-            logger.info(f"[Workspace] 📦 获取素材 {idx_asset + 1}/{len(assets)} 元数据: {asset_id}")
-            logger.info(f"[Workspace]    storage_path: {storage_path}")
+            logger.debug(f"[Workspace] 📦 获取素材 {idx_asset + 1}/{len(assets)} 元数据: {asset_id}")
+            logger.debug(f"[Workspace]    storage_path: {storage_path}")
             file_url = get_file_url("clips", storage_path)
-            logger.info(f"[Workspace]    file_url: {file_url[:80]}...")
+            logger.debug(f"[Workspace]    file_url: {file_url[:80]}...")
             
             # 获取元数据（包括编码信息）
             metadata = await _fetch_asset_metadata(asset_id, file_url)
-            logger.info(f"[Workspace]    metadata: {metadata}")
+            logger.debug(f"[Workspace]    metadata: {metadata}")
             duration = asset.get("duration") or metadata.get("duration", 0)
             width = metadata.get("width", 1920)
             height = metadata.get("height", 1080)
@@ -1830,60 +1743,95 @@ async def _process_session_multi_assets(
         else:
             logger.info(f"[Workspace] ⏭️ 跳过 HLS 生成（所有 {len(asset_infos)} 个素材都是小视频，直接播放原文件）")
         
-        # Step 2: 创建轨道
-        # 1. 视频轨道 (始终创建，Track 0)
-        video_track_id = str(uuid4())
-        supabase.table("tracks").insert({
-            "id": video_track_id,
-            "project_id": project_id,
-            "name": "视频轨道",
-            "order_index": 0,
-            "is_muted": False,
-            "is_locked": False,
-            "is_visible": True,
-            "created_at": now,
-            "updated_at": now,
-        }).execute()
+        # ========================================
+        # Step 2: 复用已有轨道（finalize_upload 已创建）
+        # ========================================
+        logger.info(f"[Workspace] 🔍 查找已有轨道...")
+        existing_tracks = supabase.table("tracks").select("*").eq("project_id", project_id).execute()
         
+        video_track_id = None
+        text_track_id = None
         audio_track_id = None
-        main_track_id = video_track_id  # 默认主轨道是视频轨
         
-        # 2. 如果是 Voice Extract 模式，创建音频轨道 (Track 1)
-        if voice_extract_mode:
-            audio_track_id = str(uuid4())
+        if existing_tracks.data:
+            for track in existing_tracks.data:
+                if track.get("order_index") == 0:
+                    video_track_id = track["id"]
+                    logger.debug(f"[Workspace]    找到视频轨道: {video_track_id}")
+                elif track.get("order_index") == 1:
+                    # order_index=1 可能是字幕轨道或音频轨道
+                    if "字幕" in track.get("name", "") or "text" in track.get("name", "").lower():
+                        text_track_id = track["id"]
+                        logger.debug(f"[Workspace]    找到字幕轨道: {text_track_id}")
+                    else:
+                        audio_track_id = track["id"]
+                        logger.debug(f"[Workspace]    找到音频轨道: {audio_track_id}")
+                elif track.get("order_index") == 2:
+                    text_track_id = track["id"]
+                    logger.debug(f"[Workspace]    找到字幕轨道(order=2): {text_track_id}")
+        
+        # 如果没有找到已有轨道，才创建新的（理论上不应该发生）
+        if not video_track_id:
+            logger.warning(f"[Workspace] ⚠️ 未找到视频轨道，创建新的（不应该发生！）")
+            video_track_id = str(uuid4())
             supabase.table("tracks").insert({
-                "id": audio_track_id,
+                "id": video_track_id,
                 "project_id": project_id,
-                "name": "原声音频",
-                "order_index": 1,
+                "name": "视频轨道",
+                "order_index": 0,
                 "is_muted": False,
                 "is_locked": False,
                 "is_visible": True,
                 "created_at": now,
                 "updated_at": now,
             }).execute()
-            main_track_id = audio_track_id  # 主素材放在音频轨
         
-        # 3. 字幕轨道 (Track 2)
-        text_track_id = str(uuid4())
-        supabase.table("tracks").insert({
-            "id": text_track_id,
-            "project_id": project_id,
-            "name": "字幕轨道",
-            "order_index": 2 if voice_extract_mode else 1,
-            "is_muted": False,
-            "is_locked": False,
-            "is_visible": True,
-            "created_at": now,
-            "updated_at": now,
-        }).execute()
+        main_track_id = video_track_id  # 默认主轨道是视频轨
         
-        # Step 3: 按顺序处理每个素材的 ASR (10% → 80%)
+        # Voice Extract 模式处理
+        if voice_extract_mode:
+            if not audio_track_id:
+                audio_track_id = str(uuid4())
+                supabase.table("tracks").insert({
+                    "id": audio_track_id,
+                    "project_id": project_id,
+                    "name": "原声音频",
+                    "order_index": 1,
+                    "is_muted": False,
+                    "is_locked": False,
+                    "is_visible": True,
+                    "created_at": now,
+                    "updated_at": now,
+                }).execute()
+            main_track_id = audio_track_id
+        
+        if not text_track_id:
+            logger.warning(f"[Workspace] ⚠️ 未找到字幕轨道，创建新的（不应该发生！）")
+            text_track_id = str(uuid4())
+            supabase.table("tracks").insert({
+                "id": text_track_id,
+                "project_id": project_id,
+                "name": "字幕轨道",
+                "order_index": 2 if voice_extract_mode else 1,
+                "is_muted": False,
+                "is_locked": False,
+                "is_visible": True,
+                "created_at": now,
+                "updated_at": now,
+            }).execute()
+        
+        logger.info(f"[Workspace] ✅ 轨道准备完成: video={video_track_id}, text={text_track_id}")
+        
+        # ========================================
+        # ★ AI-Create 模式：先 ASR，再按语音切片
+        # ★ Voice-Extract 模式：整体 clip + 字幕
+        # ========================================
+        
         all_video_clips = []
         all_subtitle_clips = []
-        all_keyframes = []  # ★ 收集所有关键帧（统一存储到 keyframes 表）
-        timeline_position = 0
+        all_keyframes = []
         total_segments = 0
+        timeline_position = 0  # 时间轴位置（毫秒）
         
         progress_per_asset = 70 / len(asset_infos)  # 每个素材占 70% 进度
         
@@ -1895,25 +1843,21 @@ async def _process_session_multi_assets(
             file_url = info["file_url"]
             asset_duration_ms = info["duration_ms"]
             
+            if asset_duration_ms <= 0:
+                asset_duration_ms = 10000
+                logger.warning(f"[Workspace] ⚠️ Asset {asset_id} 无时长信息，使用默认 10s")
+            
             base_progress = 10 + int(idx * progress_per_asset)
-            logger.info(f"[Workspace] ========================================")
-            logger.info(f"[Workspace] 📹 处理素材 {idx + 1}/{len(asset_infos)}")
-            logger.info(f"[Workspace]    名称: {info['name']}")
-            logger.info(f"[Workspace]    asset_id: {asset_id}")
-            logger.info(f"[Workspace]    时长: {info['duration']:.1f}s ({asset_duration_ms}ms)")
-            logger.info(f"[Workspace]    base_progress: {base_progress}%")
-            logger.info(f"[Workspace] ========================================")
+            logger.info(f"[Workspace] 📹 处理素材 {idx + 1}/{len(asset_infos)}: {info['name'][:30]}...")
+            logger.debug(f"[Workspace]    asset_id: {asset_id}, 时长: {info['duration']:.1f}s, 模式: {'AI智能切片' if ai_create_mode else '整体提取'}")
             
+            # Step 1: ASR 转写（获取语音片段）
             transcript_segments = []
-            
-            # ASR 转写（始终执行）
-            logger.info(f"[Workspace] 🎙️ 开始 ASR 转写素材 {idx + 1}...")
-            logger.info(f"[Workspace]    ASR 输入 URL: {file_url}")
+            logger.debug(f"[Workspace] 🎙️ 开始 ASR 转写素材 {idx + 1}...")
             update_progress("transcribe", base_progress + 5)
             
-            # 如果不是第一个素材，等待一小段时间避免 API 限流
             if idx > 0:
-                logger.info(f"[Workspace]    ⏳ 等待 2 秒避免 API 限流...")
+                logger.debug(f"[Workspace]    ⏳ 等待 2 秒避免 API 限流...")
                 await asyncio.sleep(2)
             
             try:
@@ -1921,79 +1865,407 @@ async def _process_session_multi_assets(
                     file_url, 
                     update_progress,
                     base_progress,
-                    int(progress_per_asset),  # step_progress: 这个素材占的进度范围
+                    int(progress_per_asset),
                     asset_id=asset_id,
-                    video_duration_sec=info['duration']  # ★ 传入视频时长
+                    video_duration_sec=info['duration']
                 )
                 
                 logger.info(f"[Workspace] ✅ ASR 完成素材 {idx + 1}, 识别 {len(transcript_segments)} 个片段")
-                
-                # ASR 完成后检查取消状态
                 _raise_if_cancelled(session_id, f"素材 {idx + 1} ASR 后")
                 
-                # 统计 breath 片段数量（注意 silence_info 可能为 None）
                 breath_count = sum(1 for seg in transcript_segments if (seg.get("silence_info") or {}).get("classification") == "breath")
                 speech_count = sum(1 for seg in transcript_segments if not seg.get("silence_info"))
-                logger.info(f"[Workspace]    其中: 语音片段 {speech_count} 个, 换气片段 {breath_count} 个")
-                
+                logger.debug(f"[Workspace]    其中: 语音片段 {speech_count} 个, 换气片段 {breath_count} 个")
                 total_segments += len(transcript_segments)
             except Exception as asr_err:
                 logger.error(f"[Workspace] ❌ ASR 转写素材 {idx + 1} 失败: {asr_err}")
                 import traceback
                 traceback.print_exc()
             
-            # 创建 clips（带时间轴偏移）
-            # 注意：如果 voice_extract_mode，传入 audio_track_id 作为 main_track_id
-            # ★ Voice Extract 模式：禁用智能运镜（不需要关键帧）
-            video_clips, subtitle_clips, keyframes = await _create_clips_from_segments_with_offset(
-                project_id=project_id,
-                asset_id=asset_id,
-                transcript_segments=transcript_segments,
-                video_track_id=main_track_id,  # 传入主轨道ID (可能是音频轨ID)
-                text_track_id=text_track_id,
-                timeline_offset=timeline_position,
-                asset_index=idx,
-                enable_llm=enable_llm,
-                enable_smart_camera=not voice_extract_mode,  # ★ Voice Extract 禁用智能运镜
-            )
+            # ========================================
+            # Step 2: 创建 Video Clips
+            # ========================================
             
-            # ★ 如果是 Voice Extract 模式，修正 clip_type 为 audio
-            if voice_extract_mode and video_clips:
-                for clip in video_clips:
-                    clip["clip_type"] = "audio"
-                    # 移除不必要的视觉属性
-                    if "transform" in clip:
-                        del clip["transform"]
-            
-            all_video_clips.extend(video_clips)
-            all_subtitle_clips.extend(subtitle_clips)
-            all_keyframes.extend(keyframes)  # ★ 收集关键帧
-            
-            # 计算实际用到的时长（排除跳过的静音）
-            if video_clips:
-                last_clip = max(video_clips, key=lambda c: c["end_time"])
-                timeline_position = last_clip["end_time"]
+            if ai_create_mode and transcript_segments:
+                # ★★★ AI-Create 模式：完整一键成片流程 ★★★
+                # 使用 AIVideoCreatorService 处理：
+                # 1. 智能切片 (已有 ASR 结果)
+                # 2. 视觉分析 (人脸检测)
+                # 3. LLM 语义分析 (情绪/重要性)
+                # 4. 运镜规则引擎 (决策)
+                # 5. 序列感知后处理 (多样性)
+                
+                logger.debug(f"[Workspace] 🎬 AI智能切片模式：调用 AIVideoCreatorService...")
+                
+                from app.services.ai_video_creator import ai_video_creator
+                from app.services.transform_rules import ZoomStrategy
+                
+                try:
+                    # 调用 AI 成片服务（复用已有 ASR 结果）
+                    ai_result = await ai_video_creator.process(
+                        video_path=file_url,  # 使用 URL（视觉分析会下载）
+                        audio_url=file_url,
+                        options={
+                            "transcript_segments": transcript_segments,
+                            "enable_llm": enable_llm,  # 根据配置决定是否启用 LLM
+                        }
+                    )
+                    
+                    logger.info(f"[Workspace] ✅ AIVideoCreator 处理完成: {ai_result.clips_count} 个片段")
+                    
+                    # 将 AI 结果转换为 clips 和 keyframes
+                    for seg_idx, smart_seg in enumerate(ai_result.segments):
+                        seg_start = int(smart_seg.start)
+                        seg_end = int(smart_seg.end)
+                        seg_text = smart_seg.text.strip() if smart_seg.text else ""
+                        seg_duration = seg_end - seg_start
+                        
+                        if seg_duration <= 0:
+                            continue
+                        
+                        clip_id = str(uuid4())
+                        
+                        # ★ 换气片段：保留，添加 silence_info 让前端向导处理
+                        is_breath = smart_seg.is_breath
+                        
+                        if is_breath:
+                            # 换气片段：创建 clip 但标记为换气，供前端向导处理
+                            clip_data = {
+                                "id": clip_id,
+                                "track_id": video_track_id,
+                                "asset_id": asset_id,
+                                "clip_type": "video",
+                                "name": "[换气]",
+                                "start_time": timeline_position,
+                                "end_time": timeline_position + seg_duration,
+                                "source_start": seg_start,
+                                "source_end": seg_end,
+                                "volume": 1.0,
+                                "is_muted": False,
+                                "transform": {
+                                    "x": 0, "y": 0,
+                                    "scaleX": 1, "scaleY": 1,
+                                    "rotation": 0,
+                                    "opacity": 1,
+                                },
+                                "speed": 1.0,
+                                "metadata": {
+                                    "segment_id": smart_seg.id,
+                                    "asset_index": idx,
+                                    "segment_index": seg_idx,
+                                    "silence_info": {
+                                        "classification": "breath",
+                                        "duration_ms": seg_duration,
+                                    },
+                                },
+                                "created_at": now,
+                                "updated_at": now,
+                            }
+                            all_video_clips.append(clip_data)
+                            
+                            # 换气片段不需要字幕和运镜
+                            logger.debug(f"[Workspace]    Clip {seg_idx + 1} [换气]: {timeline_position}~{timeline_position + seg_duration}ms")
+                            timeline_position += seg_duration
+                            continue
+                        
+                        # 跳过空文本的非换气片段
+                        if not seg_text:
+                            continue
+                        
+                        # 语音片段
+                        clip_data = {
+                            "id": clip_id,
+                            "track_id": video_track_id,
+                            "asset_id": asset_id,
+                            "clip_type": "video",
+                            "name": seg_text[:20] + ("..." if len(seg_text) > 20 else ""),
+                            "start_time": timeline_position,
+                            "end_time": timeline_position + seg_duration,
+                            "source_start": seg_start,
+                            "source_end": seg_end,
+                            "volume": 1.0,
+                            "is_muted": False,
+                            "transform": {
+                                "x": 0, "y": 0,
+                                "scaleX": 1, "scaleY": 1,
+                                "rotation": 0,
+                                "opacity": 1,
+                            },
+                            "speed": 1.0,
+                            "metadata": {
+                                "segment_id": smart_seg.id,
+                                "asset_index": idx,
+                                "segment_index": seg_idx,
+                                "emotion": smart_seg.emotion.value if smart_seg.emotion else "neutral",
+                                "importance": smart_seg.importance.value if smart_seg.importance else "medium",
+                                "has_face": smart_seg.has_face,
+                                "rule_applied": smart_seg.transform.get("_rule_applied") if smart_seg.transform else None,
+                            },
+                            "created_at": now,
+                            "updated_at": now,
+                        }
+                        all_video_clips.append(clip_data)
+                        
+                        # 字幕 clips（细分）
+                        fine_subs = _split_segments_by_punctuation([{
+                            "id": smart_seg.id,
+                            "start": seg_start,
+                            "end": seg_end,
+                            "text": seg_text,
+                        }])
+                        for sub_idx, sub_seg in enumerate(fine_subs):
+                            sub_start = sub_seg.get("start", seg_start)
+                            sub_end = sub_seg.get("end", seg_end)
+                            sub_text = sub_seg.get("text", "").strip()
+                            sub_duration = sub_end - sub_start
+                            
+                            if sub_duration <= 0 or not sub_text:
+                                continue
+                            
+                            sub_offset = sub_start - seg_start
+                            
+                            all_subtitle_clips.append({
+                                "id": str(uuid4()),
+                                "track_id": text_track_id,
+                                "clip_type": "subtitle",
+                                "parent_clip_id": clip_id,
+                                "start_time": timeline_position + sub_offset,
+                                "end_time": timeline_position + sub_offset + sub_duration,
+                                "source_start": 0,
+                                "source_end": sub_duration,
+                                "is_muted": False,
+                                "content_text": sub_text,
+                                "text_style": {
+                                    "fontSize": 15,
+                                    "fontColor": "#FFFFFF",
+                                    "backgroundColor": "transparent",
+                                    "alignment": "center",
+                                    "maxWidth": "95%",
+                                },
+                                "transform": {"x": 0, "y": 150, "scale": 1},
+                                "metadata": {
+                                    "segment_id": smart_seg.id,
+                                    "asset_index": idx,
+                                    "order_index": seg_idx * 100 + sub_idx,
+                                },
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                        
+                        # ★ Keyframes：根据 AI 运镜决策生成
+                        if smart_seg.transform_params:
+                            params = smart_seg.transform_params
+                            
+                            # 起始关键帧
+                            all_keyframes.append({
+                                "id": str(uuid4()),
+                                "clip_id": clip_id,
+                                "property": "scale",
+                                "offset": 0.0,
+                                "value": {"x": params.start_scale, "y": params.start_scale},
+                                "easing": "ease_in_out",
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                            
+                            # 结束关键帧
+                            all_keyframes.append({
+                                "id": str(uuid4()),
+                                "clip_id": clip_id,
+                                "property": "scale",
+                                "offset": 1.0,
+                                "value": {"x": params.end_scale, "y": params.end_scale},
+                                "easing": params.easing.value if hasattr(params.easing, 'value') else str(params.easing),
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                            
+                            # 位移关键帧（如果有位移）
+                            if abs(params.position_x) > 0.01 or abs(params.position_y) > 0.01:
+                                all_keyframes.append({
+                                    "id": str(uuid4()),
+                                    "clip_id": clip_id,
+                                    "property": "position",
+                                    "offset": 0.0,
+                                    "value": {"x": 0, "y": 0},
+                                    "easing": "ease_in_out",
+                                    "created_at": now,
+                                    "updated_at": now,
+                                })
+                                all_keyframes.append({
+                                    "id": str(uuid4()),
+                                    "clip_id": clip_id,
+                                    "property": "position",
+                                    "offset": 1.0,
+                                    "value": {"x": params.position_x, "y": params.position_y},
+                                    "easing": params.easing.value if hasattr(params.easing, 'value') else str(params.easing),
+                                    "created_at": now,
+                                    "updated_at": now,
+                                })
+                            
+                            logger.debug(f"[Workspace]    Clip {seg_idx + 1}: {timeline_position}~{timeline_position + seg_duration}ms, "
+                                       f"rule={params.rule_applied}, scale={params.start_scale:.2f}→{params.end_scale:.2f}")
+                        else:
+                            # Fallback: 简单慢推
+                            all_keyframes.append({
+                                "id": str(uuid4()),
+                                "clip_id": clip_id,
+                                "property": "scale",
+                                "offset": 0.0,
+                                "value": {"x": 1.0, "y": 1.0},
+                                "easing": "ease_in_out",
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                            all_keyframes.append({
+                                "id": str(uuid4()),
+                                "clip_id": clip_id,
+                                "property": "scale",
+                                "offset": 1.0,
+                                "value": {"x": 1.08, "y": 1.08},
+                                "easing": "linear",
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                        
+                        timeline_position += seg_duration
+                    
+                    logger.debug(f"[Workspace] ✅ AI切片完成: {len([c for c in all_video_clips if c.get('asset_id') == asset_id])} 个 video clips")
+                    
+                except Exception as ai_err:
+                    logger.error(f"[Workspace] ❌ AIVideoCreator 处理失败: {ai_err}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # Fallback: 使用简单切片逻辑
+                    logger.debug(f"[Workspace] ⚠️ 降级为简单切片模式...")
+                    speech_segments = [seg for seg in transcript_segments 
+                                      if seg.get("text", "").strip() and not seg.get("silence_info")]
+                    
+                    for seg_idx, seg in enumerate(speech_segments):
+                        seg_start = seg.get("start", 0)
+                        seg_end = seg.get("end", 0)
+                        seg_text = seg.get("text", "").strip()
+                        seg_duration = seg_end - seg_start
+                        
+                        if seg_duration <= 0:
+                            continue
+                        
+                        clip_id = str(uuid4())
+                        clip_data = {
+                            "id": clip_id,
+                            "track_id": video_track_id,
+                            "asset_id": asset_id,
+                            "clip_type": "video",
+                            "name": seg_text[:20] + ("..." if len(seg_text) > 20 else ""),
+                            "start_time": timeline_position,
+                            "end_time": timeline_position + seg_duration,
+                            "source_start": seg_start,
+                            "source_end": seg_end,
+                            "volume": 1.0,
+                            "is_muted": False,
+                            "transform": {"x": 0, "y": 0, "scaleX": 1, "scaleY": 1, "rotation": 0, "opacity": 1},
+                            "speed": 1.0,
+                            "created_at": now,
+                            "updated_at": now,
+                        }
+                        all_video_clips.append(clip_data)
+                        
+                        # 简单 keyframes
+                        all_keyframes.append({
+                            "id": str(uuid4()),
+                            "clip_id": clip_id,
+                            "property": "scale",
+                            "offset": 0.0,
+                            "value": {"x": 1.0, "y": 1.0},
+                            "easing": "ease_in_out",
+                            "created_at": now,
+                            "updated_at": now,
+                        })
+                        all_keyframes.append({
+                            "id": str(uuid4()),
+                            "clip_id": clip_id,
+                            "property": "scale",
+                            "offset": 1.0,
+                            "value": {"x": 1.08, "y": 1.08},
+                            "easing": "linear",
+                            "created_at": now,
+                            "updated_at": now,
+                        })
+                        
+                        timeline_position += seg_duration
+                
             else:
+                # ★ Voice-Extract 或无 ASR 结果：创建整体 clip
+                logger.debug(f"[Workspace] 🎬 整体模式：创建单个 clip...")
+                
+                clip_id = str(uuid4())
+                clip_data = {
+                    "id": clip_id,
+                    "track_id": video_track_id,
+                    "asset_id": asset_id,
+                    "clip_type": "video",
+                    "name": info.get("name", "视频"),
+                    "start_time": timeline_position,
+                    "end_time": timeline_position + asset_duration_ms,
+                    "source_start": 0,
+                    "source_end": asset_duration_ms,
+                    "volume": 1.0,
+                    "is_muted": False,
+                    "transform": {
+                        "x": 0, "y": 0,
+                        "scaleX": 1, "scaleY": 1,
+                        "rotation": 0,
+                        "opacity": 1,
+                    },
+                    "speed": 1.0,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                all_video_clips.append(clip_data)
+                
+                # 创建字幕 clips（如果有 ASR 结果）
+                if transcript_segments:
+                    subtitle_clips = await _create_subtitle_clips_only(
+                        transcript_segments=transcript_segments,
+                        text_track_id=text_track_id,
+                        video_clip_id=clip_id,
+                        timeline_offset=timeline_position,
+                        asset_index=idx,
+                    )
+                    all_subtitle_clips.extend(subtitle_clips)
+                
+                logger.debug(f"[Workspace]    创建 clip: {clip_id}, {timeline_position}~{timeline_position + asset_duration_ms}ms")
                 timeline_position += asset_duration_ms
             
-            logger.info(f"[Workspace] ✅ 素材 {idx + 1} 处理完成，时间轴位置: {timeline_position}ms")
+            logger.debug(f"[Workspace] ✅ 素材 {idx + 1} 处理完成")
         
-        # Step 4: 批量插入所有 clips (80% → 95%)
-        _raise_if_cancelled(session_id, "批量插入 clips 前")
-        update_progress("prepare", 85)
+        # ========================================
+        # Step 3: 批量插入 clips 和 keyframes
+        # ========================================
+        logger.debug(f"[Workspace] 📦 批量插入数据库...")
         
         if all_video_clips:
-            supabase.table("clips").insert(all_video_clips).execute()
-            logger.info(f"[Workspace] ✅ 创建 {len(all_video_clips)} 个视频 Clip")
+            try:
+                supabase.table("clips").insert(all_video_clips).execute()
+                logger.debug(f"[Workspace] ✅ 创建 {len(all_video_clips)} 个 video clips")
+            except Exception as e:
+                logger.error(f"[Workspace] ❌ 创建 video clips 失败: {e}")
+                raise
+        
+        if all_keyframes:
+            try:
+                supabase.table("keyframes").insert(all_keyframes).execute()
+                logger.debug(f"[Workspace] ✅ 创建 {len(all_keyframes)} 个 keyframes")
+            except Exception as e:
+                logger.warning(f"[Workspace] ⚠️ 插入 keyframes 失败: {e}")
         
         if all_subtitle_clips:
-            supabase.table("clips").insert(all_subtitle_clips).execute()
-            logger.info(f"[Workspace] ✅ 创建 {len(all_subtitle_clips)} 个字幕 Clip")
-        
-        # ★ 批量插入关键帧到 keyframes 表（统一存储）
-        if all_keyframes:
-            supabase.table("keyframes").insert(all_keyframes).execute()
-            logger.info(f"[Workspace] ✅ 创建 {len(all_keyframes)} 个关键帧")
+            try:
+                supabase.table("clips").insert(all_subtitle_clips).execute()
+                logger.debug(f"[Workspace] ✅ 创建 {len(all_subtitle_clips)} 个字幕 clips")
+            except Exception as e:
+                logger.warning(f"[Workspace] ⚠️ 创建字幕 clips 失败: {e}")
         
         # ========================================
         # 🎬 等待 HLS 后台任务完成（带超时）
@@ -2001,11 +2273,11 @@ async def _process_session_multi_assets(
         update_progress("prepare", 90)
         
         if 'hls_task' in locals() and hls_task:
-            logger.info(f"[Workspace] ⏳ 等待 HLS 生成任务完成（最多 120 秒）...")
+            logger.debug(f"[Workspace] ⏳ 等待 HLS 生成任务完成（最多 120 秒）...")
             try:
                 # 设置超时，避免无限等待
                 await asyncio.wait_for(hls_task, timeout=120.0)
-                logger.info(f"[Workspace] ✅ HLS 生成任务完成")
+                logger.debug(f"[Workspace] ✅ HLS 生成任务完成")
             except asyncio.TimeoutError:
                 logger.warning(f"[Workspace] ⚠️ HLS 任务超时（120秒），继续处理...")
                 hls_task.cancel()
@@ -2346,3 +2618,105 @@ async def _create_clips_from_segments_with_offset(
     logger.info(f"[Workspace]    最终 timeline 位置: {timeline_position}ms")
     
     return video_clips, subtitle_clips, all_keyframes
+
+
+async def _create_subtitle_clips_only(
+    transcript_segments: list,
+    text_track_id: str,
+    video_clip_id: str = None,
+    timeline_offset: int = 0,
+    asset_index: int = 0,
+) -> list:
+    """
+    ★ 只创建字幕 clips，不创建 video clips
+    用于 confirm_upload 阶段，video clips 已由 finalize_upload 创建
+    
+    Args:
+        transcript_segments: ASR 转写结果
+        text_track_id: 字幕轨道 ID
+        video_clip_id: 关联的视频 clip ID (用于 parent_clip_id)
+        timeline_offset: 时间轴偏移（毫秒）
+        asset_index: 素材索引
+    
+    Returns:
+        list: 字幕 clips 列表
+    """
+    logger.info(f"[Workspace] 📝 _create_subtitle_clips_only")
+    logger.info(f"[Workspace]    text_track_id: {text_track_id}")
+    logger.info(f"[Workspace]    video_clip_id: {video_clip_id}")
+    logger.info(f"[Workspace]    timeline_offset: {timeline_offset}ms")
+    logger.info(f"[Workspace]    segments count: {len(transcript_segments)}")
+    
+    now = datetime.utcnow().isoformat()
+    subtitle_clips = []
+    
+    # 过滤有效的语音片段（跳过静音）
+    sorted_segments = sorted(transcript_segments, key=lambda s: s.get("start", 0))
+    
+    for seg_idx, seg in enumerate(sorted_segments):
+        seg_start = seg.get("start", 0)
+        seg_end = seg.get("end", 0)
+        seg_text = seg.get("text", "").strip()
+        seg_duration = seg_end - seg_start
+        
+        if seg_duration <= 0 or not seg_text:
+            continue
+        
+        # 跳过静音片段
+        silence_info = seg.get("silence_info")
+        if silence_info:
+            cls = silence_info.get("classification")
+            if cls in ("dead_air", "long_pause", "hesitation", "breath"):
+                continue
+        
+        # 细分字幕（按标点符号分割）
+        fine_subs = _split_segments_by_punctuation([seg])
+        
+        for sub_idx, sub_seg in enumerate(fine_subs):
+            sub_start = sub_seg.get("start", seg_start)
+            sub_end = sub_seg.get("end", seg_end)
+            sub_text = sub_seg.get("text", "").strip()
+            sub_duration = sub_end - sub_start
+            
+            if sub_duration <= 0 or not sub_text:
+                continue
+            
+            # ★ 计算时间轴位置：使用 source 时间（相对于视频开始）
+            subtitle_timeline_start = timeline_offset + sub_start
+            
+            subtitle_clips.append({
+                "id": str(uuid4()),
+                "track_id": text_track_id,
+                "clip_type": "subtitle",
+                "parent_clip_id": video_clip_id,
+                "start_time": subtitle_timeline_start,
+                "end_time": subtitle_timeline_start + sub_duration,
+                "source_start": 0,
+                "source_end": sub_duration,
+                "is_muted": False,
+                "content_text": sub_text,
+                "text_style": {
+                    "fontSize": 15,
+                    "fontColor": "#FFFFFF",
+                    "backgroundColor": "transparent",
+                    "alignment": "center",
+                    "maxWidth": "95%",
+                },
+                "transform": {
+                    "x": 0,
+                    "y": 150,
+                    "scale": 1,
+                },
+                "metadata": {
+                    "segment_id": seg.get("id"),
+                    "asset_index": asset_index,
+                    "order_index": seg_idx * 100 + sub_idx,
+                    "original_start": sub_start,
+                    "original_end": sub_end,
+                },
+                "created_at": now,
+                "updated_at": now,
+            })
+    
+    logger.info(f"[Workspace] ✅ 创建 {len(subtitle_clips)} 个字幕 clips")
+    return subtitle_clips

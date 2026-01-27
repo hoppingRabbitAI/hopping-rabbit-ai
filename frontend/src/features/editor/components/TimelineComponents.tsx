@@ -204,20 +204,50 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
     let isCancelled = false;
     const video = document.createElement('video');
     video.src = clip.mediaUrl;
+    console.log('[Thumbnail] 🖼️ 开始加载视频缩略图:', {
+      clipId: clip.id?.slice(-8),
+      assetId: clip.assetId?.slice(-8),
+      mediaUrl: clip.mediaUrl,
+    });
     video.crossOrigin = 'anonymous';
     video.preload = 'metadata';
     video.muted = true; // 静音以避免自动播放限制
     
     const generateThumbnails = async () => {
       try {
-        await new Promise((resolve, reject) => {
-          video.onloadedmetadata = resolve;
-          video.onerror = reject;
+        await new Promise<void>((resolve, reject) => {
+          video.onloadedmetadata = () => {
+            console.log('[Thumbnail] 视频元数据加载成功:', { clipId: clip.id.slice(-8), duration: video.duration, width: video.videoWidth, height: video.videoHeight });
+            resolve();
+          };
+          video.onerror = (e) => {
+            // 如果已取消，忽略错误（可能是清理函数清空了 src）
+            if (isCancelled) {
+              console.log('[Thumbnail] 已取消，忽略加载错误');
+              return;
+            }
+            console.error('[Thumbnail] 视频加载失败:', { 
+              clipId: clip.id.slice(-8), 
+              mediaUrl: clip.mediaUrl,
+              assetId: clip.assetId,
+              error: e,
+              networkState: video.networkState,
+              readyState: video.readyState,
+              errorCode: video.error?.code,
+              errorMessage: video.error?.message
+            });
+            reject(e);
+          };
           // 超时保护
-          setTimeout(() => reject(new Error('Video load timeout')), 10000);
+          setTimeout(() => {
+            if (!isCancelled) reject(new Error('Video load timeout'));
+          }, 10000);
         });
         
-        if (isCancelled) return;
+        if (isCancelled) {
+          console.log('[Thumbnail] 生成已取消 - 元数据加载后');
+          return;
+        }
         
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d')!;
@@ -270,8 +300,11 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
     
     return () => {
       isCancelled = true;
-      video.src = '';
-      video.load();
+      // 延迟清空 src，避免中断正在进行的异步操作
+      setTimeout(() => {
+        video.src = '';
+        video.load();
+      }, 100);
     };
   }, [clip.id, clip.mediaUrl, clip.clipType, clip.duration, clip.sourceStart, thumbnailCount, isInView]);
   

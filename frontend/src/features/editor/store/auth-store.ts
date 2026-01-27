@@ -1,27 +1,15 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createClient, SupabaseClient, User, Session } from '@supabase/supabase-js';
+import { SupabaseClient, User, Session } from '@supabase/supabase-js';
+import { getSupabaseClient } from '@/lib/supabase/session';
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
 const debugError = (...args: unknown[]) => { if (DEBUG_ENABLED) console.error(...args); };
 
-// Supabase 客户端
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-let supabase: SupabaseClient | null = null;
-
+// 使用单例 Supabase 客户端
 function getSupabase(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-      },
-    });
-  }
-  return supabase;
+  return getSupabaseClient();
 }
 
 export interface AuthUser {

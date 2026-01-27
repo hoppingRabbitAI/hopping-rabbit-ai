@@ -9,44 +9,22 @@ interface ImageAdjustments {
   temperature: number;      // 色温 -100~100
   tint: number;            // 色调 -100~100
   saturation: number;      // 饱和度 -100~100
-  naturalSaturation: number; // 自然饱和度 -100~100
   
   // 明度
   brightness: number;      // 亮度 -100~100
   contrast: number;        // 对比度 -100~100
-  highlights: number;      // 高光 -100~100
-  shadows: number;         // 阴影 -100~100
-  whites: number;          // 白色 -100~100
-  blacks: number;          // 黑色 -100~100
-  luminance: number;       // 光感 -100~100
   
   // 效果
   sharpness: number;       // 锐化 0~100
-  clarity: number;         // 清晰 -100~100
-  grain: number;           // 颗粒 0~100
-  fade: number;            // 褪色 0~100
-  vignette: number;        // 暗角 -100~100
-  chromatic: number;       // 色差 -100~100
 }
 
 const DEFAULT_ADJUSTMENTS: ImageAdjustments = {
   temperature: 0,
   tint: 0,
   saturation: 0,
-  naturalSaturation: 0,
   brightness: 0,
   contrast: 0,
-  highlights: 0,
-  shadows: 0,
-  whites: 0,
-  blacks: 0,
-  luminance: 0,
   sharpness: 0,
-  clarity: 0,
-  grain: 0,
-  fade: 0,
-  vignette: 0,
-  chromatic: 0,
 };
 
 interface ImageAdjustPanelProps {
@@ -60,16 +38,16 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
   const saveToHistory = useEditorStore((s) => s.saveToHistory);
   const currentTime = useEditorStore((s) => s.currentTime);
 
-  // 获取选中的图片 clip
+  // 获取选中的图片或视频 clip
   const selectedClip = useMemo(() => {
     if (selectedClipId) {
       const clip = clips.find(c => c.id === selectedClipId);
-      if (clip?.clipType === 'image') return clip;
+      if (clip?.clipType === 'image' || clip?.clipType === 'video') return clip;
     }
     
-    // 如果没有选中，找播放头位置的图片 clip
-    const imageClips = clips.filter(c => c.clipType === 'image');
-    return imageClips.find(c => 
+    // 如果没有选中，找播放头位置的图片或视频 clip
+    const adjustableClips = clips.filter(c => c.clipType === 'image' || c.clipType === 'video');
+    return adjustableClips.find(c => 
       currentTime >= c.start && currentTime < c.start + c.duration
     );
   }, [clips, selectedClipId, currentTime]);
@@ -112,29 +90,26 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
   if (!selectedClip) return null;
 
   return (
-    <div className="w-full h-full flex flex-col bg-gray-50">
+    <div className="w-full h-full flex flex-col bg-white rounded-xl shadow-sm overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-        <div className="flex items-center space-x-3">
-          <h3 className="text-lg font-semibold text-gray-900">调节</h3>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-900">调节</h3>
           <button
             onClick={handleReset}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
+            className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-500 hover:text-gray-700"
             title="重置所有"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
         </div>
-        <button
-          onClick={onClose}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
-        >
-          <X className="w-5 h-5" />
+        <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-900 rounded transition-colors">
+          <X className="w-4 h-4" />
         </button>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8">
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6">
             {/* 色彩 */}
             <Section title="色彩">
               <SliderControl
@@ -144,7 +119,6 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
                 onReset={() => handleResetSingle('temperature')}
                 min={-100}
                 max={100}
-                gradient="linear-gradient(to right, #4a90e2, transparent, #ff9500)"
               />
               
               <SliderControl
@@ -154,7 +128,6 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
                 onReset={() => handleResetSingle('tint')}
                 min={-100}
                 max={100}
-                gradient="linear-gradient(to right, #00ff00, transparent, #ff00ff)"
               />
               
               <SliderControl
@@ -164,17 +137,6 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
                 onReset={() => handleResetSingle('saturation')}
                 min={-100}
                 max={100}
-                gradient="linear-gradient(to right, #808080, #ff0000)"
-              />
-              
-              <SliderControl
-                label="自然饱和度"
-                value={adjustments.naturalSaturation}
-                onChange={(v) => handleAdjustmentChange('naturalSaturation', v)}
-                onReset={() => handleResetSingle('naturalSaturation')}
-                min={-100}
-                max={100}
-                gradient="linear-gradient(to right, #808080, #ff6b6b)"
               />
             </Section>
 
@@ -197,51 +159,6 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
                 min={-100}
                 max={100}
               />
-              
-              <SliderControl
-                label="高光"
-                value={adjustments.highlights}
-                onChange={(v) => handleAdjustmentChange('highlights', v)}
-                onReset={() => handleResetSingle('highlights')}
-                min={-100}
-                max={100}
-              />
-              
-              <SliderControl
-                label="阴影"
-                value={adjustments.shadows}
-                onChange={(v) => handleAdjustmentChange('shadows', v)}
-                onReset={() => handleResetSingle('shadows')}
-                min={-100}
-                max={100}
-              />
-              
-              <SliderControl
-                label="白色"
-                value={adjustments.whites}
-                onChange={(v) => handleAdjustmentChange('whites', v)}
-                onReset={() => handleResetSingle('whites')}
-                min={-100}
-                max={100}
-              />
-              
-              <SliderControl
-                label="黑色"
-                value={adjustments.blacks}
-                onChange={(v) => handleAdjustmentChange('blacks', v)}
-                onReset={() => handleResetSingle('blacks')}
-                min={-100}
-                max={100}
-              />
-              
-              <SliderControl
-                label="光感"
-                value={adjustments.luminance}
-                onChange={(v) => handleAdjustmentChange('luminance', v)}
-                onReset={() => handleResetSingle('luminance')}
-                min={-100}
-                max={100}
-              />
             </Section>
 
             {/* 效果 */}
@@ -252,51 +169,6 @@ export function ImageAdjustPanel({ onClose }: ImageAdjustPanelProps) {
                 onChange={(v) => handleAdjustmentChange('sharpness', v)}
                 onReset={() => handleResetSingle('sharpness')}
                 min={0}
-                max={100}
-              />
-              
-              <SliderControl
-                label="清晰"
-                value={adjustments.clarity}
-                onChange={(v) => handleAdjustmentChange('clarity', v)}
-                onReset={() => handleResetSingle('clarity')}
-                min={-100}
-                max={100}
-              />
-              
-              <SliderControl
-                label="颗粒"
-                value={adjustments.grain}
-                onChange={(v) => handleAdjustmentChange('grain', v)}
-                onReset={() => handleResetSingle('grain')}
-                min={0}
-                max={100}
-              />
-              
-              <SliderControl
-                label="褪色"
-                value={adjustments.fade}
-                onChange={(v) => handleAdjustmentChange('fade', v)}
-                onReset={() => handleResetSingle('fade')}
-                min={0}
-                max={100}
-              />
-              
-              <SliderControl
-                label="暗角"
-                value={adjustments.vignette}
-                onChange={(v) => handleAdjustmentChange('vignette', v)}
-                onReset={() => handleResetSingle('vignette')}
-                min={-100}
-                max={100}
-              />
-              
-              <SliderControl
-                label="色差"
-                value={adjustments.chromatic}
-                onChange={(v) => handleAdjustmentChange('chromatic', v)}
-                onReset={() => handleResetSingle('chromatic')}
-                min={-100}
                 max={100}
               />
             </Section>
@@ -313,16 +185,16 @@ interface SectionProps {
 
 function Section({ title, children }: SectionProps) {
   return (
-    <div className="space-y-4">
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{title}</h4>
-      <div className="space-y-4">
+    <div className="space-y-3">
+      <h4 className="text-xs font-medium text-gray-500">{title}</h4>
+      <div className="space-y-3">
         {children}
       </div>
     </div>
   );
 }
 
-// Slider Control Component
+// Slider Control Component - 统一样式
 interface SliderControlProps {
   label: string;
   value: number;
@@ -331,7 +203,6 @@ interface SliderControlProps {
   min?: number;
   max?: number;
   step?: number;
-  gradient?: string;
 }
 
 function SliderControl({
@@ -342,55 +213,36 @@ function SliderControl({
   min = -100,
   max = 100,
   step = 1,
-  gradient,
 }: SliderControlProps) {
   const isDefault = value === 0 || (min === 0 && value === 0);
+  const percentage = ((value - min) / (max - min)) * 100;
   
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <label className="text-sm font-medium text-gray-700">{label}</label>
-        <div className="flex items-center space-x-2">
-          <input
-            type="number"
-            value={value}
-            onChange={(e) => onChange(Number(e.target.value))}
-            className="w-16 px-2 py-1 text-xs bg-white border border-gray-300 rounded text-gray-900 text-center focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            min={min}
-            max={max}
-          />
-          {!isDefault && (
-            <button
-              onClick={onReset}
-              className="p-1 hover:bg-gray-100 rounded transition-colors text-gray-500 hover:text-gray-700"
-              title="重置"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-      
-      <div className="relative h-2">
-        {gradient && (
-          <div
-            className="absolute inset-0 rounded-full opacity-40"
-            style={{ background: gradient }}
-          />
-        )}
+        <label className="text-xs text-gray-600">{label}</label>
         <input
-          type="range"
+          type="number"
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
+          className="w-14 px-2 py-1 text-xs bg-gray-100 border border-gray-200 rounded text-gray-700 text-center focus:border-gray-400 focus:outline-none"
           min={min}
           max={max}
-          step={step}
-          className="w-full h-2 rounded-full appearance-none cursor-pointer slider-thumb bg-gray-200"
-          style={{
-            background: gradient ? 'transparent' : undefined,
-          }}
         />
       </div>
+      
+      <input
+        type="range"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        min={min}
+        max={max}
+        step={step}
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-gray-600"
+        style={{
+          background: `linear-gradient(to right, #4B5563 0%, #4B5563 ${percentage}%, #E5E7EB ${percentage}%, #E5E7EB 100%)`
+        }}
+      />
     </div>
   );
 }

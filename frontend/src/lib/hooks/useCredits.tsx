@@ -2,23 +2,17 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { getSessionSafe } from '@/lib/supabase';
+import { useCreditsStore } from '@/lib/stores/credits-store';
 
 /**
- * 用户积分信息
+ * 用户积分信息 - 简化版
+ * credits_balance 是唯一的真实余额
  */
 export interface UserCredits {
-  credits_balance: number;        // 当前可用积分
-  monthly_credits_limit: number;  // 月度配额上限
-  monthly_credits_used: number;   // 本月已用
-  paid_credits: number;           // 充值积分 (永不过期)
-  free_trial_credits: number;     // 剩余试用积分
+  credits_balance: number;        // 当前可用积分 (唯一真实来源)
   tier: 'free' | 'pro' | 'enterprise';  // 会员等级
-  storage_limit_mb: number;
-  storage_used_mb: number;
-  max_projects: number;
-  monthly_reset_at: string | null;
-  credits_total_granted?: number;
-  credits_total_consumed?: number;
+  credits_total_granted?: number; // 累计获得 (统计用)
+  credits_total_consumed?: number; // 累计消耗 (统计用)
 }
 
 /**
@@ -54,48 +48,16 @@ export interface CreditTransaction {
 
 /**
  * useCredits Hook
- * 管理用户积分状态
+ * 管理用户积分状态 - 使用全局 store 实现跨组件同步
  */
 export function useCredits() {
-  const [credits, setCredits] = useState<UserCredits | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchCredits = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const session = await getSessionSafe();
-
-      if (!session) {
-        setCredits(null);
-        setLoading(false);
-        return;
-      }
-
-      const response = await fetch('/api/credits', {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('获取积分失败');
-      }
-
-      const data = await response.json();
-      setCredits(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '获取积分失败');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // 使用全局 store
+  const { credits, loading, error, initCredits, refetchCredits } = useCreditsStore();
 
   useEffect(() => {
-    fetchCredits();
-  }, [fetchCredits]);
+    // 初始化积分（内部会判断是否已加载，不会重复请求）
+    initCredits();
+  }, [initCredits]);
 
   /**
    * 计算操作所需积分
@@ -197,10 +159,10 @@ export function useCredits() {
     const result = await response.json();
     
     // 刷新积分
-    await fetchCredits();
+    await refetchCredits();
     
     return result;
-  }, [fetchCredits]);
+  }, [refetchCredits]);
 
   /**
    * 冻结积分 (任务开始时)
@@ -238,15 +200,15 @@ export function useCredits() {
     }
 
     const result = await response.json();
-    await fetchCredits();
+    await refetchCredits();
     return result;
-  }, [fetchCredits]);
+  }, [refetchCredits]);
 
   return {
     credits,
     loading,
     error,
-    refetch: fetchCredits,
+    refetch: refetchCredits,
     calculateCredits,
     checkCredits,
     consumeCredits,

@@ -14,6 +14,7 @@ import json
 
 from ..services.supabase_client import supabase
 from ..services.smart_analyzer import normalize_classification
+from ..services.credit_service import get_credit_service
 from .auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -2068,10 +2069,38 @@ async def confirm_selection_v2(
         
         logger.info(f"\n🎬 [confirm-selection] 完成! clips_created={clips_count}")
         
+        # ★★★ 任务完成后扣除积分（从数据库获取消耗规则）★★★
+        logger.info(f"💳 [confirm-selection] 开始扣除积分, user_id={user_id}")
+        credit_service = get_credit_service()
+        
+        # 从 ai_model_credits 表获取 ai_create 的积分消耗
+        credits_to_consume = await credit_service.calculate_credits("ai_create")
+        logger.info(f"💳 [confirm-selection] ai_create 需要 {credits_to_consume} 积分")
+        
+        # 先获取用户当前积分
+        user_credits = await credit_service.get_user_credits(user_id)
+        logger.info(f"💳 [confirm-selection] 用户当前积分: {user_credits.get('credits_balance', 'N/A')}")
+        
+        consume_result = await credit_service.consume_credits(
+            user_id=user_id,
+            credits=credits_to_consume,
+            model_key="ai_create",
+            ai_task_id=request.analysis_id,
+            description="AI 智能剪辑 - 一键成片"
+        )
+        
+        if consume_result.get("success"):
+            logger.info(f"💰 [confirm-selection] 积分扣除成功: {credits_to_consume} 积分, 余额: {consume_result.get('credits_after')}")
+        else:
+            logger.error(f"❌ [confirm-selection] 积分扣除失败: {consume_result}")
+            # 积分扣除失败直接报错
+            raise HTTPException(status_code=500, detail=f"积分扣除失败: {consume_result}")
+        
         return {
             "success": True,
             "selection_id": selection_id,
             "clips_created": clips_count,
+            "credits_consumed": credits_to_consume,
             "message": "选择已确认，clips 已生成"
         }
         

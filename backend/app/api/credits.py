@@ -23,18 +23,12 @@ router = APIRouter(prefix="/credits", tags=["credits"])
 class CalculateCreditsRequest(BaseModel):
     """计算积分请求"""
     model_key: str = Field(..., description="AI 模型标识")
-    duration_seconds: Optional[float] = Field(None, description="时长 (秒)")
-    duration_minutes: Optional[float] = Field(None, description="时长 (分钟)")
-    count: Optional[int] = Field(1, description="操作次数")
 
 
 class CalculateCreditsResponse(BaseModel):
     """计算积分响应"""
     model_key: str
     credits_required: int
-    pricing_type: str  # per_call / per_second / per_minute
-    credits_rate: float
-    params_used: Dict[str, Any]
 
 
 class CheckCreditsRequest(BaseModel):
@@ -84,19 +78,11 @@ class GrantCreditsRequest(BaseModel):
 
 
 class UserCreditsResponse(BaseModel):
-    """用户积分信息响应"""
-    credits_balance: int
-    monthly_credits_limit: int
-    monthly_credits_used: int
-    paid_credits: int
-    free_trial_credits: int
-    tier: str
-    storage_limit_mb: int
-    storage_used_mb: int
-    max_projects: int
-    monthly_reset_at: Optional[str]
-    credits_total_granted: Optional[int]
-    credits_total_consumed: Optional[int]
+    """用户积分信息响应 - 简化版"""
+    credits_balance: int          # 当前可用积分 (唯一真实来源)
+    tier: str                     # 会员等级
+    credits_total_granted: Optional[int] = 0   # 累计获得
+    credits_total_consumed: Optional[int] = 0  # 累计消耗
 
 
 class TransactionItem(BaseModel):
@@ -160,37 +146,18 @@ async def calculate_credits(
     user: dict = Depends(get_current_user),
 ):
     """
-    计算 AI 操作所需积分
+    获取 AI 操作所需积分（固定计费）
     
-    根据模型和参数计算预估积分消耗，用于:
-    - 操作前显示预估消耗
-    - 帮助用户决定是否执行
+    根据 model_key 获取积分消耗，用于:
+    - 操作前显示消耗
+    - 检查用户积分是否充足
     """
     service = get_credit_service()
-    
-    params = {}
-    if request.duration_seconds:
-        params["duration_seconds"] = request.duration_seconds
-    if request.duration_minutes:
-        params["duration_minutes"] = request.duration_minutes
-    if request.count:
-        params["count"] = request.count
-    
-    credits_required = await service.calculate_credits(request.model_key, params)
-    
-    # 获取定价信息
-    pricing_list = await service.get_model_pricing(model_key=request.model_key)
-    pricing_info = pricing_list[0] if pricing_list else {
-        "pricing_type": "fixed",
-        "credits_rate": credits_required,
-    }
+    credits_required = await service.calculate_credits(request.model_key)
     
     return {
         "model_key": request.model_key,
         "credits_required": credits_required,
-        "pricing_type": pricing_info.get("pricing_type", "fixed"),
-        "credits_rate": pricing_info.get("credits_rate", credits_required),
-        "params_used": params,
     }
 
 
@@ -206,6 +173,31 @@ async def check_credits(
     """
     service = get_credit_service()
     result = await service.check_credits(user["user_id"], request.credits_required)
+    return result
+
+
+class CheckModelCreditsRequest(BaseModel):
+    """检查模型积分请求"""
+    model_key: str = Field(..., description="AI 模型标识")
+
+
+@router.post("/check-model", response_model=CheckCreditsResponse)
+async def check_model_credits(
+    request: CheckModelCreditsRequest,
+    user: dict = Depends(get_current_user),
+):
+    """
+    检查用户积分是否足够执行指定模型操作
+    
+    一次性完成：获取模型所需积分 + 检查用户余额
+    """
+    service = get_credit_service()
+    
+    # 获取模型所需积分
+    credits_required = await service.calculate_credits(request.model_key)
+    
+    # 检查用户余额
+    result = await service.check_credits(user["user_id"], credits_required)
     return result
 
 

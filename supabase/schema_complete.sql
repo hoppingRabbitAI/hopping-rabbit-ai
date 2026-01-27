@@ -4,6 +4,8 @@
 -- 最后更新: 2026-01-26
 -- 说明: 纯表定义，无函数/触发器/视图
 -- 更新记录:
+--   - 2026-01-26: 积分系统简化为固定计费 (ai_model_credits 只保留 credits_per_call)
+--   - 2026-01-26: 统一命名 ai_create
 --   - 2026-01-26: 添加积分系统 (ai_model_credits, user_credits, credit_transactions)
 --   - 2026-01-25: 重构订阅系统 (subscription_plans 新增 credits_per_month/bonus_credits/badge 等字段)
 --   - 2026-01-25: 添加 subscription_history 订阅历史表
@@ -774,22 +776,19 @@ CREATE INDEX idx_subscription_history_user_id ON subscription_history(user_id);
 -- ============================================================================
 -- 19. AI 模型积分配置表 (ai_model_credits)
 -- 创建时间: 2026-01-26
+-- 更新时间: 2026-01-26 (简化为固定计费)
 -- 定义每种 AI 操作消耗的积分数
 -- ============================================================================
 CREATE TABLE ai_model_credits (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     
     -- 模型标识
-    model_key TEXT NOT NULL UNIQUE,  -- 'whisper', 'gpt4', 'kling_lip_sync', 'kling_face_swap'
+    model_key TEXT NOT NULL UNIQUE,  -- 'ai_create', 'kling_lip_sync', etc.
     model_name TEXT NOT NULL,        -- 显示名称
     provider TEXT NOT NULL,          -- 'openai', 'kling', 'internal'
     
-    -- 积分消耗配置
-    credits_per_call INTEGER,        -- 固定积分/次 (简单操作)
-    credits_per_second DECIMAL(10,4),-- 积分/秒 (音视频时长计费)
-    credits_per_minute DECIMAL(10,4),-- 积分/分钟 (替代方案)
-    min_credits INTEGER DEFAULT 1,   -- 最小消耗积分
-    max_credits INTEGER,             -- 最大消耗积分上限 (防止超长视频)
+    -- 积分消耗配置（简化为固定计费）
+    credits_per_call INTEGER,        -- 固定积分/次
     
     -- 成本追踪
     estimated_cost_usd DECIMAL(10,4),-- 预估单次成本 (USD)
@@ -804,25 +803,35 @@ CREATE TABLE ai_model_credits (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 预置 AI 模型积分配置
-INSERT INTO ai_model_credits (model_key, model_name, provider, credits_per_call, credits_per_minute, credits_per_second, min_credits, max_credits, estimated_cost_usd, category, description) VALUES
-('whisper_transcribe', '语音转文字', 'openai', NULL, 1.5, NULL, 1, 100, 0.006, 'transcription', '将视频/音频中的语音转换为文字'),
-('filler_detection', '填充词检测', 'internal', 2, NULL, NULL, 2, NULL, 0.01, 'analysis', '检测"嗯"、"啊"等填充词'),
-('vad', '语音活动检测', 'internal', 1, NULL, NULL, 1, NULL, 0.005, 'analysis', '检测视频中的静音片段'),
-('stem_separation', '人声分离', 'internal', NULL, 0.5, NULL, 3, 50, 0.02, 'enhancement', '分离人声和背景音乐'),
-('diarization', '说话人识别', 'internal', NULL, 1.0, NULL, 3, 80, 0.015, 'analysis', '识别视频中的不同说话人'),
-('gpt4_analysis', 'AI 智能分析', 'openai', 8, NULL, NULL, 5, 20, 0.04, 'analysis', '使用 GPT-4 分析视频内容'),
-('smart_clip', '智能剪辑', 'internal', 15, NULL, NULL, 10, 50, 0.08, 'editing', '一键智能剪辑视频'),
-('smart_camera', '智能运镜', 'internal', 10, NULL, NULL, 8, 40, 0.05, 'editing', '自动添加镜头运动效果'),
-('smart_clean', '智能清理', 'internal', 12, NULL, NULL, 8, 45, 0.06, 'editing', '自动去除静音和填充词'),
-('dalle3', 'AI 图片生成', 'openai', 12, NULL, NULL, 10, NULL, 0.08, 'generation', 'DALL-E 3 文生图'),
-('sd_generate', 'SD 图片生成', 'internal', 8, NULL, NULL, 6, NULL, 0.04, 'generation', 'Stable Diffusion 文生图'),
-('kling_lip_sync', 'AI 口型同步', 'kling', NULL, NULL, 8.0, 50, 500, 0.40, 'generation', '让视频中的人物口型匹配新音频'),
-('kling_face_swap', 'AI 换脸', 'kling', NULL, NULL, 10.0, 60, 600, 0.50, 'generation', '替换视频中的人脸'),
-('kling_i2v', '图生视频', 'kling', 100, NULL, NULL, 80, 200, 0.60, 'generation', '将图片转换为动态视频'),
-('kling_t2v', '文生视频', 'kling', 200, NULL, NULL, 150, 400, 1.20, 'generation', '根据文字描述生成视频'),
-('kling_motion', '运动控制', 'kling', 80, NULL, NULL, 60, 180, 0.45, 'generation', '控制视频中物体的运动轨迹'),
-('kling_omni_image', '全能图像', 'kling', 50, NULL, NULL, 40, 120, 0.30, 'generation', 'Kling 全能图像处理')
+-- 预置 AI 模型积分配置（固定计费）
+-- 定价规则 (2026-01-26):
+-- - 基础功能 (voice-extract): 免费
+-- - AI 智能剪辑 (ai-create): 100 积分/次
+-- - Kling AI 功能: 按功能固定收费
+INSERT INTO ai_model_credits (model_key, model_name, provider, credits_per_call, estimated_cost_usd, category, description) VALUES
+-- 基础功能 (免费)
+('whisper_transcribe', '语音转文字', 'openai', 0, 0.006, 'transcription', '将视频/音频中的语音转换为文字'),
+('filler_detection', '填充词检测', 'internal', 0, 0.01, 'analysis', '检测"嗯"、"啊"等填充词'),
+('vad', '语音活动检测', 'internal', 0, 0.005, 'analysis', '检测视频中的静音片段'),
+('stem_separation', '人声分离', 'internal', 0, 0.02, 'enhancement', '分离人声和背景音乐'),
+('diarization', '说话人识别', 'internal', 0, 0.015, 'analysis', '识别视频中的不同说话人'),
+-- 智能功能 (免费)
+('gpt4_analysis', 'AI 智能分析', 'openai', 0, 0.04, 'analysis', '使用 GPT-4 分析视频内容'),
+('smart_clip', '智能剪辑', 'internal', 0, 0.08, 'editing', '一键智能剪辑视频'),
+('smart_camera', '智能运镜', 'internal', 0, 0.05, 'editing', '自动添加镜头运动效果'),
+('smart_clean', '智能清理', 'internal', 0, 0.06, 'editing', '自动去除静音和填充词'),
+-- 图片生成 (免费)
+('dalle3', 'AI 图片生成', 'openai', 0, 0.08, 'generation', 'DALL-E 3 文生图'),
+('sd_generate', 'SD 图片生成', 'internal', 0, 0.04, 'generation', 'Stable Diffusion 文生图'),
+-- AI 智能剪辑会话 (核心收费功能)
+('ai_create', 'AI 智能剪辑', 'internal', 100, 0.50, 'editing', '一键智能剪辑 - 包含转录、智能分析、剪辑建议等全流程'),
+-- Kling AI 功能 (按功能固定收费)
+('kling_lip_sync', 'AI 口型同步', 'kling', 50, 0.40, 'generation', '让视频中的人物口型匹配新音频'),
+('kling_face_swap', 'AI 换脸', 'kling', 60, 0.50, 'generation', '替换视频中的人脸'),
+('kling_i2v', '图生视频', 'kling', 100, 0.60, 'generation', '将图片转换为动态视频'),
+('kling_t2v', '文生视频', 'kling', 200, 1.20, 'generation', '根据文字描述生成视频'),
+('kling_motion', '运动控制', 'kling', 80, 0.45, 'generation', '控制视频中物体的运动轨迹'),
+('kling_omni_image', '全能图像', 'kling', 50, 0.30, 'generation', 'Kling 全能图像处理')
 ON CONFLICT (model_key) DO NOTHING;
 
 -- ============================================================================

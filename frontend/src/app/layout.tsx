@@ -4,6 +4,8 @@ import { AuthGuard } from "@/components/AuthGuard";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import { DevErrorTracker } from "@/components/DevErrorTracker";
+import { ToastContainer } from "@/components/common/Toast";
+import { PricingModal } from "@/components/subscription/PricingModal";
 import Script from "next/script";
 
 export const metadata: Metadata = {
@@ -136,6 +138,8 @@ export default function RootLayout({
         <ErrorBoundary>
           <AuthGuard>{children}</AuthGuard>
         </ErrorBoundary>
+        <ToastContainer />
+        <PricingModal />
         <ServiceWorkerRegister />
         <DevErrorTracker />
       </body>

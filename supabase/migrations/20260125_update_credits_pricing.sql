@@ -32,7 +32,7 @@ WHERE model_key IN (
     'sd_generate'
 );
 
--- 2. 新增 AI 智能剪辑会话收费模型 (一次性收费)
+-- 2. 新增 AI 智能剪辑收费模型 (一次性收费)
 INSERT INTO ai_model_credits (
     model_key, 
     model_name, 
@@ -46,15 +46,15 @@ INSERT INTO ai_model_credits (
     category, 
     description
 ) VALUES (
-    'ai_create_session',
+    'ai_create',
     'AI 智能剪辑',
     'internal',
-    15,          -- 固定 15 积分/次
+    100,         -- 固定 100 积分/次
     NULL,
     NULL,
-    15,
-    15,
-    0.10,
+    100,
+    100,
+    0.50,
     'editing',
     '一键智能剪辑 - 包含转录、智能分析、剪辑建议等全流程'
 )
@@ -82,9 +82,9 @@ ON CONFLICT (model_key) DO UPDATE SET
 COMMENT ON TABLE ai_model_credits IS '
 AI 模型积分定价表
 
-定价规则 (2026-01-25 更新):
+定价规则 (2026-01-26 更新):
 - 提取字幕/音频 (voice-extract): 免费
-- AI 智能剪辑 (ai-create): 15 积分/次 (ai_create_session)
+- AI 智能剪辑 (ai-create): 100 积分/次 (ai_create)
 - Kling AI 功能: 按原定价收费
 
 免费功能: whisper_transcribe, filler_detection, vad, stem_separation, 

@@ -26,9 +26,10 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '@/features/editor/store/auth-store';
 import { SubscriptionStatus } from '@/components/subscription/SubscriptionStatus';
-import { UpgradeModal } from '@/components/subscription/UpgradeModal';
-import { CreditsDisplay } from '@/components/subscription/CreditsDisplay';
+import { pricingModal } from '@/lib/stores/pricing-modal-store';
+import { toast } from '@/lib/stores/toast-store';
 import { useCreditTransactions, useModelPricing, CreditTransaction, ModelPricing } from '@/lib/hooks/useCredits';
+import { useCreditsStore } from '@/lib/stores/credits-store';
 
 // ============================================
 // 类型定义
@@ -52,7 +53,6 @@ interface TabItem {
 
 const TABS: TabItem[] = [
   { id: 'profile', label: '个人资料', icon: <User className="w-4 h-4" /> },
-  { id: 'credits', label: '积分明细', icon: <Gem className="w-4 h-4" /> },
   { id: 'subscription', label: '订阅与配额', icon: <CreditCard className="w-4 h-4" /> },
   { id: 'notifications', label: '通知设置', icon: <Bell className="w-4 h-4" /> },
   { id: 'security', label: '安全设置', icon: <Shield className="w-4 h-4" /> },
@@ -316,39 +316,17 @@ function ProfileTab({ profile, email, onChange, onSave, saving, saved, accessTok
 
 interface SubscriptionTabProps {
   onUpgradeClick: () => void;
+  refreshTrigger?: number;
 }
 
-function SubscriptionTab({ onUpgradeClick }: SubscriptionTabProps) {
-  return (
-    <div className="space-y-6">
-      {/* 当前订阅状态 */}
-      <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">当前订阅</h3>
-        <SubscriptionStatus onUpgradeClick={onUpgradeClick} />
-      </div>
-
-      {/* 积分余额 */}
-      <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">积分余额</h3>
-        <CreditsDisplay />
-      </div>
-
-      {/* 使用历史 */}
-      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">使用统计</h3>
-        <p className="text-gray-500 text-sm">使用统计功能即将上线...</p>
-      </div>
-    </div>
-  );
-}
-
-// ============================================
-// 积分明细 Tab
-// ============================================
-
-function CreditsTab() {
-  const { transactions, total, loading, hasMore, loadMore, refetch } = useCreditTransactions(30);
+function SubscriptionTab({ onUpgradeClick, refreshTrigger = 0 }: SubscriptionTabProps) {
+  const { transactions, loading: txLoading, hasMore, loadMore, refetch } = useCreditTransactions(30);
   const { pricing, loading: pricingLoading } = useModelPricing();
+  const { credits, initCredits } = useCreditsStore();
+
+  useEffect(() => {
+    initCredits();
+  }, [initCredits]);
 
   // 获取交易类型图标和颜色
   const getTransactionStyle = (type: string) => {
@@ -398,10 +376,13 @@ function CreditsTab() {
 
   return (
     <div className="space-y-6">
-      {/* 积分概览 */}
-      <CreditsDisplay />
+      {/* 当前订阅状态（已整合积分余额） */}
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">当前订阅</h3>
+        <SubscriptionStatus onUpgradeClick={onUpgradeClick} showManagement={true} refreshTrigger={refreshTrigger} />
+      </div>
 
-      {/* 交易记录 */}
+      {/* 积分明细 */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-gray-900">积分明细</h3>
@@ -410,11 +391,11 @@ function CreditsTab() {
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             title="刷新"
           >
-            <RefreshCw className={`w-4 h-4 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 text-gray-500 ${txLoading ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
-        {loading && transactions.length === 0 ? (
+        {txLoading && transactions.length === 0 ? (
           <div className="py-12 flex justify-center">
             <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />
           </div>
@@ -465,18 +446,18 @@ function CreditsTab() {
             {hasMore && (
               <button
                 onClick={loadMore}
-                disabled={loading}
+                disabled={txLoading}
                 className="w-full py-3 text-sm text-gray-500 hover:text-gray-900 hover:bg-gray-50 
                            rounded-lg transition-colors"
               >
-                {loading ? '加载中...' : '加载更多'}
+                {txLoading ? '加载中...' : '加载更多'}
               </button>
             )}
           </div>
         )}
       </div>
 
-      {/* 积分定价表 */}
+      {/* 功能消耗参考 */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">功能消耗参考</h3>
         
@@ -487,7 +468,6 @@ function CreditsTab() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {pricing.slice(0, 8).map((item) => {
-              // 判断是否免费
               const isFree = item.credits_rate === 0 && (!item.min_credits || item.min_credits === 0);
               
               return (
@@ -675,6 +655,7 @@ function SecurityTab() {
 export default function SettingsPage() {
   const router = useRouter();
   const { user, accessToken, isAuthenticated, isLoading } = useAuthStore();
+  const { refetchCredits } = useCreditsStore();
   
   const [activeTab, setActiveTab] = useState('profile');
   const [profile, setProfile] = useState<UserProfile>({
@@ -684,7 +665,13 @@ export default function SettingsPage() {
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [subscriptionRefreshTrigger, setSubscriptionRefreshTrigger] = useState(0);
+
+  // 订阅成功后刷新积分和订阅状态
+  const handleSubscriptionSuccess = () => {
+    refetchCredits();
+    setSubscriptionRefreshTrigger(prev => prev + 1);
+  };
 
   // 权限检查
   useEffect(() => {
@@ -735,7 +722,7 @@ export default function SettingsPage() {
       setTimeout(() => setSaved(false), 3000);
     } catch (error) {
       console.error('Save profile failed:', error);
-      alert('保存失败，请重试');
+      toast.error('保存失败，请重试');
     } finally {
       setSaving(false);
     }
@@ -808,10 +795,11 @@ export default function SettingsPage() {
               />
             )}
 
-            {activeTab === 'credits' && <CreditsTab />}
-
             {activeTab === 'subscription' && (
-              <SubscriptionTab onUpgradeClick={() => setShowUpgradeModal(true)} />
+              <SubscriptionTab 
+                onUpgradeClick={() => pricingModal.open({ triggerReason: 'upgrade', onSuccess: handleSubscriptionSuccess })} 
+                refreshTrigger={subscriptionRefreshTrigger}
+              />
             )}
 
             {activeTab === 'notifications' && <NotificationsTab />}
@@ -820,13 +808,6 @@ export default function SettingsPage() {
           </main>
         </div>
       </div>
-
-      {/* 升级弹窗 */}
-      <UpgradeModal
-        isOpen={showUpgradeModal}
-        onClose={() => setShowUpgradeModal(false)}
-        triggerReason="manual"
-      />
     </div>
   );
 }

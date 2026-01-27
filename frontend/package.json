@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.32",
     "@supabase/supabase-js": "^2.89.0",
     "clsx": "^2.1.1",
     "heic2any": "^0.0.4",

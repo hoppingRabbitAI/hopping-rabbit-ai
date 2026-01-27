@@ -20,6 +20,7 @@ import { getVideoDuration } from '../lib/media-cache';
 import { uploadVideo, assetApi } from '@/lib/api/assets';
 import type { Clip } from '../types/clip';
 import type { Asset } from '../types/asset';
+import { toast } from '@/lib/stores/toast-store';
 
 // 调试日志
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
@@ -473,8 +474,10 @@ export function ClipListPanel() {
         const file = files[i];
         setProcessingStep(`正在上传 (${i + 1}/${totalFiles}): ${file.name}`);
 
-        const durationMs = await getVideoDuration(file);
-        debugLog(`文件 ${i + 1} 时长:`, durationMs, 'ms');
+        // 图片不需要提取时长
+        const isImage = file.type.startsWith('image/');
+        const durationMs = isImage ? undefined : await getVideoDuration(file);
+        debugLog(`文件 ${i + 1} 时长:`, durationMs, 'ms', '类型:', file.type);
 
         const result = await uploadVideo(
           file,
@@ -575,7 +578,7 @@ export function ClipListPanel() {
 
     } catch (err) {
       console.error('[AddOutro] 添加素材失败:', err);
-      alert('添加素材失败: ' + (err instanceof Error ? err.message : '未知错误'));
+      toast.error('添加素材失败: ' + (err instanceof Error ? err.message : '未知错误'));
     } finally {
       setIsAddingOutro(false);
       setOutroUploadProgress(0);
@@ -595,10 +598,18 @@ export function ClipListPanel() {
     // ★ 清除选中状态，避免弹窗和属性面板同时显示
     setSelectedClipId(null);
 
-    // 暂存文件，显示选项弹窗
-    setPendingFiles(files);
-    setShowAddOptionsDialog(true);
-  }, [setSelectedClipId]);
+    // 检查是否全部是图片
+    const allImages = files.every(f => f.type.startsWith('image/'));
+    
+    if (allImages) {
+      // 图片直接上传，不需要 ASR 处理
+      await handleAddOutroMultiple(files, { enableAsr: false, enableSmartCamera: false });
+    } else {
+      // 视频/混合素材显示选项弹窗
+      setPendingFiles(files);
+      setShowAddOptionsDialog(true);
+    }
+  }, [setSelectedClipId, handleAddOutroMultiple]);
 
   // 确认添加素材选项后，开始处理
   // ★ 调用时传入当前选项值，确保使用最新状态
@@ -834,7 +845,7 @@ export function ClipListPanel() {
         <input
           ref={outroFileInputRef}
           type="file"
-          accept="video/*,.mp4,.mov,.webm,.avi,.mkv"
+          accept="video/*,image/*,.mp4,.mov,.webm,.avi,.mkv,.jpg,.jpeg,.png,.gif,.webp"
           multiple
           className="hidden"
           onChange={handleOutroFileSelect}

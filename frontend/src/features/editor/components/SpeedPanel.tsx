@@ -202,20 +202,16 @@ export function SpeedPanel({ onClose }: SpeedPanelProps) {
   return (
     <div className="w-full h-full bg-white rounded-xl shadow-sm flex flex-col overflow-hidden">
       {/* 头部 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 flex-shrink-0">
         <div className="flex items-center gap-2">
-          <Gauge size={18} className="text-orange-600" />
-          <span className="text-sm font-medium text-gray-900">视频变速</span>
+          <h3 className="text-sm font-semibold text-gray-900">视频变速</h3>
           {selectedCount > 1 && (
-            <span className="px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-600 rounded">
+            <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded">
               已选 {selectedCount} 个
             </span>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        >
+        <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-900 rounded transition-colors">
           <X size={16} />
         </button>
       </div>
@@ -244,12 +240,7 @@ export function SpeedPanel({ onClose }: SpeedPanelProps) {
 
             {/* 变速区块 */}
             <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded bg-orange-100 flex items-center justify-center">
-                  <div className="w-2 h-2 rounded-full bg-orange-500" />
-                </div>
-                <span className="text-xs text-gray-600 font-medium">速度控制</span>
-              </div>
+              <span className="text-xs font-medium text-gray-500">速度控制</span>
 
               {/* 倍数滑块 */}
               <div>
@@ -281,7 +272,7 @@ export function SpeedPanel({ onClose }: SpeedPanelProps) {
                     {/* 自定义滑块轨道 */}
                     <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-gray-200 rounded-full pointer-events-none">
                       <div
-                        className="h-full bg-orange-500 rounded-full"
+                        className="h-full bg-gray-600 rounded-full"
                         style={{
                           width: `${((currentSpeed - 0.25) / (4 - 0.25)) * 100}%`,
                         }}
@@ -325,9 +316,7 @@ export function SpeedPanel({ onClose }: SpeedPanelProps) {
                   </div>
                   <div className="flex items-center justify-between text-xs mt-1">
                     <span className="text-gray-500">变速后时长</span>
-                    <span className={`font-mono font-medium ${
-                      currentSpeed > 1 ? 'text-green-600' : currentSpeed < 1 ? 'text-orange-600' : 'text-gray-700'
-                    }`}>
+                    <span className="font-mono font-medium text-gray-700">
                       {(durationChange.current / 1000).toFixed(2)}s
                     </span>
                   </div>
@@ -344,12 +333,12 @@ export function SpeedPanel({ onClose }: SpeedPanelProps) {
                 <div className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-lg">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-gray-600">智能补帧</span>
-                    <span className="text-[10px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">Pro</span>
+                    <span className="text-[10px] text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded">Pro</span>
                   </div>
                   <button
                     onClick={toggleSmartInterpolation}
                     className={`w-10 h-5 rounded-full transition-colors relative ${
-                      smartInterpolation ? 'bg-orange-500' : 'bg-gray-300'
+                      smartInterpolation ? 'bg-gray-700' : 'bg-gray-300'
                     }`}
                   >
                     <div
@@ -375,7 +364,7 @@ export function SpeedPanel({ onClose }: SpeedPanelProps) {
                     onClick={() => updateSpeed(preset)}
                     className={`py-2 text-xs rounded-lg transition-colors ${
                       Math.abs(currentSpeed - preset) < 0.01
-                        ? 'bg-orange-500 text-white'
+                        ? 'bg-gray-700 text-white'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                     }`}
                   >

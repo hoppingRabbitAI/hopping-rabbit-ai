@@ -507,3 +507,81 @@ async def callback_health():
         "service": "kling_callback",
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+# ============================================
+# Stripe Webhook 处理
+# ============================================
+
+@router.post("/stripe", summary="Stripe Webhook")
+async def stripe_webhook(request: Request):
+    """
+    处理 Stripe 支付事件回调
+    
+    主要处理:
+    - checkout.session.completed: 支付成功，发放积分
+    """
+    import stripe
+    from app.config import get_settings
+    
+    settings = get_settings()
+    stripe.api_key = settings.stripe_secret_key
+    
+    # 获取原始请求体
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    
+    # 验证 webhook 签名
+    try:
+        if settings.stripe_webhook_secret:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, settings.stripe_webhook_secret
+            )
+        else:
+            # 开发模式：不验证签名
+            import json
+            event = stripe.Event.construct_from(
+                json.loads(payload), stripe.api_key
+            )
+    except ValueError as e:
+        logger.error(f"[Stripe] Invalid payload: {e}")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError as e:
+        logger.error(f"[Stripe] Invalid signature: {e}")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    # 处理事件
+    event_type = event.get("type")
+    logger.info(f"[Stripe] Received event: {event_type}")
+    
+    if event_type == "checkout.session.completed":
+        session = event["data"]["object"]
+        
+        # 检查是否是积分充值
+        metadata = session.get("metadata", {})
+        if metadata.get("type") == "credits_topup":
+            user_id = metadata.get("user_id")
+            credits_amount = int(metadata.get("credits_amount", 0))
+            bonus_credits = int(metadata.get("bonus_credits", 0))
+            total_credits = credits_amount + bonus_credits
+            
+            if user_id and total_credits > 0:
+                try:
+                    from app.services.credit_service import get_credit_service
+                    credit_service = get_credit_service()
+                    
+                    await credit_service.grant_credits(
+                        user_id=user_id,
+                        credits=total_credits,
+                        transaction_type="purchase",
+                        description=f"Stripe 充值 {credits_amount} 积分" + (f" (赠送 {bonus_credits})" if bonus_credits > 0 else ""),
+                        reference_id=session.get("id"),
+                    )
+                    
+                    logger.info(f"[Stripe] ✅ 用户 {user_id} 充值成功: {total_credits} 积分 (session={session.get('id')})")
+                    
+                except Exception as e:
+                    logger.error(f"[Stripe] ❌ 发放积分失败: {e}")
+                    # 不要返回错误，避免 Stripe 重试
+    
+    return {"received": True}

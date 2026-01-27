@@ -16,6 +16,7 @@ import {
   Move,
   Gauge,
   X,
+  Smile,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { TransformPanel } from './TransformPanel';
@@ -23,6 +24,7 @@ import { TextStylePanel } from './TextStylePanel';
 import { AudioPanel } from './AudioPanel';
 import { AIToolsPanel } from './AIToolsPanel';
 import { SpeedPanel } from './SpeedPanel';
+import { BeautyPanel } from './BeautyPanel';
 import { CLIP_TYPE_COLORS, createDefaultClip } from '../types/clip';
 import { DEFAULT_TEXT_STYLE } from '../types/text';
 
@@ -36,6 +38,7 @@ interface Tool {
 
 const TOOLS: Tool[] = [
   { id: 'ai-tools', name: 'AI tools', icon: <Sparkles size={22} />, description: '智能剪辑助手' },
+  { id: 'beauty', name: 'Beauty', icon: <Smile size={22} />, description: '美颜美体' },
   { id: 'transform', name: 'Transform', icon: <Move size={22} />, description: '变换与动画（支持关键帧）' },
   { id: 'text', name: 'Text', icon: <Type size={22} />, description: '添加文字' },
   { id: 'subtitles', name: 'Subtitles', icon: <Subtitles size={22} />, description: '编辑字幕样式' },
@@ -164,6 +167,12 @@ export function ToolsSidebar({ onToolClick, onUploadClick }: ToolsSidebarProps) 
       return;
     }
 
+    // Beauty 美颜美体
+    if (tool.id === 'beauty') {
+      setActiveSidebarPanel(activeSidebarPanel === 'beauty' ? null : 'beauty');
+      return;
+    }
+
     if (tool.id === 'transform') {
       setActiveSidebarPanel(activeSidebarPanel === 'transform' ? null : 'transform');
       return;
@@ -239,6 +248,11 @@ export function ToolsSidebar({ onToolClick, onUploadClick }: ToolsSidebarProps) 
       {/* AI 工具面板 */}
       {activeSidebarPanel === 'ai-tools' && selectedVideoClips.length > 0 && (
         <AIToolsPanel onClose={closePanel} clipIds={selectedVideoClips.map(c => c.id)} />
+      )}
+
+      {/* 美颜美体面板 */}
+      {activeSidebarPanel === 'beauty' && (
+        <BeautyPanel onClose={closePanel} />
       )}
 
       {/* 工具列表 */}

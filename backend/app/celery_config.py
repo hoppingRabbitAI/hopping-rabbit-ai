@@ -45,6 +45,7 @@ celery_app = Celery(
         "app.tasks.image_generation",      # AI 图像生成
         "app.tasks.omni_image",            # AI Omni-Image (O1)
         "app.tasks.face_swap",             # AI 换脸
+        "app.tasks.broll_download",        # B-roll 下载
     ]
 )
 

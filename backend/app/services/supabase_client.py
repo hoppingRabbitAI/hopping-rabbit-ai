@@ -157,6 +157,66 @@ def get_file_url(bucket: str, path: str, expires_in: int = SIGNED_URL_EXPIRES_SE
     return public_url.rstrip('?')
 
 
+def create_signed_upload_url(bucket: str, path: str, upsert: bool = True) -> dict:
+    """
+    创建签名上传 URL，支持 upsert 参数
+    
+    Args:
+        bucket: 存储桶名称
+        path: 文件路径
+        upsert: 是否允许覆盖已存在的文件（默认 True，避免重试失败）
+        
+    Returns:
+        { "signed_url": "...", "token": "...", "path": "..." }
+    """
+    import httpx
+    
+    try:
+        # 直接调用 Supabase Storage REST API
+        base_url = settings.supabase_url
+        api_key = settings.supabase_service_key or settings.supabase_anon_key
+        
+        # POST /storage/v1/object/upload/sign/{bucket}/{path}
+        url = f"{base_url}/storage/v1/object/upload/sign/{bucket}/{path}"
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "apikey": api_key,
+            "x-upsert": "true" if upsert else "false",  # ★ 正确的方式：使用 x-upsert header
+        }
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            # 构建完整的签名 URL
+            signed_url = f"{base_url}/storage/v1{data['url']}"
+            
+            # 解析 token
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(signed_url)
+            query_params = parse_qs(parsed.query)
+            token = query_params.get("token", [""])[0]
+            
+            return {
+                "signed_url": signed_url,
+                "signedURL": signed_url,  # 兼容旧字段
+                "token": token,
+                "path": path,
+            }
+    except Exception as e:
+        logger.error(f"创建签名上传 URL 失败: {e}")
+        # 回退到 SDK 方法（不支持 upsert）
+        result = supabase.storage.from_(bucket).create_signed_upload_url(path)
+        return {
+            "signed_url": result.get("signedURL") or result.get("signed_url", ""),
+            "signedURL": result.get("signedURL") or result.get("signed_url", ""),
+            "token": result.get("token", ""),
+            "path": path,
+        }
+
+
 def get_file_urls_batch(bucket: str, paths: List[str], expires_in: int = SIGNED_URL_EXPIRES_SECONDS) -> Dict[str, str]:
     """
     批量获取文件的签名 URL（高效）

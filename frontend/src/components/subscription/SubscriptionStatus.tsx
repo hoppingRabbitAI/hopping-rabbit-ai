@@ -14,9 +14,13 @@ import {
   RefreshCw,
   Check,
   Crown,
-  Rocket
+  Rocket,
+  Settings,
+  AlertCircle
 } from 'lucide-react';
 import { getSessionSafe } from '@/lib/supabase';
+import { SubscriptionManagement } from './SubscriptionManagement';
+import { useCreditsStore } from '@/lib/stores/credits-store';
 
 // ============================================
 // 类型定义
@@ -43,7 +47,6 @@ interface SubscriptionPlan {
   name: string;
   description: string;
   price_monthly: number;
-  price_yearly: number;
   credits_per_month: number;
   bonus_credits: number;
   features: PlanFeatures;
@@ -57,6 +60,8 @@ interface UserSubscription {
   billing_cycle: string;
   current_period_start: string;
   current_period_end: string;
+  auto_renew: boolean;
+  canceled_at?: string;
   plan: SubscriptionPlan;
   is_free?: boolean;
 }
@@ -65,6 +70,8 @@ interface SubscriptionStatusProps {
   onUpgradeClick?: () => void;
   compact?: boolean;
   className?: string;
+  showManagement?: boolean;  // 是否显示管理按钮
+  refreshTrigger?: number;   // 外部刷新触发器，变化时重新获取数据
 }
 
 // ============================================
@@ -182,10 +189,15 @@ function QuotaItem({ icon, label, used, total, format, colorClass }: QuotaItemPr
 // 主组件 (白灰风格，与 workspace 统一)
 // ============================================
 
-export function SubscriptionStatus({ onUpgradeClick, compact = false, className = '' }: SubscriptionStatusProps) {
+export function SubscriptionStatus({ onUpgradeClick, compact = false, className = '', showManagement = false, refreshTrigger = 0 }: SubscriptionStatusProps) {
   const [subscription, setSubscription] = useState<UserSubscription | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ message: string; code?: string; action?: string } | null>(null);
+  const [showManagementModal, setShowManagementModal] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  
+  // 使用全局积分 store - 用于跨组件同步和独立刷新
+  const { credits, setCredits } = useCreditsStore();
 
   const fetchSubscription = async () => {
     try {
@@ -200,7 +212,10 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
         });
         return;
       }
+      
+      setAccessToken(session.access_token);
 
+      // 只调用一个接口，同时获取订阅信息和积分信息
       const response = await fetch('/api/subscriptions/current', {
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -230,6 +245,17 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
       }
       
       setSubscription(sub);
+      
+      // 从同一接口更新积分 store (如果 API 返回了积分信息)
+      if (data.credits) {
+        // ★ 简化: 只设置必要字段
+        setCredits({
+          credits_balance: data.credits.balance,
+          credits_total_granted: data.credits.total_granted,
+          credits_total_consumed: data.credits.total_consumed,
+          tier: sub.plan.slug,
+        });
+      }
     } catch (err: unknown) {
       const errorObj = err as { message?: string; code?: string; action?: string };
       setError({
@@ -243,9 +269,17 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
     }
   };
 
+  // 初始加载 - 只调用一个接口
   useEffect(() => {
     fetchSubscription();
   }, []);
+
+  // 监听外部刷新触发器
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      fetchSubscription(); // 这个接口已包含积分信息
+    }
+  }, [refreshTrigger]);
 
   // 加载状态 (白灰风格)
   if (loading) {
@@ -291,6 +325,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
   const plan = subscription.plan;
   const features = plan.features;
   const isFree = subscription.is_free || plan.slug === 'free';
+  const isCanceled = subscription.canceled_at && subscription.status === 'active';
 
   // 紧凑模式 (白灰风格)
   if (compact) {
@@ -302,6 +337,11 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
             <span className={`px-2 py-0.5 text-xs font-medium rounded ${getTierBadgeStyle(plan.slug)}`}>
               {plan.name}
             </span>
+            {isCanceled && (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">
+                已取消续期
+              </span>
+            )}
           </div>
           {isFree && onUpgradeClick && (
             <button
@@ -323,46 +363,117 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
 
   // 完整模式 (白灰风格)
   return (
-    <div className={`bg-white border border-gray-200 rounded-xl p-5 shadow-sm ${className}`}>
-      {/* 头部 - 当前套餐 */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          {getTierIcon(plan.slug)}
-          <span className={`px-2 py-0.5 text-xs font-medium rounded ${getTierBadgeStyle(plan.slug)}`}>
-            {plan.name}
-          </span>
-          <span className="text-gray-600 text-sm">当前套餐</span>
-        </div>
-        {isFree ? (
-          onUpgradeClick && (
-            <button
-              onClick={onUpgradeClick}
-              className="flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-purple-600 to-pink-600 
-                         text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
-            >
-              升级 Pro
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          )
-        ) : (
-          !subscription.is_free && subscription.current_period_end && (
-            <span className="text-xs text-gray-500">
-              到期: {new Date(subscription.current_period_end).toLocaleDateString('zh-CN')}
+    <>
+      <div className={`bg-white border border-gray-200 rounded-xl p-5 shadow-sm ${className}`}>
+        {/* 头部 - 当前套餐 */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            {getTierIcon(plan.slug)}
+            <span className={`px-2 py-0.5 text-xs font-medium rounded ${getTierBadgeStyle(plan.slug)}`}>
+              {plan.name}
             </span>
-          )
+            <span className="text-gray-600 text-sm">当前套餐</span>
+            {isCanceled && (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 flex items-center gap-1">
+                <AlertCircle className="w-3 h-3" />
+                已取消续期
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isFree ? (
+              onUpgradeClick && (
+                <button
+                  onClick={onUpgradeClick}
+                  className="flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-purple-600 to-pink-600 
+                             text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                >
+                  升级 Pro
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              )
+            ) : (
+              <>
+                {subscription.current_period_end && (
+                  <span className="text-xs text-gray-500">
+                    到期: {new Date(subscription.current_period_end).toLocaleDateString('zh-CN')}
+                  </span>
+                )}
+              </>
+            )}
+            {/* 管理按钮 */}
+            {showManagement && (
+              <button
+                onClick={() => setShowManagementModal(true)}
+                className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                title="订阅管理"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 取消续期提示 */}
+        {isCanceled && subscription.current_period_end && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-amber-700 text-sm">
+              您已取消自动续期，订阅将于 {new Date(subscription.current_period_end).toLocaleDateString('zh-CN')} 到期。
+              到期后将降级为免费用户。
+            </p>
+            {showManagement && (
+              <button
+                onClick={() => setShowManagementModal(true)}
+                className="mt-2 text-amber-700 text-sm font-medium hover:text-amber-800"
+              >
+                恢复订阅 →
+              </button>
+            )}
+          </div>
         )}
-      </div>
 
-      {/* 配额列表 */}
-      <div className="space-y-4">
-        <QuotaItem
-          icon={<Gem className="w-4 h-4 text-purple-500" />}
-          label="月度积分"
-          used={0}
-          total={plan.credits_per_month}
-          colorClass="bg-purple-500"
-        />
+        {/* 积分余额 - 整合显示 */}
+        <div className="mb-4 p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-100">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Gem className="w-5 h-5 text-purple-500" />
+              <span className="font-medium text-gray-900">积分余额</span>
+            </div>
+            <div className="text-right">
+              <span className="text-2xl font-bold text-purple-600">
+                {credits?.credits_balance?.toLocaleString() || 0}
+              </span>
+              <span className="text-gray-500 ml-1">积分</span>
+            </div>
+          </div>
+          
+          {/* 进度条：显示已消耗占比 */}
+          {credits && (credits.credits_total_granted ?? 0) > 0 && (
+            <div className="mt-3">
+              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <span>已消耗 {(credits.credits_total_consumed ?? 0).toLocaleString()}</span>
+                <span>累计获得 {(credits.credits_total_granted ?? 0).toLocaleString()}</span>
+              </div>
+              <div className="h-2 bg-white rounded-full overflow-hidden shadow-inner">
+                <div
+                  className="h-full bg-gradient-to-r from-purple-400 to-purple-600 rounded-full transition-all duration-500"
+                  style={{ 
+                    width: `${Math.max(5, (credits.credits_balance / (credits.credits_total_granted ?? 1)) * 100)}%` 
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          
+          {/* 订阅权益说明 */}
+          <div className="mt-3 pt-3 border-t border-purple-100 flex items-center justify-between text-sm">
+            <span className="text-gray-600">订阅权益</span>
+            <span className="text-purple-600 font-medium">+{plan.credits_per_month} 积分/月</span>
+          </div>
+        </div>
 
+        {/* 配额列表 */}
+        <div className="space-y-4">
         <QuotaItem
           icon={<Sparkles className="w-4 h-4 text-yellow-500" />}
           label="免费 AI 智能剪辑"
@@ -460,7 +571,51 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
           </span>
         </div>
       )}
+
+      {/* 管理订阅按钮 (底部) */}
+      {showManagement && !isFree && (
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <button
+            onClick={() => setShowManagementModal(true)}
+            className="w-full py-2 px-4 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 
+                     rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            <Settings className="w-4 h-4" />
+            管理订阅
+          </button>
+        </div>
+      )}
     </div>
+
+    {/* 订阅管理弹窗 */}
+    {showManagementModal && accessToken && (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="max-w-md w-full">
+          <SubscriptionManagement
+            subscription={{
+              id: subscription.id || '',
+              status: subscription.status || 'active',
+              is_free: isFree,
+              billing_cycle: subscription.billing_cycle || 'monthly',
+              current_period_start: subscription.current_period_start,
+              current_period_end: subscription.current_period_end,
+              auto_renew: subscription.auto_renew ?? true,
+              canceled_at: subscription.canceled_at,
+              plan: {
+                slug: plan.slug,
+                name: plan.name,
+                credits_per_month: plan.credits_per_month,
+                features: features,
+              },
+            }}
+            accessToken={accessToken}
+            onUpdate={fetchSubscription}
+            onClose={() => setShowManagementModal(false)}
+          />
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

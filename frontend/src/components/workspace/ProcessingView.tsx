@@ -135,8 +135,9 @@ export function ProcessingView({
 
   // 先执行文件上传（如果需要）
   useEffect(() => {
-    // 防止重复执行
+    // 防止重复执行 - 立即设置标记
     if (uploadStartedRef.current) return;
+    uploadStartedRef.current = true;
 
     const doUpload = async () => {
       // ★ 记录上传开始时间
@@ -150,7 +151,6 @@ export function ProcessingView({
       // === 文件上传模式（统一用 assets 数组）===
       if (sessionData.files && sessionData.files.length > 0 && sessionData.assets && sessionData.assets.length > 0) {
         debugLog('📤 进入文件上传模式, 文件数:', sessionData.files.length);
-        uploadStartedRef.current = true;
         setUploadPhase('uploading');
         setCurrentStep('upload');
 
@@ -205,7 +205,6 @@ export function ProcessingView({
       }
 
       // === 链接模式：无需上传 ===
-      uploadStartedRef.current = true;
       setUploadPhase('done');
       setProgress(40);
     };
@@ -268,6 +267,11 @@ export function ProcessingView({
           // ★ 错误时也输出时间统计
           logTimingStats(timingRef.current, '处理失败');
           setError(err.message);
+        },
+        onCancel: () => {
+          // ★ 用户取消时直接返回，不显示错误
+          debugLog('🛑 后端确认会话已取消，返回主页');
+          onCancel();
         },
       },
       1500 // 每 1.5 秒轮询一次
@@ -340,12 +344,14 @@ export function ProcessingView({
     setIsCancelling(true);
     try {
       await cancelSession(sessionData.sessionId);
-      onCancel();
     } catch (err) {
-      debugError('取消失败:', err);
-      setError('取消失败，请重试');
+      // ★ 取消 API 失败也不阻止用户返回（治本）
+      // 后端可能已经完成处理或会话不存在
+      debugLog('取消 API 调用失败，但仍然返回主页:', err);
     } finally {
       setIsCancelling(false);
+      // ★ 无论取消 API 是否成功，都返回主页面
+      onCancel();
     }
   };
 

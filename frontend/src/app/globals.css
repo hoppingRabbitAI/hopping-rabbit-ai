@@ -85,15 +85,8 @@ body {
   @apply absolute rounded-sm border border-white/20 flex items-center shadow-md overflow-hidden select-none;
   /* 注意：移除 transform transition，避免拉伸时产生放大效果 */
   transition: opacity 0.1s, box-shadow 0.1s;
-  /* 高度通过 inline style 动态设置，视频clip更高 */
-}
-
-.track-clip.video-clip {
-  height: 68px; /* 视频轨道clip高度 (轨道72px - 4px边距) */
-}
-
-.track-clip:not(.video-clip) {
-  height: 44px; /* 其他clip高度 (轨道48px - 4px边距) */
+  /* 统一高度：轨道高度32px - 4px边距 = 28px */
+  height: 28px;
 }
 
 .track-clip.selected {
@@ -163,36 +156,92 @@ body {
   animation: shimmer 1.5s infinite;
 }
 
-/* ==================== 图片调节滑块样式 ==================== */
+/* ==================== 统一滑块样式 ==================== */
+/* 默认滑块样式 - 灰色系 */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #e5e7eb;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4b5563;
+  border: 2px solid white;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  margin-top: -4px;
+  transition: all 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: #374151;
+  transform: scale(1.1);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #e5e7eb;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4b5563;
+  border: 2px solid white;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: all 0.15s ease;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  background: #374151;
+  transform: scale(1.1);
+}
+
+/* 旧的 slider-thumb 类保留兼容 */
 .slider-thumb::-webkit-slider-thumb {
   appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: white;
-  border: 2px solid #3b82f6;
+  background: #4b5563;
+  border: 2px solid white;
   cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: all 0.15s ease;
 }
 
 .slider-thumb::-webkit-slider-thumb:hover {
+  background: #374151;
   transform: scale(1.1);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
 }
 
 .slider-thumb::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: white;
-  border: 2px solid #3b82f6;
+  background: #4b5563;
+  border: 2px solid white;
   cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: all 0.15s ease;
 }
 
 .slider-thumb::-moz-range-thumb:hover {
+  background: #374151;
   transform: scale(1.1);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
 }

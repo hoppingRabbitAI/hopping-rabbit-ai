@@ -220,21 +220,74 @@ export function ImageOverlay({
       const hasMultiSelect = dragState.selectedClipsTransforms && dragState.selectedClipsTransforms.size > 1;
 
       if (dragState.handle === 'move') {
-        // 移动整体 - 支持批量移动 + 吸附到中心线
+        // 移动整体 - 支持批量移动 + 吸附到中心线和边缘
         let newX = dragState.startTransformX + deltaX;
         let newY = dragState.startTransformY + deltaY;
         
         let snappedCenterX = false;
         let snappedCenterY = false;
         
-        // 自动吸附到中心线
+        // 获取图片实际尺寸（考虑 scale）
+        const imgClip = clips.find(c => c.id === dragState.clipId);
+        const imgScale = imgClip?.transform?.scale || 1;
+        // 使用默认尺寸，因为 Clip 类型没有 width/height 属性
+        const imgWidth = 200 * imgScale; // 默认宽度
+        const imgHeight = 200 * imgScale; // 默认高度
+        const imgHalfW = imgWidth / 2;
+        const imgHalfH = imgHeight / 2;
+        
+        // 画布边界（中心坐标系）
+        const canvasHalfW = containerWidth / 2;
+        const canvasHalfH = containerHeight / 2;
+        
+        // 图片边缘位置
+        const imgLeft = newX - imgHalfW;
+        const imgRight = newX + imgHalfW;
+        const imgTop = newY - imgHalfH;
+        const imgBottom = newY + imgHalfH;
+        
+        // ★ X 方向吸附（优先级：中心 > 边缘对齐 > 边缘贴中心）
         if (Math.abs(newX) < SNAP_THRESHOLD) {
           newX = 0;
           snappedCenterX = true;
         }
+        // 左边缘对齐画布左边缘
+        else if (Math.abs(imgLeft - (-canvasHalfW)) < SNAP_THRESHOLD) {
+          newX = -canvasHalfW + imgHalfW;
+        }
+        // 右边缘对齐画布右边缘
+        else if (Math.abs(imgRight - canvasHalfW) < SNAP_THRESHOLD) {
+          newX = canvasHalfW - imgHalfW;
+        }
+        // 左边缘贴画布中心
+        else if (Math.abs(imgLeft) < SNAP_THRESHOLD) {
+          newX = imgHalfW;
+        }
+        // 右边缘贴画布中心
+        else if (Math.abs(imgRight) < SNAP_THRESHOLD) {
+          newX = -imgHalfW;
+        }
+        
+        // ★ Y 方向吸附
         if (Math.abs(newY) < SNAP_THRESHOLD) {
           newY = 0;
           snappedCenterY = true;
+        }
+        // 上边缘对齐画布上边缘
+        else if (Math.abs(imgTop - (-canvasHalfH)) < SNAP_THRESHOLD) {
+          newY = -canvasHalfH + imgHalfH;
+        }
+        // 下边缘对齐画布下边缘
+        else if (Math.abs(imgBottom - canvasHalfH) < SNAP_THRESHOLD) {
+          newY = canvasHalfH - imgHalfH;
+        }
+        // 上边缘贴画布中心
+        else if (Math.abs(imgTop) < SNAP_THRESHOLD) {
+          newY = imgHalfH;
+        }
+        // 下边缘贴画布中心
+        else if (Math.abs(imgBottom) < SNAP_THRESHOLD) {
+          newY = -imgHalfH;
         }
         
         setSnapState({ centerX: snappedCenterX, centerY: snappedCenterY });

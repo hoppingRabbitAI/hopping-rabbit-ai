@@ -13,43 +13,27 @@ import {
   Loader2 
 } from 'lucide-react';
 import { getSessionSafe } from '@/lib/supabase';
+import { toast } from '@/lib/stores/toast-store';
+import { 
+  useSubscriptionPlans, 
+  transformPlansToDisplayPlans,
+  DisplayPlan,
+  DisplayPlanFeature,
+  DisplayUnlimitedFeature
+} from '@/lib/hooks/useSubscriptionPlans';
 
 // ============================================
-// 类型定义 (与 pricing 页面完全一致)
+// 图标渲染器
 // ============================================
 
-interface PlanFeature {
-  text: string;
-  included: boolean;
-  badge?: string;
-  badgeColor?: 'green' | 'yellow' | 'pink';
-}
-
-interface UnlimitedFeature {
-  name: string;
-  badge?: string;
-  badgeColor?: 'green' | 'yellow' | 'pink';
-  included: boolean;
-}
-
-interface PricingPlan {
-  name: string;
-  slug: string;
-  description: string;
-  priceMonthly: number;
-  priceYearly: number;
-  originalMonthly?: number;
-  creditsPerMonth: number;
-  bonusText?: string;
-  icon: React.ReactNode;
-  features: PlanFeature[];
-  unlimitedAccess: UnlimitedFeature[];
-  isPopular?: boolean;
-  isSpecial?: boolean;
-  specialLabel?: string;
-  ctaText: string;
-  ctaVariant: 'primary' | 'secondary' | 'outline' | 'pink';
-  savingsYearly?: number;
+function getPlanIcon(slug: string) {
+  switch (slug) {
+    case 'basic': return <Zap className="w-5 h-5 text-gray-400" />;
+    case 'pro': return <Crown className="w-5 h-5 text-amber-400" />;
+    case 'ultimate': return <Gem className="w-5 h-5 text-pink-400" />;
+    case 'creator': return <Rocket className="w-5 h-5 text-pink-400" />;
+    default: return <Zap className="w-5 h-5 text-gray-400" />;
+  }
 }
 
 interface UpgradeModalProps {
@@ -58,131 +42,8 @@ interface UpgradeModalProps {
   currentTier?: string;
   triggerReason?: 'quota_exceeded' | 'feature_locked' | 'manual';
   quotaType?: string;
+  onSuccess?: () => void; // 订阅成功后的回调，用于刷新积分等状态
 }
-
-// ============================================
-// 计划数据 (与 pricing 页面完全一致)
-// ============================================
-
-const PLANS: PricingPlan[] = [
-  {
-    name: 'Basic',
-    slug: 'basic',
-    description: '适合初次体验 AI 视频创作',
-    priceMonthly: 9,
-    priceYearly: 108,
-    creditsPerMonth: 150,
-    icon: <Zap className="w-5 h-5 text-gray-400" />,
-    features: [
-      { text: '访问基础模型', included: true },
-      { text: '同时处理: 2 视频, 2 图像', included: true },
-      { text: 'AI 智能剪辑', included: true, badge: '8 FREE', badgeColor: 'green' },
-      { text: '访问全部功能', included: false },
-      { text: '优先使用高级 AI 功能', included: false },
-      { text: '额外积分折扣', included: false },
-    ],
-    unlimitedAccess: [
-      { name: '无限图像生成', included: false },
-      { name: 'AI 智能剪辑', included: false },
-      { name: 'Kling 2.6', included: false },
-      { name: 'Kling 口型同步', included: false },
-      { name: 'Kling 运动控制', included: false },
-    ],
-    ctaText: '选择 Basic',
-    ctaVariant: 'outline',
-  },
-  {
-    name: 'Pro',
-    slug: 'pro',
-    description: '适合日常内容创作者',
-    priceMonthly: 29,
-    priceYearly: 208.8,
-    originalMonthly: 29,
-    creditsPerMonth: 600,
-    bonusText: '= 300 Kling 标准',
-    savingsYearly: 139,
-    icon: <Crown className="w-5 h-5 text-amber-400" />,
-    features: [
-      { text: '访问全部模型', included: true },
-      { text: '同时处理: 3 视频, 4 图像, 2 角色', included: true },
-      { text: 'AI 智能剪辑', included: true, badge: '13 FREE', badgeColor: 'green' },
-      { text: '访问全部功能', included: true },
-      { text: '优先使用高级 AI 功能', included: false },
-      { text: '额外积分折扣', included: false },
-    ],
-    unlimitedAccess: [
-      { name: '图像生成', included: true, badge: '365 UNLIMITED', badgeColor: 'green' },
-      { name: 'AI 智能剪辑', included: true, badge: '365 UNLIMITED', badgeColor: 'green' },
-      { name: 'Kling 2.6', included: false },
-      { name: 'Kling 口型同步', included: false },
-      { name: 'Kling 运动控制', included: false },
-    ],
-    ctaText: '选择 Pro',
-    ctaVariant: 'outline',
-  },
-  {
-    name: 'Ultimate',
-    slug: 'ultimate',
-    description: '专业创作者的明智之选',
-    priceMonthly: 49,
-    priceYearly: 294,
-    originalMonthly: 49,
-    creditsPerMonth: 1200,
-    bonusText: '+ 365 UNLIMITED AI 智能剪辑',
-    savingsYearly: 294,
-    icon: <Gem className="w-5 h-5 text-pink-400" />,
-    isPopular: true,
-    features: [
-      { text: '访问全部模型', included: true },
-      { text: '同时处理: 4 视频, 8 图像, 3 角色', included: true },
-      { text: 'AI 智能剪辑', included: true, badge: '35 FREE', badgeColor: 'green' },
-      { text: '访问全部功能', included: true },
-      { text: '优先使用高级 AI 功能', included: true },
-      { text: '额外积分折扣', included: true },
-    ],
-    unlimitedAccess: [
-      { name: '图像生成', included: true, badge: '365 UNLIMITED', badgeColor: 'green' },
-      { name: 'AI 智能剪辑', included: true, badge: '365 UNLIMITED', badgeColor: 'green' },
-      { name: 'Kling 2.6', included: true, badge: 'UNLIMITED', badgeColor: 'yellow' },
-      { name: 'Kling 口型同步', included: true, badge: 'UNLIMITED', badgeColor: 'yellow' },
-      { name: 'Kling 运动控制', included: true, badge: 'UNLIMITED', badgeColor: 'yellow' },
-    ],
-    ctaText: '选择 Ultimate',
-    ctaVariant: 'pink',
-  },
-  {
-    name: 'Creator',
-    slug: 'creator',
-    description: '专家级大规模生产',
-    priceMonthly: 249,
-    priceYearly: 448.8,
-    originalMonthly: 249,
-    creditsPerMonth: 6000,
-    bonusText: '+ 2 Year UNLIMITED AI 智能剪辑',
-    savingsYearly: 2702,
-    icon: <Rocket className="w-5 h-5 text-pink-400" />,
-    isSpecial: true,
-    specialLabel: '⭐ 2 YEAR PERSONAL ONE TIME OFFER',
-    features: [
-      { text: '访问全部模型', included: true },
-      { text: '同时处理: 8 视频, 8 图像, 6 角色', included: true },
-      { text: 'AI 智能剪辑', included: true, badge: '35 FREE', badgeColor: 'green' },
-      { text: '访问全部功能', included: true },
-      { text: '优先使用高级 AI 功能', included: true },
-      { text: '15% 额外积分折扣', included: true, badge: 'EXTRA', badgeColor: 'yellow' },
-      { text: '额外 Unlimited 模型', included: true, badge: 'SPECIAL', badgeColor: 'pink' },
-    ],
-    unlimitedAccess: [
-      { name: '图像生成', included: true, badge: '2 YEAR UNLIMITED', badgeColor: 'pink' },
-      { name: 'AI 智能剪辑', included: true, badge: '2 YEAR UNLIMITED', badgeColor: 'pink' },
-      { name: 'Kling 2.6', included: true, badge: 'UNLIMITED', badgeColor: 'yellow' },
-      { name: 'Kling 口型同步', included: true, badge: 'UNLIMITED', badgeColor: 'yellow' },
-      { name: 'Kling 运动控制', included: true, badge: 'UNLIMITED', badgeColor: 'yellow' },
-    ],
-    ctaText: '选择 Creator',
-    ctaVariant: 'pink',
-  },
-];
 
 // ============================================
 // Badge 组件 (白灰风格)
@@ -244,13 +105,17 @@ export function UpgradeModal({
   onClose, 
   currentTier = 'free',
   triggerReason = 'manual',
-  quotaType
+  quotaType,
+  onSuccess
 }: UpgradeModalProps) {
   const router = useRouter();
-  const [isYearly, setIsYearly] = useState(true);
   const [subscribingPlan, setSubscribingPlan] = useState<string | null>(null);
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+
+  // 从 API 获取订阅计划 - 单一数据源
+  const { plans: apiPlans, loading: plansLoading, error: plansError } = useSubscriptionPlans();
+  const displayPlans = transformPlansToDisplayPlans(apiPlans, getPlanIcon, true);
 
   useEffect(() => {
     if (isOpen) {
@@ -298,17 +163,24 @@ export function UpgradeModal({
     try {
       const result = await subscribeToplan(
         planSlug,
-        isYearly ? 'yearly' : 'monthly',
+        'monthly',
         accessToken
       );
 
       if (result.success) {
+        toast.success('订阅成功！');
+        // 调用成功回调，刷新积分等状态
+        if (onSuccess) {
+          onSuccess();
+        }
         onClose();
-        router.push('/workspace?subscription=success');
+        
+        // ★ 订阅成功后强制刷新页面，确保所有状态同步
+        window.location.reload();
       }
     } catch (error) {
       console.error('订阅失败:', error);
-      alert(error instanceof Error ? error.message : '订阅失败，请稍后重试');
+      toast.error(error instanceof Error ? error.message : '订阅失败，请稍后重试');
     } finally {
       setIsSubscribing(false);
       setSubscribingPlan(null);
@@ -350,37 +222,20 @@ export function UpgradeModal({
             </p>
           </div>
 
-          {/* 计费周期切换 */}
-          <div className="flex justify-center mb-6">
-            <div className="bg-gray-100 rounded-lg p-1 inline-flex">
-              <button
-                onClick={() => setIsYearly(false)}
-                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                  !isYearly
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                月付
-              </button>
-              <button
-                onClick={() => setIsYearly(true)}
-                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                  isYearly
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                年付
-                <span className="ml-1 text-green-600">-17%</span>
-              </button>
+          {/* 计划列表 - 动态显示 */}
+          {plansLoading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
+              <span className="ml-2 text-gray-500">加载中...</span>
             </div>
-          </div>
-
-          {/* 计划列表 - 4列，白灰风格 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {PLANS.map((plan) => {
-              const price = isYearly ? plan.priceYearly / 12 : plan.priceMonthly;
+          ) : plansError ? (
+            <div className="text-center py-20 text-red-500">
+              加载计划失败，请刷新重试
+            </div>
+          ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {displayPlans.map((plan) => {
+              const price = plan.priceMonthly;
               const isCurrent = currentTier === plan.slug;
               const isLoading = isSubscribing && subscribingPlan === plan.slug;
 
@@ -444,19 +299,11 @@ export function UpgradeModal({
                   {/* 价格 */}
                   <div className="px-4 pb-3">
                     <div className="flex items-baseline gap-1">
-                      {plan.originalMonthly && isYearly && (
-                        <span className="text-sm text-gray-400 line-through">
-                          ${plan.originalMonthly}
-                        </span>
-                      )}
                       <span className="text-2xl font-bold text-gray-900">
                         ${price.toFixed(1)}
                       </span>
                       <span className="text-gray-500 text-xs">/mo</span>
                     </div>
-                    {isYearly && (
-                      <p className="text-[10px] text-gray-400 mt-0.5">按 12 个月计费</p>
-                    )}
                   </div>
 
                   {/* CTA 按钮 */}
@@ -481,15 +328,6 @@ export function UpgradeModal({
                         plan.ctaText
                       )}
                     </button>
-                    
-                    {/* 节省金额 */}
-                    {plan.savingsYearly && isYearly && (
-                      <div className="mt-1.5 text-center">
-                        <span className="inline-flex items-center px-1.5 py-0.5 bg-yellow-100 text-yellow-700 text-[9px] font-medium rounded">
-                          💰 Save ${plan.savingsYearly}
-                        </span>
-                      </div>
-                    )}
                   </div>
 
                   {/* 积分信息 */}
@@ -559,6 +397,7 @@ export function UpgradeModal({
               );
             })}
           </div>
+          )}
 
           {/* 底部说明 */}
           <div className="mt-6 text-center text-sm text-gray-400">

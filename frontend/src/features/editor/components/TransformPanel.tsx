@@ -304,25 +304,22 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
 
         {/* ★ 缩放 - 使用复合属性 scale（一个关键帧同时控制 X/Y）*/}
         <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Maximize2 size={14} className="text-gray-500" />
               <span className="text-xs font-medium text-gray-600">缩放</span>
             </div>
-            {/* 显示保留 1 位小数，与位置精度统一 */}
-            <span className="text-xs text-gray-500 font-mono">
-              {(scale * 100).toFixed(1)}%
-            </span>
-          </div>
-          
-          {/* ★ 复合关键帧控制按钮 */}
-          <div className="flex items-center justify-center mb-3">
-            <CompoundKeyframeControls
-              clipId={clipId}
-              property="scale"
-              currentValue={{ x: scaleX, y: scaleY }}
-              disabled={!isInRange}
-            />
+            <div className="flex items-center gap-2">
+              <CompoundKeyframeControls
+                clipId={clipId}
+                property="scale"
+                currentValue={{ x: scaleX, y: scaleY }}
+                disabled={!isInRange}
+              />
+              <span className="text-xs text-gray-500 font-mono w-16 text-right">
+                {(scale * 100).toFixed(1)}%
+              </span>
+            </div>
           </div>
           
           {/* 步长 0.1（0.1%），与位置精度统一，确保动画流畅 */}
@@ -338,54 +335,61 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
             className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-gray-600"
           />
           {hasKeyframes('scale') && (
-            <p className="text-[10px] text-gray-700 mt-2">
-              ◆ 已启用关键帧动画（修改值会自动添加关键帧）
+            <p className="text-[10px] text-gray-500 mt-2">
+              ◆ 已启用关键帧动画
             </p>
           )}
         </div>
 
         {/* ★ 位置 - 使用复合属性 position（一个关键帧同时控制 X/Y）*/}
         <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center justify-between mb-3">
+          {/* X 位置 */}
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Move size={14} className="text-gray-500" />
-              <span className="text-xs font-medium text-gray-600">位置</span>
+              <span className="text-xs font-medium text-gray-600">位置 X</span>
             </div>
-            {/* ★ 复合关键帧控制按钮 */}
-            <CompoundKeyframeControls
-              clipId={clipId}
-              property="position"
-              currentValue={{ x: offsetX, y: offsetY }}
-              disabled={!isInRange}
-            />
+            <div className="flex items-center gap-2">
+              <CompoundKeyframeControls
+                clipId={clipId}
+                property="position"
+                currentValue={{ x: offsetX, y: offsetY }}
+                disabled={!isInRange}
+              />
+              <span className="text-xs text-gray-500 font-mono w-12 text-right">
+                {offsetX.toFixed(1)}
+              </span>
+            </div>
           </div>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            step={0.1}
+            value={offsetX}
+            onChange={(e) => handleOffsetXChange(Number(e.target.value))}
+            className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-gray-600"
+          />
           
-          <div className="space-y-3">
-            {/* X 位置输入 - 步长 0.1，与缩放精度统一 */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 w-6">X</span>
-              <input
-                type="number"
-                step={0.1}
-                value={offsetX.toFixed(1)}
-                onChange={(e) => handleOffsetXChange(Number(e.target.value))}
-                className="flex-1 px-2 py-1 text-xs text-center bg-gray-100 border border-gray-200 rounded text-gray-700 focus:border-gray-500 focus:outline-none"
-              />
-            </div>
-            {/* Y 位置输入 - 步长 0.1，与缩放精度统一 */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 w-6">Y</span>
-              <input
-                type="number"
-                step={0.1}
-                value={offsetY.toFixed(1)}
-                onChange={(e) => handleOffsetYChange(Number(e.target.value))}
-                className="flex-1 px-2 py-1 text-xs text-center bg-gray-100 border border-gray-200 rounded text-gray-700 focus:border-gray-500 focus:outline-none"
-              />
-            </div>
+          {/* Y 位置 */}
+          <div className="flex items-center justify-between mt-4 mb-2">
+            <span className="text-xs font-medium text-gray-600 ml-6">位置 Y</span>
+            <span className="text-xs text-gray-500 font-mono w-12 text-right">
+              {offsetY.toFixed(1)}
+            </span>
           </div>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            step={0.1}
+            value={offsetY}
+            onChange={(e) => handleOffsetYChange(Number(e.target.value))}
+            className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-gray-600"
+          />
+          
           {hasKeyframes('position') && (
-            <p className="text-[10px] text-gray-700 mt-2">
+            <p className="text-[10px] text-gray-500 mt-2">
               ◆ 已启用关键帧动画
             </p>
           )}
@@ -393,24 +397,22 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
 
         {/* 旋转 - 带关键帧 */}
         <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <RotateCw size={14} className="text-gray-500" />
               <span className="text-xs font-medium text-gray-600">旋转</span>
             </div>
-            <span className="text-xs text-gray-500 font-mono">
-              {rotation}°
-            </span>
-          </div>
-          
-          {/* 关键帧控制 */}
-          <div className="flex items-center justify-center mb-3">
-            <KeyframeAddDeleteButtons
-              clipId={clipId}
-              property="rotation"
-              currentValue={rotation}
-              disabled={!isInRange}
-            />
+            <div className="flex items-center gap-2">
+              <KeyframeAddDeleteButtons
+                clipId={clipId}
+                property="rotation"
+                currentValue={rotation}
+                disabled={!isInRange}
+              />
+              <span className="text-xs text-gray-500 font-mono w-12 text-right">
+                {rotation}°
+              </span>
+            </div>
           </div>
           
           <input
@@ -441,7 +443,7 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
             </button>
           </div>
           {hasKeyframes('rotation') && (
-            <p className="text-[10px] text-gray-700 mt-2">
+            <p className="text-[10px] text-gray-500 mt-2">
               ◆ 已启用关键帧动画
             </p>
           )}
@@ -449,24 +451,22 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
 
         {/* 不透明度 - 带关键帧 */}
         <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Eye size={14} className="text-gray-500" />
               <span className="text-xs font-medium text-gray-600">不透明度</span>
             </div>
-            <span className="text-xs text-gray-500 font-mono">
-              {Math.round(opacity * 100)}%
-            </span>
-          </div>
-          
-          {/* 关键帧控制 */}
-          <div className="flex items-center justify-center mb-3">
-            <KeyframeAddDeleteButtons
-              clipId={clipId}
-              property="opacity"
-              currentValue={opacity}
-              disabled={!isInRange}
-            />
+            <div className="flex items-center gap-2">
+              <KeyframeAddDeleteButtons
+                clipId={clipId}
+                property="opacity"
+                currentValue={opacity}
+                disabled={!isInRange}
+              />
+              <span className="text-xs text-gray-500 font-mono w-12 text-right">
+                {Math.round(opacity * 100)}%
+              </span>
+            </div>
           </div>
           
           <input
@@ -481,7 +481,7 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
             className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-gray-600"
           />
           {hasKeyframes('opacity') && (
-            <p className="text-[10px] text-gray-700 mt-2">
+            <p className="text-[10px] text-gray-500 mt-2">
               ◆ 已启用关键帧动画
             </p>
           )}

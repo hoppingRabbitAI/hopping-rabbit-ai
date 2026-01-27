@@ -28,6 +28,7 @@ import type {
   SegmentSelection 
 } from '../lib/smart-v2-api';
 import { confirmSelectionApi, getAnalysisResult, getAnalysisProgress, getLatestAnalysisByProject } from '../lib/smart-v2-api';
+import { toast } from '@/lib/stores/toast-store';
 import { VideoPreviewPanel, type PreviewSegment } from './VideoPreviewPanel';
 import { projectApi } from '@/lib/api/projects';
 
@@ -758,8 +759,7 @@ export function SmartCleanupWizard({
       const errorMessage = e instanceof Error ? e.message : '确认失败';
       console.error('❌ 确认选择失败:', errorMessage, e);
       setAnalysisError(errorMessage);
-      // ★★★ 添加 alert 提示用户 ★★★
-      alert(`确认选择失败: ${errorMessage}`);
+      toast.error(`确认选择失败: ${errorMessage}`);
     } finally {
       setIsConfirming(false);
     }

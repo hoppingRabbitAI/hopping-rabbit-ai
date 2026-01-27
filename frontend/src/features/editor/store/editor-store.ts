@@ -274,12 +274,12 @@ interface EditorState {
   setCanvasEditMode: (mode: 'transform' | 'text' | 'subtitle' | null) => void;
   
   /** 侧边栏激活的面板 */
-  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | null;
-  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | null) => void;
+  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | null;
+  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | null) => void;
   
   /** 左侧栏激活的面板 */
-  activeLeftPanel: 'subtitles' | 'assets' | null;
-  setActiveLeftPanel: (panel: 'subtitles' | 'assets' | null) => void;
+  activeLeftPanel: 'subtitles' | 'assets' | 'b-roll' | null;
+  setActiveLeftPanel: (panel: 'subtitles' | 'assets' | 'b-roll' | null) => void;
   
   /** 画布/导出比例（青色框的比例），默认 9:16 抖音竖屏 */
   canvasAspectRatio: '16:9' | '9:16' | '1:1';
@@ -664,6 +664,11 @@ export const useEditorStore = create<EditorState>()(
         // 在 set 新数据之前清理，这样视频组件响应的是新数据而不是空数据
         clearHlsCache();
         
+        // ✅ 治本：播放头初始化到第一个 clip 的开始位置，确保有内容可见
+        const firstClipStart = finalClips.length > 0 
+          ? Math.min(...finalClips.map(c => c.start))
+          : 0;
+        
         set({
           projectId,
           projectName: project.name,
@@ -680,7 +685,7 @@ export const useEditorStore = create<EditorState>()(
           isProcessing: false,
           history: [],
           historyIndex: -1,
-          currentTime: 0,  // ★ 重置播放头到开头
+          currentTime: firstClipStart,  // ✅ 跳到第一个 clip，确保有内容显示
         });
         
         debugLog('[LoadProject] ✅ Store 状态已更新');
@@ -908,6 +913,8 @@ export const useEditorStore = create<EditorState>()(
         content_text: clip.contentText,
         text_style: clip.textStyle,
       });
+      // ★ 视频预加载由 VideoCanvasStore 的预热机制统一处理
+      // 当 videoClips.length 变化时会自动触发预热
     },
     
     removeClip: (id) => {
@@ -950,9 +957,30 @@ export const useEditorStore = create<EditorState>()(
         state.selectedClipIds.forEach(cid => {
           if (!idsToRemove.has(cid)) newSelectedIds.add(cid);
         });
+        
+        // ✅ 治本：删除 clip 时同步删除其关键帧数据，避免数据污染
+        const newKeyframes = new Map(state.keyframes);
+        const newSelectedKeyframeIds = new Set(state.selectedKeyframeIds);
+        idsToRemove.forEach(clipId => {
+          if (newKeyframes.has(clipId)) {
+            // 删除该 clip 的所有关键帧
+            const clipKfs = newKeyframes.get(clipId);
+            if (clipKfs) {
+              // 从选中关键帧中移除
+              clipKfs.forEach(propertyKfs => {
+                propertyKfs.forEach(kf => newSelectedKeyframeIds.delete(kf.id));
+              });
+            }
+            newKeyframes.delete(clipId);
+            console.log('[removeClip] 🗑️ 已删除 clip 关键帧:', clipId.slice(-8));
+          }
+        });
+        
         return { 
           clips: state.clips.filter((c) => !idsToRemove.has(c.id)),
           selectedClipIds: newSelectedIds,
+          keyframes: newKeyframes,
+          selectedKeyframeIds: newSelectedKeyframeIds,
         };
       });
       
@@ -1645,11 +1673,31 @@ export const useEditorStore = create<EditorState>()(
       
       const idsToDelete = Array.from(selectedClipIds);
       
-      set({
-        clips: clips.filter((c) => !selectedClipIds.has(c.id)),
-        selectedClipIds: new Set(),
-        selectedClipId: null,
-        toolMode: 'select',
+      set((state) => {
+        // ✅ 治本：删除 clip 时同步删除其关键帧数据
+        const newKeyframes = new Map(state.keyframes);
+        const newSelectedKeyframeIds = new Set(state.selectedKeyframeIds);
+        selectedClipIds.forEach(clipId => {
+          if (newKeyframes.has(clipId)) {
+            const clipKfs = newKeyframes.get(clipId);
+            if (clipKfs) {
+              clipKfs.forEach(propertyKfs => {
+                propertyKfs.forEach(kf => newSelectedKeyframeIds.delete(kf.id));
+              });
+            }
+            newKeyframes.delete(clipId);
+            console.log('[deleteSelectedClip] 🗑️ 已删除 clip 关键帧:', clipId.slice(-8));
+          }
+        });
+        
+        return {
+          clips: state.clips.filter((c) => !selectedClipIds.has(c.id)),
+          selectedClipIds: new Set(),
+          selectedClipId: null,
+          toolMode: 'select',
+          keyframes: newKeyframes,
+          selectedKeyframeIds: newSelectedKeyframeIds,
+        };
       });
       
       // 记录所有删除操作
@@ -1766,7 +1814,15 @@ export const useEditorStore = create<EditorState>()(
     isPlaying: false,
     isVideoReady: false,
     duration: 0,
-    setCurrentTime: (time) => set({ currentTime: Math.max(0, time) }),
+    setCurrentTime: (time) => {
+      const { clips } = get();
+      // ✅ 治本：播放头限制用实际 clips 的最大结束时间，而不是 duration 字段（duration 会动态变化）
+      const maxEndTime = clips.length > 0 
+        ? Math.max(...clips.map(c => c.start + c.duration))
+        : 0;
+      const clampedTime = Math.max(0, Math.min(time, maxEndTime));
+      set({ currentTime: clampedTime });
+    },
     setIsPlaying: (playing) => set({ isPlaying: playing }),
     setIsVideoReady: (ready) => set({ isVideoReady: ready }),
     setDuration: (duration) => set({ duration }),
@@ -2140,7 +2196,7 @@ export const useEditorStore = create<EditorState>()(
      * 分离视频声音 - 从视频中提取音频轨道
      */
     extractAudio: async (clipId: string) => {
-      const { clips, assets, saveToHistory, setProcessing, findOrCreateTrack, _addOperation } = get();
+      const { clips, assets, saveToHistory, setProcessing, findOrCreateTrack, _addOperation, loadAssets } = get();
       
       const sourceClip = clips.find(c => c.id === clipId);
       if (!sourceClip) {
@@ -2219,7 +2275,9 @@ export const useEditorStore = create<EditorState>()(
         
         // 创建新的音频 clip
         const audioData = result.data.result.audio;
-        const trackId = findOrCreateTrack('audio', '', clipStart, audioData.duration || clipDuration);
+        // ★ audioData.duration 后端返回的是毫秒，直接使用
+        const audioDurationMs = audioData.duration || clipDuration;
+        const trackId = findOrCreateTrack('audio', '', clipStart, audioDurationMs);
         
         const audioClip: Clip = {
           id: generateId(),
@@ -2227,7 +2285,7 @@ export const useEditorStore = create<EditorState>()(
           trackId,
           clipType: 'audio',
           start: clipStart,
-          duration: audioData.duration || clipDuration,
+          duration: audioDurationMs,
           color: 'from-green-400/80 to-teal-500/60',
           isLocal: false,
           mediaUrl: audioData.url,
@@ -2265,28 +2323,8 @@ export const useEditorStore = create<EditorState>()(
           is_muted: true,
         });
         
-        // 添加 asset
-        const newAsset = {
-          id: audioData.asset_id,
-          project_id: sourceAsset.project_id,
-          type: 'extracted_audio',
-          url: audioData.url,
-          storage_path: '',
-          file_name: audioData.filename,
-          file_size: 0,
-          mime_type: 'audio/wav',
-          metadata: { duration: audioData.duration },
-          is_generated: true,
-          parent_asset_id: assetId,
-          status: 'ready',
-          processing_progress: 100,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        
-        set((state) => ({ 
-          assets: [...state.assets, newAsset as unknown as Asset] 
-        }));
+        // 从后端重新加载assets以获取完整的asset信息（包括name、file_size等）
+        await loadAssets();
         
         setProcessing(false);
         debugLog(`音频提取完成，创建了音频片段: ${audioClip.id}`);

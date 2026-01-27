@@ -157,20 +157,16 @@ export function AudioPanel({ onClose }: AudioPanelProps) {
   return (
     <div className="w-full h-full bg-white rounded-xl shadow-sm flex flex-col overflow-hidden">
       {/* 头部 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 flex-shrink-0">
         <div className="flex items-center gap-2">
-          <Volume2 size={18} className="text-green-600" />
-          <span className="text-sm font-medium text-gray-900">音频</span>
+          <h3 className="text-sm font-semibold text-gray-900">音频</h3>
           {selectedCount > 1 && (
-            <span className="px-1.5 py-0.5 text-[10px] bg-green-100 text-green-600 rounded">
+            <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded">
               已选 {selectedCount} 个
             </span>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        >
+        <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-900 rounded transition-colors">
           <X size={16} />
         </button>
       </div>
@@ -188,37 +184,50 @@ export function AudioPanel({ onClose }: AudioPanelProps) {
           <>
             {/* 基础区块 */}
             <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded bg-green-100 flex items-center justify-center">
-                  <div className="w-2 h-2 rounded-full bg-green-500" />
-                </div>
-                <span className="text-xs text-gray-600 font-medium">基础</span>
-              </div>
+              <span className="text-xs font-medium text-gray-500">基础</span>
 
               {/* 音量 */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs text-gray-500">音量</label>
-                  {selectedClip && (
-                    <KeyframeAddDeleteButtons
-                      clipId={selectedClip.id}
-                      property="volume"
-                      currentValue={currentVolume}
-                    />
-                  )}
+                  <div className="flex items-center gap-2">
+                    {selectedClip && (
+                      <KeyframeAddDeleteButtons
+                        clipId={selectedClip.id}
+                        property="volume"
+                        currentValue={currentVolume}
+                      />
+                    )}
+                    <div className="flex items-center gap-1 bg-gray-100 rounded px-2 py-1">
+                      <input
+                        type="number"
+                        step={0.1}
+                        value={displayDb}
+                        onChange={(e) => {
+                          const db = parseFloat(e.target.value);
+                          if (!isNaN(db)) {
+                            updateVolume(dbToVolume(db));
+                          }
+                        }}
+                        disabled={isMuted}
+                        className="w-10 bg-transparent text-gray-700 text-xs text-right focus:outline-none"
+                      />
+                      <span className="text-[10px] text-gray-500">dB</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   {/* 静音按钮 */}
                   <button
                     onClick={toggleMute}
-                    className={`p-1.5 rounded transition-colors ${
+                    className={`p-1 rounded transition-colors ${
                       isMuted 
-                        ? 'bg-red-100 text-red-500' 
-                        : 'bg-gray-100 text-gray-500 hover:text-gray-900'
+                        ? 'bg-gray-200 text-gray-700' 
+                        : 'bg-gray-100 text-gray-500 hover:text-gray-700'
                     }`}
                     title={isMuted ? '取消静音' : '静音'}
                   >
-                    {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                    {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                   </button>
                   
                   {/* 音量滑块 */}
@@ -230,90 +239,39 @@ export function AudioPanel({ onClose }: AudioPanelProps) {
                     value={currentVolume}
                     onChange={(e) => updateVolume(Number(e.target.value))}
                     disabled={isMuted}
-                    className={`flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer 
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 
-                      [&::-webkit-slider-thumb]:bg-gray-600 [&::-webkit-slider-thumb]:rounded-full
-                      ${isMuted ? 'opacity-50' : ''}`}
+                    className={`flex-1 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer ${isMuted ? 'opacity-50' : ''}`}
                   />
-                  
-                  {/* dB 显示 */}
-                  <div className="flex items-center gap-1 bg-gray-100 rounded px-2 py-1">
-                    <input
-                      type="number"
-                      step={0.1}
-                      value={displayDb}
-                      onChange={(e) => {
-                        const db = parseFloat(e.target.value);
-                        if (!isNaN(db)) {
-                          updateVolume(dbToVolume(db));
-                        }
-                      }}
-                      disabled={isMuted}
-                      className="w-12 bg-transparent text-gray-900 text-sm text-right focus:outline-none"
-                    />
-                    <span className="text-xs text-gray-500">dB</span>
-                  </div>
                 </div>
               </div>
 
               {/* 淡入时长 */}
-              <div>
-                <label className="block text-xs text-gray-600 mb-2">淡入时长</label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={0}
-                    max={10}
-                    step={0.1}
-                    value={fadeIn}
-                    onChange={(e) => updateFadeIn(Number(e.target.value))}
-                    className="flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer 
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 
-                      [&::-webkit-slider-thumb]:bg-gray-600 [&::-webkit-slider-thumb]:rounded-full"
-                  />
-                  <div className="flex items-center gap-1 bg-gray-100 rounded px-2 py-1">
-                    <input
-                      type="number"
-                      step={0.1}
-                      min={0}
-                      max={10}
-                      value={fadeIn.toFixed(1)}
-                      onChange={(e) => updateFadeIn(Number(e.target.value))}
-                      className="w-10 bg-transparent text-gray-900 text-sm text-right focus:outline-none"
-                    />
-                    <span className="text-xs text-gray-500">s</span>
-                  </div>
-                </div>
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-gray-500 w-14 flex-shrink-0">淡入</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  value={fadeIn}
+                  onChange={(e) => updateFadeIn(Number(e.target.value))}
+                  className="flex-1 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer"
+                />
+                <span className="text-xs text-gray-600 w-10 text-right">{fadeIn.toFixed(1)}s</span>
               </div>
 
               {/* 淡出时长 */}
-              <div>
-                <label className="block text-xs text-gray-500 mb-2">淡出时长</label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={0}
-                    max={10}
-                    step={0.1}
-                    value={fadeOut}
-                    onChange={(e) => updateFadeOut(Number(e.target.value))}
-                    className="flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer 
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 
-                      [&::-webkit-slider-thumb]:bg-gray-600 [&::-webkit-slider-thumb]:rounded-full"
-                  />
-                  <div className="flex items-center gap-1 bg-gray-100 rounded px-2 py-1">
-                    <input
-                      type="number"
-                      step={0.1}
-                      min={0}
-                      max={10}
-                      value={fadeOut.toFixed(1)}
-                      onChange={(e) => updateFadeOut(Number(e.target.value))}
-                      className="w-10 bg-transparent text-gray-900 text-sm text-right focus:outline-none"
-                    />
-                    <span className="text-xs text-gray-500">s</span>
-                  </div>
-                </div>
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-gray-500 w-14 flex-shrink-0">淡出</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  value={fadeOut}
+                  onChange={(e) => updateFadeOut(Number(e.target.value))}
+                  className="flex-1 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer"
+                />
+                <span className="text-xs text-gray-600 w-10 text-right">{fadeOut.toFixed(1)}s</span>
               </div>
             </div>
 

@@ -29,14 +29,14 @@ router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
 class SubscribeRequest(BaseModel):
     """订阅请求"""
-    plan_slug: str = Field(..., description="计划标识: basic, pro, ultimate, creator")
-    billing_cycle: str = Field(default="yearly", description="计费周期: monthly, yearly")
+    plan_slug: str = Field(..., description="计划标识: basic, pro, ultimate")
+    billing_cycle: str = Field(default="monthly", description="计费周期: monthly")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "plan_slug": "pro",
-                "billing_cycle": "yearly"
+                "billing_cycle": "monthly"
             }
         }
 
@@ -82,12 +82,12 @@ async def get_subscription_plans():
                 "name": plan["name"],
                 "description": plan.get("description"),
                 "price_monthly": float(plan.get("price_monthly", 0)),
-                "price_yearly": float(plan.get("price_yearly", 0)),
                 "credits_per_month": plan.get("credits_per_month", 0),
                 "bonus_credits": plan.get("bonus_credits", 0),
                 "features": plan.get("features", {}),
                 "is_popular": plan.get("is_popular", False),
                 "badge_text": plan.get("badge_text"),
+                "display_order": plan.get("display_order", 0),
             })
         
         return {
@@ -103,16 +103,21 @@ async def get_subscription_plans():
 @router.get("/current")
 async def get_current_subscription(user_id: str = Depends(get_current_user_id)):
     """
-    获取当前用户的订阅信息
+    获取当前用户的订阅信息（包含积分余额）
     
     如果没有订阅，返回免费计划
     """
+    from app.services.credit_service import get_credit_service
+    
     service = get_subscription_service()
+    credit_service = get_credit_service()
     
     try:
         subscription = await service.get_user_subscription_with_free(user_id)
-        
         plan = subscription["plan"]  # 不用 get，没有就报错
+        
+        # 同时获取积分信息，避免前端多次请求
+        credits = await credit_service.get_user_credits(user_id)
         
         return {
             "success": True,
@@ -131,6 +136,13 @@ async def get_current_subscription(user_id: str = Depends(get_current_user_id)):
                     "credits_per_month": plan["credits_per_month"],
                     "features": plan["features"],  # 不用 get，没有就报错
                 },
+            },
+            # 积分信息 - 合并返回，减少 API 调用
+            "credits": {
+                "balance": credits.get("credits_balance", 0),
+                "total_granted": credits.get("credits_total_granted", 0),
+                "total_consumed": credits.get("credits_total_consumed", 0),
+                "storage_used_mb": credits.get("storage_used_mb", 0),
             },
         }
     
@@ -163,11 +175,11 @@ async def subscribe(
     """
     service = get_subscription_service()
     
-    # 验证计费周期
-    if request.billing_cycle not in ["monthly", "yearly"]:
+    # 验证计费周期（仅支持月付）
+    if request.billing_cycle != "monthly":
         raise HTTPException(
             status_code=400,
-            detail="无效的计费周期，请选择 monthly 或 yearly"
+            detail="仅支持月付订阅"
         )
     
     # 验证计划
@@ -238,6 +250,57 @@ async def cancel_subscription(
         raise HTTPException(status_code=500, detail="取消订阅失败，请稍后重试")
 
 
+@router.post("/reactivate")
+async def reactivate_subscription(
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    恢复已取消但未到期的订阅
+    
+    如果用户取消了订阅但还在订阅期内，可以恢复自动续期
+    """
+    service = get_subscription_service()
+    
+    try:
+        result = await service.reactivate_subscription(user_id=user_id)
+        
+        return {
+            "success": True,
+            "message": result["message"],
+            "subscription_id": result.get("subscription_id"),
+        }
+        
+    except SubscriptionError as e:
+        logger.warning(f"恢复订阅失败: {e.message}")
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception as e:
+        logger.error(f"恢复订阅异常: {e}")
+        raise HTTPException(status_code=500, detail="恢复订阅失败，请稍后重试")
+
+
+@router.get("/upgrade-options")
+async def get_upgrade_options(
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    获取当前用户可升级的订阅选项
+    
+    返回比当前计划更高级的所有计划
+    """
+    service = get_subscription_service()
+    
+    try:
+        options = await service.get_upgrade_options(user_id)
+        return {
+            "success": True,
+            **options,
+        }
+        
+    except Exception as e:
+        logger.error(f"获取升级选项失败: {e}")
+        raise HTTPException(status_code=500, detail="获取升级选项失败")
+
+
 # ============================================
 # 积分充值 API (Top-up)
 # ============================================
@@ -245,6 +308,7 @@ async def cancel_subscription(
 class TopupRequest(BaseModel):
     """充值请求"""
     credits_amount: int = Field(..., ge=100, description="购买积分数量")
+    dev_mode: bool = Field(default=False, description="开发模式直接发放（仅测试用）")
     
     class Config:
         json_schema_extra = {
@@ -252,6 +316,15 @@ class TopupRequest(BaseModel):
                 "credits_amount": 500
             }
         }
+
+
+# 积分包定价配置
+CREDIT_PACKS = {
+    100: {"price_cents": 500, "bonus": 0, "description": "100 积分"},
+    500: {"price_cents": 2000, "bonus": 50, "description": "500 积分 + 50 赠送"},
+    1000: {"price_cents": 3500, "bonus": 150, "description": "1000 积分 + 150 赠送"},
+    5000: {"price_cents": 15000, "bonus": 1000, "description": "5000 积分 + 1000 赠送"},
+}
 
 
 @router.post("/topup")
@@ -262,51 +335,156 @@ async def topup_credits(
     """
     购买额外积分 (充值)
     
-    开发模式: 直接发放积分
-    生产模式: 需要先完成支付
+    生产模式: 创建 Stripe Checkout Session，返回支付链接
+    开发模式 (dev_mode=True): 直接发放积分
     """
-    from app.services.credit_service import get_credit_service
+    import os
+    from app.config import get_settings
     
-    credit_service = get_credit_service()
+    settings = get_settings()
     
-    # 积分定价 (简化版)
-    credit_packs = {
-        100: {"price": 5, "bonus": 0},
-        500: {"price": 20, "bonus": 50},
-        1000: {"price": 35, "bonus": 150},
-        5000: {"price": 150, "bonus": 1000},
-    }
-    
-    # 找到最接近的积分包
-    pack = credit_packs.get(request.credits_amount)
+    # 找到对应的积分包
+    pack = CREDIT_PACKS.get(request.credits_amount)
     if not pack:
         raise HTTPException(
             status_code=400,
-            detail=f"无效的积分数量，可选: {list(credit_packs.keys())}"
+            detail=f"无效的积分数量，可选: {list(CREDIT_PACKS.keys())}"
         )
     
-    try:
+    # 开发模式：直接发放积分
+    if request.dev_mode or os.getenv("DEV_MODE") == "true":
+        from app.services.credit_service import get_credit_service
+        credit_service = get_credit_service()
+        
         total_credits = request.credits_amount + pack["bonus"]
         
-        # 发放积分
         await credit_service.grant_credits(
             user_id=user_id,
             credits=total_credits,
-            transaction_type="topup_purchase",
+            transaction_type="purchase",
             description=f"充值 {request.credits_amount} 积分" + (f" (赠送 {pack['bonus']})" if pack["bonus"] > 0 else ""),
         )
         
-        logger.info(f"[Topup] 用户 {user_id} 充值 {total_credits} 积分")
+        logger.info(f"[Topup] 开发模式：用户 {user_id} 充值 {total_credits} 积分")
         
         return {
             "success": True,
+            "mode": "dev",
             "credits_purchased": request.credits_amount,
             "bonus_credits": pack["bonus"],
             "total_credits": total_credits,
-            "amount_paid": pack["price"],
+            "amount_cents": pack["price_cents"],
             "message": f"充值成功！获得 {total_credits} 积分",
+        }
+    
+    # 生产模式：创建 Stripe Checkout Session
+    try:
+        import stripe
+        stripe.api_key = settings.stripe_secret_key
+        
+        if not stripe.api_key:
+            raise HTTPException(status_code=500, detail="Stripe 未配置")
+        
+        # 创建 Checkout Session
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": pack["price_cents"],
+                    "product_data": {
+                        "name": f"HoppingRabbit 积分充值",
+                        "description": pack["description"],
+                    },
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=settings.stripe_success_url,
+            cancel_url=settings.stripe_cancel_url,
+            metadata={
+                "user_id": user_id,
+                "credits_amount": request.credits_amount,
+                "bonus_credits": pack["bonus"],
+                "type": "credits_topup",
+            },
+            client_reference_id=user_id,
+        )
+        
+        logger.info(f"[Topup] 创建 Stripe Session: {checkout_session.id} for user {user_id}")
+        
+        return {
+            "success": True,
+            "mode": "stripe",
+            "checkout_url": checkout_session.url,
+            "session_id": checkout_session.id,
+            "credits_amount": request.credits_amount,
+            "bonus_credits": pack["bonus"],
+            "amount_cents": pack["price_cents"],
         }
         
     except Exception as e:
-        logger.error(f"积分充值失败: {e}")
-        raise HTTPException(status_code=500, detail="充值处理失败，请稍后重试")
+        logger.error(f"创建 Stripe Session 失败: {e}")
+        raise HTTPException(status_code=500, detail="创建支付会话失败，请稍后重试")
+
+
+# ============================================
+# 调试接口 (仅开发模式)
+# ============================================
+
+@router.post("/debug/reset")
+async def debug_reset_subscription(
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    [开发调试] 重置用户订阅状态，模拟全新用户
+    
+    - 删除所有订阅记录
+    - 删除积分记录
+    - 重置为 free tier
+    """
+    import os
+    if os.getenv("DEV_MODE") != "true":
+        raise HTTPException(status_code=403, detail="仅开发模式可用")
+    
+    try:
+        from app.services.supabase_client import get_supabase_admin_client
+        supabase = get_supabase_admin_client()
+        
+        # 1. 删除订阅记录
+        try:
+            supabase.table("user_subscriptions").delete().eq("user_id", user_id).execute()
+            logger.info(f"[Debug] 删除用户 {user_id} 的订阅记录")
+        except Exception as e:
+            logger.warning(f"[Debug] 删除订阅记录失败 (可忽略): {e}")
+        
+        # 2. 删除积分交易记录
+        try:
+            supabase.table("credit_transactions").delete().eq("user_id", user_id).execute()
+            logger.info(f"[Debug] 删除用户 {user_id} 的积分交易记录")
+        except Exception as e:
+            logger.warning(f"[Debug] 删除积分交易记录失败 (可忽略): {e}")
+        
+        # 3. 删除积分账户
+        try:
+            supabase.table("user_credits").delete().eq("user_id", user_id).execute()
+            logger.info(f"[Debug] 删除用户 {user_id} 的积分账户")
+        except Exception as e:
+            logger.warning(f"[Debug] 删除积分账户失败 (可忽略): {e}")
+        
+        # 4. 更新用户 tier 为 free
+        try:
+            supabase.table("users").update({"tier": "free"}).eq("id", user_id).execute()
+            logger.info(f"[Debug] 重置用户 {user_id} tier 为 free")
+        except Exception as e:
+            logger.warning(f"[Debug] 重置 tier 失败 (可忽略): {e}")
+        
+        return {
+            "success": True,
+            "message": "已重置为全新用户状态",
+            "user_id": user_id,
+        }
+        
+    except Exception as e:
+        logger.error(f"[Debug] 重置订阅状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"重置失败: {str(e)}")

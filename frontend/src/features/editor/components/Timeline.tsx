@@ -28,6 +28,7 @@ import { KeyframeDiamond, KeyframePanel } from './keyframes';
 import { SmartCleanupWizard } from './SmartCleanupWizard';
 import { ClipThumbnail } from './TimelineComponents';
 import { msToSec, secToMs } from '../lib/time-utils';
+import { toast } from '@/lib/stores/toast-store';
 import {
   TRACK_HEIGHT,
   VIDEO_TRACK_HEIGHT,
@@ -1082,8 +1083,13 @@ export function Timeline() {
       const TRACK_OFFSET = 48;
 
       sortedTracks.forEach((track, trackIndex) => {
-        const trackTop = TRACK_OFFSET + trackIndex * 48;
-        const trackBottom = trackTop + 48;
+        const currentTrackHeight = getTrackHeight(track.id, clips);
+        // 计算轨道累计高度
+        let trackTop = TRACK_OFFSET;
+        for (let i = 0; i < trackIndex; i++) {
+          trackTop += getTrackHeight(sortedTracks[i].id, clips);
+        }
+        const trackBottom = trackTop + currentTrackHeight;
 
         // Y 方向交集检测
         if (trackBottom < bounds.top || trackTop > bounds.bottom) return;
@@ -1214,14 +1220,220 @@ export function Timeline() {
     }
   }, []);
 
-  const handleAssetDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+  const handleAssetDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setAssetDropState(null);
     
+    // 获取 addClip 函数（在顶部获取，避免变量提升问题）
+    const addClip = getStore().addClip;
+    
     // 解析拖放数据
     try {
       const data = JSON.parse(e.dataTransfer.getData('application/json'));
+      
+      // 处理 B-roll 视频
+      if (data.type === 'b-roll' && data.video) {
+        const video = data.video;
+        
+        console.log('[Timeline] 接收到 B-roll 拖拽数据:', video);
+        
+        if (!timelineRef.current) {
+          console.error('[Timeline] timelineRef 不存在');
+          return;
+        }
+        
+        const rect = timelineRef.current.getBoundingClientRect();
+        const dropX = e.clientX - rect.left + timelineRef.current.scrollLeft;
+        const dropTimeMs = pixelsToMs(dropX, zoomLevel);
+        
+        // B-roll 视频时长（秒转毫秒）
+        const durationMs = video.duration * 1000;
+        
+        // 计算宽高比
+        let aspectRatio: '16:9' | '9:16' | '1:1' | undefined;
+        if (video.width && video.height) {
+          const ratio = video.width / video.height;
+          if (ratio > 1.5) aspectRatio = '16:9';
+          else if (ratio < 0.7) aspectRatio = '9:16';
+          else aspectRatio = '1:1';
+        }
+        
+        // 创建新的 clip ID
+        const clipId = crypto.randomUUID();
+        
+        // ★★★ 调用后端下载 B-roll 视频 ★★★
+        toast.info('正在下载 B-roll 视频...', 3000);
+        
+        try {
+          const { brollApi } = await import('@/lib/api');
+          
+          // 启动下载任务
+          const downloadResponse = await brollApi.downloadBRoll({
+            project_id: projectId!,
+            video: {
+              id: video.id,
+              url: video.url,
+              width: video.width,
+              height: video.height,
+              duration: video.duration,
+              thumbnail: video.thumbnail,
+              source: video.source || 'pexels',
+              author: video.photographer, // 后端使用 author 字段
+              author_url: video.pexelsUrl,
+              original_url: video.url,
+            },
+          });
+          
+          // 检查响应是否有错误
+          if (downloadResponse.error || !downloadResponse.data) {
+            throw new Error(downloadResponse.error?.message || 'B-roll 下载任务创建失败');
+          }
+          
+          console.log('[Timeline] B-roll 下载任务已创建:', downloadResponse.data);
+          
+          // 轮询下载进度
+          const finalStatus = await brollApi.waitForDownload(
+            downloadResponse.data.task_id,
+            (status) => {
+              // 更新进度提示
+              if (status.status === 'downloading') {
+                toast.info(`下载中 ${status.progress}%...`, 1000);
+              } else if (status.status === 'uploading') {
+                toast.info('上传到服务器...', 1000);
+              }
+            }
+          );
+          
+          if (finalStatus.status === 'failed') {
+            throw new Error(finalStatus.error || '下载失败');
+          }
+          
+          const assetId = finalStatus.asset_id;
+          
+          console.log('[Timeline] ✅ B-roll 下载完成，asset_id:', assetId);
+          toast.success('B-roll 素材已添加');
+          
+          // 从后端获取完整的 asset 信息
+          const { getSupabaseClient } = await import('@/lib/supabase/session');
+          const supabase = getSupabaseClient();
+          
+          const { data: assetData, error: fetchError } = await supabase
+            .from('assets')
+            .select('*')
+            .eq('id', assetId)
+            .single();
+          
+          if (fetchError || !assetData) {
+            throw new Error('无法获取 asset 信息');
+          }
+          
+          // 类型断言
+          const assetInfo = assetData as {
+            storage_path: string;
+            original_filename?: string;
+            file_size?: number;
+            duration?: number;
+            width?: number;
+            height?: number;
+            created_at: string;
+            updated_at: string;
+          };
+          
+          // 🔧 生成代理 URL（和普通上传/BRollPanel保持一致）
+          const { getAssetStreamUrl } = await import('@/lib/api/media-proxy');
+          const assetUrl = getAssetStreamUrl(assetId);
+          
+          console.log('[Timeline] 🔍 B-roll asset 信息:', {
+            assetId,
+            storage_path: assetInfo.storage_path,
+            generatedUrl: assetUrl,
+            duration: assetInfo.duration,
+            width: assetInfo.width,
+            height: assetInfo.height,
+          });
+          
+          // 添加 asset 到 store
+          const brollAsset = {
+            id: assetId,
+            project_id: projectId!,
+            type: 'video' as const,
+            url: assetUrl, // ✅ 使用代理 URL，和普通上传一致
+            storage_path: assetInfo.storage_path,
+            file_name: assetInfo.original_filename || `broll-${video.id}.mp4`,
+            file_size: assetInfo.file_size || 0,
+            mime_type: 'video/mp4',
+            duration: assetInfo.duration,
+            width: assetInfo.width,
+            height: assetInfo.height,
+            metadata: {
+              source: video.source,
+              sourceId: video.id,
+              photographer: video.photographer,
+              thumbnail: video.thumbnail,
+              aspectRatio,
+            },
+            is_generated: false,
+            status: 'ready' as const,
+            processing_progress: 100,
+            created_at: assetInfo.created_at,
+            updated_at: assetInfo.updated_at,
+          };
+          
+          console.log('[Timeline] 📦 完整的 brollAsset 对象:', JSON.stringify(brollAsset, null, 2));
+          
+          useEditorStore.setState((state) => ({ 
+            assets: [...(state.assets || []), brollAsset as any] 
+          }));
+          
+          console.log('[Timeline] ✅ B-roll asset 已添加到 store:', assetId);
+          console.log('[Timeline] 📊 当前 store 中的 assets 数量:', useEditorStore.getState().assets?.length);
+          
+          // 找到或创建视频轨道
+          const trackId = findOrCreateTrack('video', clipId, dropTimeMs, durationMs);
+          
+          console.log('[Timeline] 将在轨道', trackId, '创建 B-roll clip，时间:', dropTimeMs, 'ms');
+          
+          // 保存历史记录
+          saveToHistory();
+          
+          // 创建新的 clip（使用 assetId）
+          const newClip: Clip = {
+            id: clipId,
+            trackId,
+            assetId, // ★ 使用下载后的 assetId
+            clipType: 'video',
+            start: dropTimeMs,
+            duration: durationMs,
+            sourceStart: 0,
+            originDuration: durationMs,
+            name: `B-roll from ${video.source}`,
+            color: CLIP_TYPE_COLORS['video'],
+            isLocal: true,
+            thumbnail: video.thumbnail,
+            uploadStatus: 'uploaded',
+            volume: 1.0,
+            isMuted: false,
+            speed: 1.0,
+          };
+          
+          addClip(newClip);
+          
+          console.log('[Timeline] ✅ B-roll clip 已创建');
+          
+        } catch (error) {
+          console.error('[Timeline] B-roll 下载失败:', error);
+          toast.error(`B-roll 下载失败: ${error}`);
+          return;
+        }
+        
+        console.log('[Timeline] B-roll clip 已添加到 store 并选中');
+        
+        toast.success(`已添加 B-roll 视频到时间轴`);
+        return;
+      }
+      
+      // 处理普通素材
       if (data.type !== 'asset' || !data.asset) return;
       
       const asset = data.asset;
@@ -1286,8 +1498,7 @@ export function Timeline() {
         aspectRatio,
       };
       
-      // 添加 clip 到 store
-      const addClip = getStore().addClip;
+      // 添加 clip 到 store（addClip 已在函数顶部获取）
       addClip(newClip);
       
       // 选中新创建的 clip
@@ -1480,7 +1691,7 @@ export function Timeline() {
     if (clip.clipType === 'video') {
       return (
         <div className="relative w-full h-full overflow-hidden pointer-events-none rounded-sm">
-          <ClipThumbnail clip={clip} width={clipWidth} height={68} />
+          <ClipThumbnail clip={clip} width={clipWidth} height={VIDEO_TRACK_HEIGHT - 4} />
           {/* 删除区域遮罩 */}
           {deletedSegments.map((ds) => (
             <div
@@ -1504,7 +1715,7 @@ export function Timeline() {
     if (clip.clipType === 'audio') {
       return (
         <div className="relative w-full h-full overflow-hidden pointer-events-none">
-          <ClipThumbnail clip={clip} width={clipWidth} height={44} />
+          <ClipThumbnail clip={clip} width={clipWidth} height={TRACK_HEIGHT - 4} />
           {/* 音频名称覆盖层 */}
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2 py-0.5">
             <span className="text-[9px] font-medium text-white/90 truncate block">
@@ -1651,7 +1862,7 @@ export function Timeline() {
 
       // 计算clip的垂直位置：居中显示，留2px上下边距
       const trackHeight = isVideoClip ? VIDEO_TRACK_HEIGHT : TRACK_HEIGHT;
-      const clipHeight = isVideoClip ? 68 : 44;  // 轨道高度 - 4px 边距
+      const clipHeight = isVideoClip ? VIDEO_TRACK_HEIGHT - 4 : TRACK_HEIGHT - 4;  // 轨道高度 - 4px 边距
       const topOffset = (trackHeight - clipHeight) / 2;
 
       return (
@@ -1865,7 +2076,7 @@ export function Timeline() {
       </div>
 
       {/* 轨道编辑核心 - 隐藏左侧Track标签列，只显示clips */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex min-h-0">
         {/* 轨道时间网格 - 占据全部宽度 */}
         <div
           ref={timelineRef}

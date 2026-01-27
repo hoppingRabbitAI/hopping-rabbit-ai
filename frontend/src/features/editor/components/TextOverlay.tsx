@@ -357,14 +357,68 @@ export function TextOverlay({
         let snappedCenterX = false;
         let snappedCenterY = false;
         
-        // ★ 自动吸附到中心线（x=0 表示水平居中，y=0 表示垂直居中）
+        // 获取文本框实际尺寸（估算）
+        const textClip = clips.find(c => c.id === dragState.clipId);
+        const textScale = textClip?.transform?.scale || 1;
+        const fontSize = 48 * textScale; // 默认字体大小
+        // 估算文本宽度（基于 maxWidth 或默认值）
+        const textWidth = (dragState.startMaxWidth || 600) * textScale;
+        const textHeight = fontSize * 1.5; // 估算高度
+        const textHalfW = textWidth / 2;
+        const textHalfH = textHeight / 2;
+        
+        // 画布边界
+        const canvasHalfW = containerWidth / 2;
+        const canvasHalfH = containerHeight / 2;
+        
+        // 文本框边缘位置
+        const textLeft = newX - textHalfW;
+        const textRight = newX + textHalfW;
+        const textTop = newY - textHalfH;
+        const textBottom = newY + textHalfH;
+        
+        // ★ X 方向吸附（优先级：中心 > 边缘对齐 > 边缘贴中心）
         if (Math.abs(newX) < SNAP_THRESHOLD) {
           newX = 0;
           snappedCenterX = true;
         }
+        // 左边缘对齐画布左边缘
+        else if (Math.abs(textLeft - (-canvasHalfW)) < SNAP_THRESHOLD) {
+          newX = -canvasHalfW + textHalfW;
+        }
+        // 右边缘对齐画布右边缘
+        else if (Math.abs(textRight - canvasHalfW) < SNAP_THRESHOLD) {
+          newX = canvasHalfW - textHalfW;
+        }
+        // 左边缘贴画布中心
+        else if (Math.abs(textLeft) < SNAP_THRESHOLD) {
+          newX = textHalfW;
+        }
+        // 右边缘贴画布中心
+        else if (Math.abs(textRight) < SNAP_THRESHOLD) {
+          newX = -textHalfW;
+        }
+        
+        // ★ Y 方向吸附
         if (Math.abs(newY) < SNAP_THRESHOLD) {
           newY = 0;
           snappedCenterY = true;
+        }
+        // 上边缘对齐画布上边缘
+        else if (Math.abs(textTop - (-canvasHalfH)) < SNAP_THRESHOLD) {
+          newY = -canvasHalfH + textHalfH;
+        }
+        // 下边缘对齐画布下边缘
+        else if (Math.abs(textBottom - canvasHalfH) < SNAP_THRESHOLD) {
+          newY = canvasHalfH - textHalfH;
+        }
+        // 上边缘贴画布中心
+        else if (Math.abs(textTop) < SNAP_THRESHOLD) {
+          newY = textHalfH;
+        }
+        // 下边缘贴画布中心
+        else if (Math.abs(textBottom) < SNAP_THRESHOLD) {
+          newY = -textHalfH;
         }
         
         // 更新吸附状态（用于显示辅助线）

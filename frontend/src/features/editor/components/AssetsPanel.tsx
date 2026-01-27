@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef } from 'react';
-import { X, Search, Plus, Mic, Settings2 } from 'lucide-react';
+import { X, Search, Plus, Mic, Settings2, Trash2 } from 'lucide-react';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { Toggle } from '@/components/common/Toggle';
 import { useEditorStore } from '../store/editor-store';
 import { getVideoDuration } from '../lib/media-cache';
 import { uploadVideo, assetApi } from '@/lib/api/assets';
 import type { Asset } from '../types/asset';
+import { toast } from '@/lib/stores/toast-store';
 
 // 格式化文件大小
 function formatFileSize(bytes: number): string {
@@ -21,10 +22,11 @@ interface AssetItemProps {
   index: number;
   isSelected: boolean;
   onSelect: () => void;
+  onDelete: () => void;
   setItemRef: (el: HTMLDivElement | null) => void;
 }
 
-function AssetItem({ asset, index, isSelected, onSelect, setItemRef }: AssetItemProps) {
+function AssetItem({ asset, index, isSelected, onSelect, onDelete, setItemRef }: AssetItemProps) {
   const formatDuration = (seconds?: number) => {
     if (!seconds) return '';
     const mins = Math.floor(seconds / 60);
@@ -43,8 +45,9 @@ function AssetItem({ asset, index, isSelected, onSelect, setItemRef }: AssetItem
 
   // 处理拖拽开始
   const handleDragStart = (e: React.DragEvent) => {
-    // 只允许视频和音频素材拖拽到时间轴
-    if (asset.type !== 'video' && asset.type !== 'audio') {
+    // 允许视频、音频和图片素材拖拽到时间轴
+    const assetType = asset.type as string;
+    if (assetType !== 'video' && assetType !== 'audio' && assetType !== 'image' && assetType !== 'extracted_audio') {
       e.preventDefault();
       return;
     }
@@ -64,8 +67,9 @@ function AssetItem({ asset, index, isSelected, onSelect, setItemRef }: AssetItem
     }
   };
 
-  // 判断是否可拖拽 (video, audio, image 都可以拖拽到时间轴)
-  const isDraggable = asset.type === 'video' || asset.type === 'audio' || asset.type === 'image';
+  // 判断是否可拖拽 (video, audio, image, extracted_audio 都可以拖拽到时间轴)
+  const assetType = asset.type as string;
+  const isDraggable = assetType === 'video' || assetType === 'audio' || assetType === 'image' || assetType === 'extracted_audio';
 
   return (
     <div
@@ -116,6 +120,17 @@ function AssetItem({ asset, index, isSelected, onSelect, setItemRef }: AssetItem
         {asset.status === 'error' && (
           <div className="flex-shrink-0 w-2 h-2 bg-red-500 rounded-full" title="错误" />
         )}
+        {/* 删除按钮 - 鼠标悬停时显示 */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="flex-shrink-0 p-1.5 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="删除素材"
+        >
+          <Trash2 size={14} className="text-red-500" />
+        </button>
       </div>
     </div>
   );
@@ -136,6 +151,8 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
     enableAsr: false,
     enableSmartCamera: false,
   });
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const outroFileInputRef = useRef<HTMLInputElement>(null);
   const clipRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
@@ -147,6 +164,37 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
   const loadKeyframes = useEditorStore((s) => s.loadKeyframes);
   const requestCleanupWizard = useEditorStore((s) => s.requestCleanupWizard);
   const setSelectedClipId = useEditorStore((s) => s.setSelectedClipId);
+
+  // 删除素材
+  const handleDeleteAsset = useCallback(async () => {
+    if (!deleteTargetId) return;
+    setShowDeleteConfirm(false);
+
+    try {
+      const assetId = deleteTargetId;
+      // 从store中删除
+      useEditorStore.setState((state) => ({
+        assets: state.assets.filter(a => a.id !== assetId)
+      }));
+
+      // 调用后端API删除
+      const response = await assetApi.deleteAsset(assetId);
+      if (response.error) {
+        console.error('删除素材失败:', response.error);
+        toast.error('删除素材失败: ' + response.error.message);
+        // 失败时恢复
+        await loadAssets();
+      } else {
+        toast.success('素材已删除');
+      }
+    } catch (error) {
+      console.error('删除素材失败:', error);
+      toast.error('删除素材失败');
+      // 失败时恢复
+      await loadAssets();
+    }
+    setDeleteTargetId(null);
+  }, [deleteTargetId, loadAssets]);
 
   // 筛选素材
   const sortedAssets = useMemo(() => {
@@ -182,7 +230,9 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
         const file = files[i];
         setProcessingStep(`正在上传 (${i + 1}/${totalFiles}): ${file.name}`);
 
-        const durationMs = await getVideoDuration(file);
+        // 图片不需要提取时长
+        const isImage = file.type.startsWith('image/');
+        const durationMs = isImage ? undefined : await getVideoDuration(file);
 
         const result = await uploadVideo(
           file,
@@ -259,7 +309,7 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
 
     } catch (err) {
       console.error('[AddOutro] 添加素材失败:', err);
-      alert('添加素材失败: ' + (err instanceof Error ? err.message : '未知错误'));
+      toast.error('添加素材失败: ' + (err instanceof Error ? err.message : '未知错误'));
     } finally {
       setIsAddingOutro(false);
       setOutroUploadProgress(0);
@@ -275,9 +325,19 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
     e.target.value = '';
 
     setSelectedClipId(null);
-    setPendingFiles(files);
-    setShowAddOptionsDialog(true);
-  }, [setSelectedClipId]);
+    
+    // 检查是否全部是图片
+    const allImages = files.every(f => f.type.startsWith('image/'));
+    
+    if (allImages) {
+      // 图片直接上传，不需要 ASR 处理
+      handleAddOutroMultiple(files, { enableAsr: false, enableSmartCamera: false });
+    } else {
+      // 视频/混合素材显示选项对话框
+      setPendingFiles(files);
+      setShowAddOptionsDialog(true);
+    }
+  }, [setSelectedClipId, handleAddOutroMultiple]);
 
   const handleConfirmAddOptions = useCallback(async () => {
     if (pendingFiles.length === 0) return;
@@ -406,6 +466,10 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
                 index={index}
                 isSelected={false}
                 onSelect={() => {}}
+                onDelete={() => {
+                  setDeleteTargetId(asset.id);
+                  setShowDeleteConfirm(true);
+                }}
                 setItemRef={setRef}
               />
             );
@@ -418,7 +482,7 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
         <input
           ref={outroFileInputRef}
           type="file"
-          accept="video/*,.mp4,.mov,.webm,.avi,.mkv"
+          accept="video/*,image/*,.mp4,.mov,.webm,.avi,.mkv,.jpg,.jpeg,.png,.gif,.webp"
           multiple
           className="hidden"
           onChange={handleOutroFileSelect}
@@ -462,6 +526,46 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
           )}
         </button>
       </div>
+
+      {/* 删除确认弹窗 */}
+      {showDeleteConfirm && (
+        <div 
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" 
+          onClick={() => {
+            setShowDeleteConfirm(false);
+            setDeleteTargetId(null);
+          }}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6" 
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">
+              确定要删除这个素材吗？
+            </h3>
+            <p className="text-sm text-gray-600 mb-6">
+              注意：如果时间轴上有使用该素材的片段，删除后片段将无法播放。
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setDeleteTargetId(null);
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleDeleteAsset}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

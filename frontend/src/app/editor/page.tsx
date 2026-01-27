@@ -12,6 +12,7 @@ import { LibrarySidebar } from '@/features/editor/components/LibrarySidebar';
 import { PropertyPanels } from '@/features/editor/components/PropertyPanels';
 import { SubtitlesPanel } from '@/features/editor/components/SubtitlesPanel';
 import { AssetsPanel } from '@/features/editor/components/AssetsPanel';
+import { BRollPanel } from '@/features/editor/components/BRollPanel';
 import { ASRProgressToast } from '@/features/editor/components/ASRProgressToast';
 import { ProcessingDialog } from '@/features/editor/components/ProcessingDialog';
 import { SmartCleanupWizard } from '@/features/editor/components/SmartCleanupWizard';
@@ -482,7 +483,7 @@ export default function EditorPage() {
           }
           setIsLeftCollapsed(newCollapsed); 
         }}
-        className="fixed z-[9999] w-5 h-14 flex items-center justify-center bg-white border border-gray-200 rounded-r-lg shadow-md hover:bg-gray-50 text-gray-400 hover:text-gray-600 transition-all cursor-pointer"
+        className="fixed z-50 w-5 h-14 flex items-center justify-center bg-white border border-gray-200 rounded-r-lg shadow-md hover:bg-gray-50 text-gray-400 hover:text-gray-600 transition-all cursor-pointer"
         style={{ 
           // 计算 left 值：
           // - 收起时：8px
@@ -526,6 +527,9 @@ export default function EditorPage() {
             )}
             {activeLeftPanel === 'assets' && (
               <AssetsPanel onClose={() => setActiveLeftPanel(null)} />
+            )}
+            {activeLeftPanel === 'b-roll' && (
+              <BRollPanel onClose={() => setActiveLeftPanel(null)} />
             )}
           </div>
         </div>

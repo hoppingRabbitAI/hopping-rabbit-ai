@@ -30,6 +30,7 @@ import {
 } from '@/features/editor/lib/rabbit-hole-api';
 import { projectApi } from '@/lib/api';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
+import { toast } from '@/lib/stores/toast-store';
 
 // ============================================
 // 类型定义
@@ -404,7 +405,7 @@ export function MyMaterialsView() {
           }
         } catch (err) {
           console.error('批量删除失败:', err);
-          alert('删除失败，请重试');
+          toast.error('删除失败，请重试');
         } finally {
           setDeleting(false);
         }

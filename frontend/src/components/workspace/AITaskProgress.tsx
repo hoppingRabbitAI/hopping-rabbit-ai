@@ -15,7 +15,7 @@ import {
   ChevronDown,
   Plus
 } from 'lucide-react';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from '@/lib/supabase/session';
 import { 
   getAITaskStatus, 
   AITaskResponse, 
@@ -25,10 +25,8 @@ import {
 } from '@/features/editor/lib/rabbit-hole-api';
 import { projectApi } from '@/lib/api';
 
-// Supabase 客户端（用于 Realtime 订阅）
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// 使用单例 Supabase 客户端（用于 Realtime 订阅）
+const supabase = getSupabaseClient();
 
 // ============================================
 // 类型定义

@@ -14,7 +14,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 from ..models import PresignUploadRequest, PresignUploadResponse, ConfirmUploadRequest
-from ..services.supabase_client import supabase, get_file_url
+from ..services.supabase_client import supabase, get_file_url, create_signed_upload_url
 from .auth import get_current_user_id
 
 router = APIRouter(prefix="/assets", tags=["Assets"])
@@ -71,6 +71,28 @@ async def list_assets(
                 asset_with_url["url"] = url_map.get(asset["storage_path"], "")
             if asset.get("thumbnail_path"):
                 asset_with_url["thumbnail_url"] = url_map.get(asset["thumbnail_path"], "")
+            
+            # 字段映射：确保前端期望的字段存在
+            # 前端期望 name 字段，但数据库是 original_filename
+            if "original_filename" in asset and "name" not in asset:
+                asset_with_url["name"] = asset["original_filename"]
+            
+            # 前端期望 type 字段，但数据库是 file_type  
+            if "file_type" in asset and "type" not in asset:
+                asset_with_url["type"] = asset["file_type"]
+            
+            # 前端期望 metadata 对象，构建元数据
+            if "metadata" not in asset:
+                asset_with_url["metadata"] = {
+                    "duration": asset.get("duration"),
+                    "width": asset.get("width"),
+                    "height": asset.get("height"),
+                    "fps": asset.get("fps"),
+                    "sample_rate": asset.get("sample_rate"),
+                    "channels": asset.get("channels"),
+                    "has_audio": asset.get("has_audio"),
+                }
+            
             items.append(asset_with_url)
         
         return {"items": items}
@@ -89,7 +111,7 @@ async def presign_upload(
         file_ext = request.file_name.split(".")[-1] if "." in request.file_name else ""
         storage_path = f"uploads/{user_id}/{request.project_id}/{asset_id}.{file_ext}"
         
-        presign_result = supabase.storage.from_("clips").create_signed_upload_url(storage_path)
+        presign_result = create_signed_upload_url("clips", storage_path, upsert=True)
         
         return PresignUploadResponse(
             asset_id=asset_id,
@@ -723,15 +745,20 @@ async def stream_asset(asset_id: str, request: Request):
     """
     流式代理资源文件，解决 CORS 问题
     支持 Range 请求，用于视频播放
+    注意：使用 admin client 绕过 RLS，因为视频播放需要公开访问
     """
     max_retries = 3
     last_error = None
+    
+    # 使用 admin client 绕过 RLS 限制
+    from ..services.supabase_client import get_supabase_admin_client
+    admin_supabase = get_supabase_admin_client()
     
     for attempt in range(max_retries):
         try:
             # 使用 asyncio.to_thread 避免阻塞事件循环
             result = await asyncio.to_thread(
-                lambda: supabase.table("assets").select("*").eq("id", asset_id).single().execute()
+                lambda: admin_supabase.table("assets").select("*").eq("id", asset_id).single().execute()
             )
             if not result.data:
                 raise HTTPException(status_code=404, detail="Asset not found")
@@ -773,15 +800,20 @@ async def stream_proxy_video(asset_id: str, request: Request):
     
     优先返回代理视频，如果不存在则返回原始视频
     支持 Range 请求
+    注意：使用 admin client 绕过 RLS，因为视频播放需要公开访问
     """
     max_retries = 3
     last_error = None
+    
+    # 使用 admin client 绕过 RLS 限制
+    from ..services.supabase_client import get_supabase_admin_client
+    admin_supabase = get_supabase_admin_client()
     
     for attempt in range(max_retries):
         try:
             # 使用 asyncio.to_thread 避免阻塞事件循环
             result = await asyncio.to_thread(
-                lambda: supabase.table("assets").select("*").eq("id", asset_id).single().execute()
+                lambda: admin_supabase.table("assets").select("*").eq("id", asset_id).single().execute()
             )
             if not result.data:
                 raise HTTPException(status_code=404, detail="Asset not found")
@@ -1008,15 +1040,20 @@ async def _process_additions_async(
             asset_id = asset["id"]
             storage_path = asset.get("storage_path")
             asset_name = asset.get("name") or asset.get("original_filename", f"素材 {idx + 1}")
+            file_type = asset.get("file_type", "video")  # 获取文件类型：video/audio/image
             # duration 以秒存储，转为毫秒
             duration_sec = asset.get("duration") or 0
             duration_ms = int(duration_sec * 1000)
+            
+            # 图片素材默认显示 3 秒
+            if file_type == "image" and duration_ms == 0:
+                duration_ms = 3000
             
             base_progress = 10 + int(idx * progress_per_asset)
             task["progress"] = base_progress
             task["current_step"] = f"processing_asset_{idx + 1}"
             
-            logger.info(f"[ProcessAdditions] 处理素材 {idx + 1}/{len(sorted_assets)}: {asset_name}")
+            logger.info(f"[ProcessAdditions] 处理素材 {idx + 1}/{len(sorted_assets)}: {asset_name} (type: {file_type})")
             
             if not storage_path:
                 logger.warning(f"[ProcessAdditions] 素材 {asset_id} 无 storage_path，跳过")
@@ -1030,7 +1067,8 @@ async def _process_additions_async(
             # - enable_asr: 控制是否生成字幕
             # - enable_smart_camera: 控制是否切片 + 应用运镜
             # 只要任一选项开启，都需要执行 ASR 获取时间分段
-            need_asr = enable_asr or enable_smart_camera
+            # 但图片和音频不需要 ASR
+            need_asr = (enable_asr or enable_smart_camera) and file_type == "video"
             
             if need_asr:
                 task["current_step"] = f"asr_{idx + 1}"
@@ -1085,13 +1123,16 @@ async def _process_additions_async(
                 else:
                     timeline_position += duration_ms
             else:
-                # 没有 ASR 结果，创建完整视频 Clip
+                # 没有 ASR 结果，创建完整素材 Clip
+                # 根据文件类型确定 clip_type
+                clip_type = file_type if file_type in ["video", "audio", "image"] else "video"
+                
                 video_clip_id = str(uuid4())
                 video_clip = {
                     "id": video_clip_id,
                     "track_id": video_track_id,
                     "asset_id": asset_id,
-                    "clip_type": "video",
+                    "clip_type": clip_type,
                     "name": asset_name,
                     "start_time": timeline_position,
                     "end_time": timeline_position + duration_ms,

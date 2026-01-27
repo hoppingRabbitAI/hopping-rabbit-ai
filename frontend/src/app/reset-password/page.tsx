@@ -14,7 +14,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useAuthStore } from '@/features/editor/store/auth-store';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from '@/lib/supabase/session';
 
 // 密码强度检查
 function checkPasswordStrength(password: string) {
@@ -67,20 +67,15 @@ export default function ResetPasswordPage() {
         if (type === 'recovery' && accessToken) {
           // 有效的重置链接
           // Supabase 会自动处理 session
-          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+          const supabase = getSupabaseClient();
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: params.get('refresh_token') || '',
+          });
           
-          if (supabaseUrl && supabaseAnonKey) {
-            const supabase = createClient(supabaseUrl, supabaseAnonKey);
-            const { error } = await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: params.get('refresh_token') || '',
-            });
-            
-            if (error) {
-              console.error('Session error:', error);
-              setIsValidLink(false);
-            }
+          if (error) {
+            console.error('Session error:', error);
+            setIsValidLink(false);
           }
         } else if (!hash.includes('access_token')) {
           // 没有 token，可能是直接访问页面

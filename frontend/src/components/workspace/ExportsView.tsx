@@ -17,6 +17,7 @@ import {
   Check
 } from 'lucide-react';
 import { exportApi } from '@/lib/api/export';
+import { toast } from '@/lib/stores/toast-store';
 
 // 后端返回的导出记录类型
 interface ExportRecord {
@@ -194,7 +195,7 @@ export function ExportsView() {
       document.body.removeChild(link);
     } catch (err) {
       console.error('获取下载链接失败:', err);
-      alert('获取下载链接失败');
+      toast.error('获取下载链接失败');
     }
   };
 
@@ -248,7 +249,7 @@ export function ExportsView() {
       await fetchExports();
     } catch (err) {
       console.error('重试导出失败:', err);
-      alert(err instanceof Error ? err.message : '重试失败');
+      toast.error(err instanceof Error ? err.message : '重试失败');
     } finally {
       setRetrying(null);
     }

@@ -11,14 +11,14 @@ export const SNAP_THRESHOLD_MS = 50;
 /** 吸附阈值（秒）- 兼容旧代码 */
 export const SNAP_THRESHOLD = 0.05;
 
-/** 轨道高度 (视频轨道更高以显示缩略图) */
-export const TRACK_HEIGHT = 48;
+/** 统一轨道高度 */
+export const TRACK_HEIGHT = 32;
 
-/** 视频轨道高度 (更高以显示缩略图预览) */
-export const VIDEO_TRACK_HEIGHT = 72;
+/** 视频轨道高度 (与普通轨道统一) */
+export const VIDEO_TRACK_HEIGHT = 32;
 
-/** 分隔条高度 (h-4 = 1rem = 16px) */
-export const DIVIDER_HEIGHT = 16;
+/** 分隔条高度 */
+export const DIVIDER_HEIGHT = 8;
 
 /** 容器顶部 padding (py-2 = 0.5rem = 8px) */
 export const CONTAINER_PADDING_Y = 8;

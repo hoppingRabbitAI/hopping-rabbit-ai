@@ -55,25 +55,22 @@ class CreditService:
         """
         获取用户积分信息
         
+        ★ 简化设计: credits_balance 是唯一的真实余额
+        
         Returns:
             {
-                "credits_balance": 523,        # 当前可用积分
-                "monthly_credits_limit": 700,  # 月度配额上限
-                "monthly_credits_used": 177,   # 本月已用
-                "paid_credits": 0,             # 充值积分
-                "free_trial_credits": 0,       # 剩余试用积分
+                "credits_balance": 523,        # 当前可用积分 (唯一真实来源)
                 "tier": "pro",                 # 会员等级
-                "storage_limit_mb": 5000,
-                "storage_used_mb": 320,
-                "max_projects": 20,
-                "monthly_reset_at": "2026-02-01T00:00:00Z"
+                "credits_total_granted": 700,  # 累计获得 (统计用)
+                "credits_total_consumed": 177, # 累计消耗 (统计用)
             }
         """
         try:
             # 检查并重置月度积分
             await self._check_monthly_reset(user_id)
             
-            result = self.supabase.table("user_credits").select("*").eq("user_id", user_id).single().execute()
+            # 使用 maybe_single() 而不是 single()，避免没有数据时抛异常
+            result = self.supabase.table("user_credits").select("*").eq("user_id", user_id).maybe_single().execute()
             
             if not result.data:
                 # 新用户，初始化积分账户
@@ -82,91 +79,41 @@ class CreditService:
             data = result.data
             return {
                 "credits_balance": data.get("credits_balance", 0),
-                "monthly_credits_limit": data.get("monthly_credits_limit", 100),
-                "monthly_credits_used": data.get("monthly_credits_used", 0),
-                "paid_credits": data.get("paid_credits", 0),
-                "free_trial_credits": data.get("free_trial_credits", 0) if not data.get("free_trial_used") else 0,
                 "tier": data.get("tier", "free"),
-                "storage_limit_mb": data.get("storage_limit_mb", 500),
-                "storage_used_mb": data.get("storage_used_mb", 0),
-                "max_projects": data.get("max_projects", 3),
-                "monthly_reset_at": data.get("monthly_reset_at"),
                 "credits_total_granted": data.get("credits_total_granted", 0),
                 "credits_total_consumed": data.get("credits_total_consumed", 0),
             }
         except Exception as e:
             logger.error(f"获取用户积分失败: {e}")
-            # 返回默认值
-            return {
-                "credits_balance": 0,
-                "monthly_credits_limit": 100,
-                "monthly_credits_used": 0,
-                "paid_credits": 0,
-                "free_trial_credits": 50,
-                "tier": "free",
-                "storage_limit_mb": 500,
-                "storage_used_mb": 0,
-                "max_projects": 3,
-                "monthly_reset_at": None,
-                "credits_total_granted": 0,
-                "credits_total_consumed": 0,
-            }
+            # 尝试初始化用户积分账户
+            try:
+                return await self._initialize_user_credits(user_id)
+            except Exception as init_e:
+                logger.error(f"初始化用户积分账户也失败: {init_e}")
+                raise
     
-    async def calculate_credits(self, model_key: str, params: Dict[str, Any] = None) -> int:
+    async def calculate_credits(self, model_key: str) -> int:
         """
-        计算操作所需积分
+        获取操作所需积分（固定计费）
         
         Args:
-            model_key: 模型标识 ('kling_lip_sync', 'whisper_transcribe', etc.)
-            params: 参数 {
-                'duration_seconds': 30,  # 时长 (秒)
-                'duration_minutes': 2,   # 时长 (分钟)
-                'count': 1,              # 次数 (批量操作)
-            }
+            model_key: 模型标识 ('ai_create', 'kling_lip_sync', etc.)
             
         Returns:
             所需积分数
+            
+        Raises:
+            ValueError: 模型配置不存在
         """
-        params = params or {}
         model = await self._get_model_config(model_key)
         
         if not model:
-            logger.warning(f"未找到模型配置: {model_key}, 使用默认值")
-            return 10  # 默认消耗
+            error_msg = f"积分配置不存在: {model_key}，请在 ai_model_credits 表中添加该模型配置"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
-        credits = 0
-        
-        # 计算逻辑优先级: 固定 > 按秒 > 按分钟
-        if model.get("credits_per_call"):
-            # 固定积分消耗
-            credits = model["credits_per_call"]
-        elif model.get("credits_per_second"):
-            # 按秒计费
-            duration = params.get("duration_seconds", 0)
-            if not duration and params.get("duration_minutes"):
-                duration = params["duration_minutes"] * 60
-            credits = math.ceil(duration * float(model["credits_per_second"]))
-        elif model.get("credits_per_minute"):
-            # 按分钟计费 (向上取整)
-            duration = params.get("duration_seconds", 0)
-            if not duration and params.get("duration_minutes"):
-                duration = params["duration_minutes"] * 60
-            minutes = math.ceil(duration / 60) if duration > 0 else 1
-            credits = math.ceil(minutes * float(model["credits_per_minute"]))
-        else:
-            credits = model.get("min_credits", 1)
-        
-        # 批量操作乘以次数
-        count = params.get("count", 1)
-        credits = credits * count
-        
-        # 应用限制
-        min_credits = model.get("min_credits", 1)
-        max_credits = model.get("max_credits")
-        
-        credits = max(credits, min_credits)
-        if max_credits:
-            credits = min(credits, max_credits)
+        # 固定积分消耗
+        credits = model.get("credits_per_call", 0)
         
         return credits
     
@@ -193,6 +140,46 @@ class CreditService:
             "available": available,
             "message": "积分充足" if allowed else f"积分不足，需要 {required} 积分，当前余额 {available}",
         }
+    
+    async def quick_check_credits(self, user_id: str, required: int) -> Dict[str, Any]:
+        """
+        快速积分检查（优化版，只查一次数据库）
+        
+        注意：这个方法跳过了月度重置检查，仅用于快速预检查
+        最终扣积分时仍会调用完整的 consume_credits
+        
+        Returns:
+            {
+                "allowed": True/False,
+                "required": 65,
+                "available": 523,
+            }
+        """
+        try:
+            # 只查一次数据库，不检查月度重置
+            result = self.supabase.table("user_credits").select("credits_balance").eq("user_id", user_id).maybe_single().execute()
+            
+            if not result.data:
+                # 新用户默认有 100 积分（注册时会初始化）
+                available = 100
+            else:
+                available = result.data.get("credits_balance", 0)
+            
+            allowed = available >= required
+            
+            return {
+                "allowed": allowed,
+                "required": required,
+                "available": available,
+            }
+        except Exception as e:
+            logger.error(f"快速积分检查失败: {e}")
+            # 出错时保守处理，让后续流程继续
+            return {
+                "allowed": True,
+                "required": required,
+                "available": -1,  # -1 表示查询失败
+            }
     
     async def consume_credits(
         self,
@@ -237,11 +224,10 @@ class CreditService:
             
             credits_after = credits_before - credits
             
-            # 更新积分余额
+            # 更新积分余额 (只更新 credits_balance 和统计字段)
             self.supabase.table("user_credits").update({
                 "credits_balance": credits_after,
                 "credits_total_consumed": user_credits.get("credits_total_consumed", 0) + credits,
-                "monthly_credits_used": user_credits.get("monthly_credits_used", 0) + credits,
             }).eq("user_id", user_id).execute()
             
             # 获取模型信息用于描述
@@ -369,7 +355,6 @@ class CreditService:
             user_credits = await self.get_user_credits(user_id)
             self.supabase.table("user_credits").update({
                 "credits_total_consumed": user_credits.get("credits_total_consumed", 0) + credits,
-                "monthly_credits_used": user_credits.get("monthly_credits_used", 0) + credits,
             }).eq("user_id", user_id).execute()
             
             # 更新 AI 任务
@@ -486,9 +471,13 @@ class CreditService:
             subscription_id: 关联的订阅 ID
         """
         try:
+            logger.info(f"[CreditService] grant_credits 开始: user={user_id}, credits={credits}")
+            
             user_credits = await self.get_user_credits(user_id)
             credits_before = user_credits["credits_balance"]
             credits_after = credits_before + credits
+            
+            logger.info(f"[CreditService] 当前余额: {credits_before}, 发放后: {credits_after}")
             
             # 更新余额
             update_data = {
@@ -500,7 +489,9 @@ class CreditService:
             if transaction_type == "purchase":
                 update_data["paid_credits"] = user_credits.get("paid_credits", 0) + credits
             
-            self.supabase.table("user_credits").update(update_data).eq("user_id", user_id).execute()
+            # 使用 upsert 确保记录存在
+            update_result = self.supabase.table("user_credits").update(update_data).eq("user_id", user_id).execute()
+            logger.info(f"[CreditService] update 结果: {len(update_result.data) if update_result.data else 0} 行")
             
             # 记录交易
             transaction = self.supabase.table("credit_transactions").insert({
@@ -544,19 +535,24 @@ class CreditService:
             }
         """
         try:
-            query = self.supabase.table("credit_transactions").select("*, ai_model_credits(model_name)", count="exact").eq("user_id", user_id).eq("status", "completed")
+            # 不使用 join，直接查询 credit_transactions
+            query = self.supabase.table("credit_transactions").select("*", count="exact").eq("user_id", user_id).eq("status", "completed")
             
             if transaction_type:
                 query = query.eq("transaction_type", transaction_type)
             
             result = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
             
+            # 获取模型名称映射
+            model_pricing = await self.get_model_pricing()
+            model_name_map = {p["model_key"]: p["model_name"] for p in model_pricing}
+            
             transactions = []
             for record in result.data or []:
-                model_info = record.pop("ai_model_credits", None)
+                model_key = record.get("model_key")
                 transactions.append({
                     **record,
-                    "model_name": model_info.get("model_name") if model_info else record.get("model_key"),
+                    "model_name": model_name_map.get(model_key, model_key) if model_key else None,
                 })
             
             return {
@@ -662,7 +658,7 @@ class CreditService:
     async def _initialize_user_credits(self, user_id: str) -> Dict[str, Any]:
         """初始化新用户积分账户"""
         try:
-            initial_credits = 50  # 新用户赠送 50 积分
+            initial_credits = 100  # 新用户赠送 100 积分 (与 Free 计划一致)
             
             # 计算下月重置时间
             now = datetime.now(timezone.utc)
@@ -703,6 +699,8 @@ class CreditService:
                 "storage_used_mb": 0,
                 "max_projects": 3,
                 "monthly_reset_at": next_month.isoformat(),
+                "credits_total_granted": initial_credits,
+                "credits_total_consumed": 0,
             }
         except Exception as e:
             logger.error(f"初始化用户积分失败: {e}")
@@ -711,7 +709,7 @@ class CreditService:
     async def _check_monthly_reset(self, user_id: str) -> bool:
         """检查并执行月度积分重置"""
         try:
-            result = self.supabase.table("user_credits").select("monthly_reset_at, monthly_credits_limit, monthly_credits_used, tier").eq("user_id", user_id).single().execute()
+            result = self.supabase.table("user_credits").select("monthly_reset_at, monthly_credits_limit, monthly_credits_used, tier").eq("user_id", user_id).maybe_single().execute()
             
             if not result.data:
                 return False

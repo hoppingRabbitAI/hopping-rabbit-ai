@@ -153,7 +153,7 @@ class SubscriptionService:
         self,
         user_id: str,
         plan_slug: str,
-        billing_cycle: str = "yearly",
+        billing_cycle: str = "monthly",
         payment_method: str = "dev_mode",
         amount_paid: float = None,
     ) -> Dict[str, Any]:
@@ -164,8 +164,8 @@ class SubscriptionService:
         
         Args:
             user_id: 用户 ID
-            plan_slug: 计划标识 ('basic', 'pro', 'ultimate', 'creator')
-            billing_cycle: 计费周期 ('monthly', 'yearly')
+            plan_slug: 计划标识 ('basic', 'pro', 'ultimate')
+            billing_cycle: 计费周期 ('monthly')
             payment_method: 支付方式 ('stripe', 'dev_mode')
             amount_paid: 实际支付金额
             
@@ -190,14 +190,10 @@ class SubscriptionService:
             # 2. 检查是否已有订阅
             existing = await self.get_user_subscription(user_id)
             
-            # 3. 计算周期
+            # 3. 计算周期（仅支持月付）
             now = datetime.now(timezone.utc)
-            if billing_cycle == "yearly":
-                period_end = now + timedelta(days=365)
-                price = float(plan.get("price_yearly", 0))
-            else:
-                period_end = now + timedelta(days=30)
-                price = float(plan.get("price_monthly", 0))
+            period_end = now + timedelta(days=30)
+            price = float(plan.get("price_monthly", 0))
             
             actual_amount = amount_paid if amount_paid is not None else price
             
@@ -209,20 +205,10 @@ class SubscriptionService:
                 
                 # 取消旧订阅
                 self.supabase.table("user_subscriptions").update({
-                    "status": "canceled",
+                    "status": "cancelled",
                     "canceled_at": now.isoformat(),
                     "auto_renew": False,
                 }).eq("id", existing["id"]).execute()
-                
-                # 记录历史
-                await self._record_history(
-                    user_id=user_id,
-                    subscription_id=existing["id"],
-                    action=action,
-                    from_plan_id=old_plan_id,
-                    to_plan_id=plan["id"],
-                    amount=actual_amount,
-                )
             
             # 5. 创建新订阅
             subscription_data = {
@@ -249,16 +235,7 @@ class SubscriptionService:
             if not subscription:
                 raise SubscriptionError("创建订阅失败", "CREATE_FAILED")
             
-            # 6. 记录订阅历史
-            await self._record_history(
-                user_id=user_id,
-                subscription_id=subscription["id"],
-                action="created" if not existing else "upgraded",
-                to_plan_id=plan["id"],
-                amount=actual_amount,
-            )
-            
-            # 7. 发放积分
+            # 6. 发放积分
             credits_granted = await self._grant_subscription_credits(
                 user_id=user_id,
                 plan=plan,
@@ -314,9 +291,9 @@ class SubscriptionService:
             
             if immediate:
                 # 立即取消
-                new_status = "canceled"
+                new_status = "cancelled"
                 self.supabase.table("user_subscriptions").update({
-                    "status": "canceled",
+                    "status": "cancelled",
                     "canceled_at": now.isoformat(),
                     "auto_renew": False,
                 }).eq("id", subscription["id"]).execute()
@@ -335,15 +312,6 @@ class SubscriptionService:
                 period_end = subscription.get("current_period_end", "")
                 message = f"已关闭自动续期，订阅将于 {period_end[:10]} 到期"
             
-            # 记录历史
-            await self._record_history(
-                user_id=user_id,
-                subscription_id=subscription["id"],
-                action="canceled",
-                from_plan_id=subscription.get("plan", {}).get("id"),
-                reason=reason,
-            )
-            
             logger.info(f"[Subscription] 用户 {user_id} 取消订阅, immediate={immediate}")
             
             return {
@@ -357,6 +325,110 @@ class SubscriptionService:
         except Exception as e:
             logger.error(f"取消订阅失败: {e}")
             raise SubscriptionError(f"取消订阅失败: {str(e)}", "CANCEL_FAILED")
+    
+    async def reactivate_subscription(self, user_id: str) -> Dict[str, Any]:
+        """
+        重新激活已取消但未到期的订阅 (恢复自动续期)
+        
+        Returns:
+            {"success": True, "message": "..."}
+        """
+        try:
+            # 查找已取消但未过期的订阅
+            result = self.supabase.table("user_subscriptions").select(
+                "*, plan:subscription_plans(*)"
+            ).eq("user_id", user_id).eq("auto_renew", False).execute()
+            
+            subscriptions = result.data or []
+            
+            # 找到状态为 active 且 auto_renew=false 的订阅 (已取消但未到期)
+            subscription = None
+            for sub in subscriptions:
+                if sub.get("status") == "active":
+                    subscription = sub
+                    break
+            
+            if not subscription:
+                raise SubscriptionError("没有可恢复的订阅", "NO_SUBSCRIPTION_TO_REACTIVATE")
+            
+            now = datetime.now(timezone.utc)
+            period_end = subscription.get("current_period_end")
+            
+            if period_end:
+                period_end_dt = datetime.fromisoformat(period_end.replace('Z', '+00:00'))
+                if period_end_dt < now:
+                    raise SubscriptionError("订阅已过期，请重新订阅", "SUBSCRIPTION_EXPIRED")
+            
+            # 恢复自动续期
+            self.supabase.table("user_subscriptions").update({
+                "auto_renew": True,
+                "canceled_at": None,
+            }).eq("id", subscription["id"]).execute()
+            
+            plan_name = subscription.get("plan", {}).get("name", "")
+            logger.info(f"[Subscription] 用户 {user_id} 恢复订阅 {plan_name}")
+            
+            return {
+                "success": True,
+                "message": f"已恢复 {plan_name} 订阅，将继续自动续期",
+                "subscription_id": subscription["id"],
+            }
+            
+        except SubscriptionError:
+            raise
+        except Exception as e:
+            logger.error(f"恢复订阅失败: {e}")
+            raise SubscriptionError(f"恢复订阅失败: {str(e)}", "REACTIVATE_FAILED")
+    
+    async def get_upgrade_options(self, user_id: str) -> Dict[str, Any]:
+        """
+        获取用户可用的升级选项
+        
+        Returns:
+            {
+                "current_plan": {...},
+                "upgrades": [...],
+                "can_upgrade": True/False
+            }
+        """
+        try:
+            subscription = await self.get_user_subscription_with_free(user_id)
+            current_plan = subscription.get("plan", {})
+            current_order = current_plan.get("display_order", 0)
+            
+            # 获取所有计划
+            all_plans = await self.get_all_plans(active_only=True)
+            
+            # 筛选出比当前计划更高级的
+            upgrades = []
+            for plan in all_plans:
+                if plan.get("display_order", 0) > current_order and plan.get("slug") != "free":
+                    upgrades.append({
+                        "slug": plan["slug"],
+                        "name": plan["name"],
+                        "price_monthly": float(plan.get("price_monthly", 0)),
+                        "credits_per_month": plan.get("credits_per_month", 0),
+                        "features": plan.get("features", {}),
+                    })
+            
+            return {
+                "current_plan": {
+                    "slug": current_plan.get("slug"),
+                    "name": current_plan.get("name"),
+                    "credits_per_month": current_plan.get("credits_per_month", 0),
+                },
+                "upgrades": upgrades,
+                "can_upgrade": len(upgrades) > 0,
+                "is_free": subscription.get("is_free", False),
+            }
+            
+        except Exception as e:
+            logger.error(f"获取升级选项失败: {e}")
+            return {
+                "current_plan": None,
+                "upgrades": [],
+                "can_upgrade": False,
+            }
     
     # ========================================================================
     # 积分发放
@@ -379,13 +451,16 @@ class SubscriptionService:
         credits_per_month = plan.get("credits_per_month", 0)
         bonus_credits = plan.get("bonus_credits", 0) if is_first_subscription else 0
         
+        logger.info(f"[Credits] 准备发放积分: user={user_id}, monthly={credits_per_month}, bonus={bonus_credits}")
+        
         try:
             # 1. 发放月度积分
             if credits_per_month > 0:
+                logger.info(f"[Credits] 发放月度积分: {credits_per_month}")
                 await self.credit_service.grant_credits(
                     user_id=user_id,
                     credits=credits_per_month,
-                    transaction_type="subscription_grant",
+                    transaction_type="grant",
                     description=f"订阅 {plan['name']} - 月度积分",
                     subscription_id=subscription_id,
                 )
@@ -393,28 +468,28 @@ class SubscriptionService:
             
             # 2. 发放首次奖励积分
             if bonus_credits > 0:
+                logger.info(f"[Credits] 发放首次奖励: {bonus_credits}")
                 await self.credit_service.grant_credits(
                     user_id=user_id,
                     credits=bonus_credits,
-                    transaction_type="subscription_bonus",
+                    transaction_type="grant",
                     description=f"订阅 {plan['name']} - 首次奖励",
                     subscription_id=subscription_id,
                 )
                 total_granted += bonus_credits
             
-            # 3. 更新订阅积分刷新时间
-            next_refresh = datetime.now(timezone.utc) + timedelta(days=30)
+            # 3. 更新用户积分配额 (monthly_credits_limit)
             self.supabase.table("user_credits").update({
-                "subscription_id": subscription_id,
-                "subscription_credits_remaining": credits_per_month,
-                "next_credits_refresh_at": next_refresh.isoformat(),
+                "monthly_credits_limit": credits_per_month,
             }).eq("user_id", user_id).execute()
             
-            logger.info(f"[Credits] 用户 {user_id} 订阅积分发放: {total_granted}")
+            logger.info(f"[Credits] 用户 {user_id} 订阅积分发放成功: {total_granted}")
             return total_granted
             
         except Exception as e:
+            import traceback
             logger.error(f"发放订阅积分失败: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
     
     # ========================================================================
@@ -433,41 +508,15 @@ class SubscriptionService:
         else:
             return "renewed"
     
-    async def _record_history(
-        self,
-        user_id: str,
-        subscription_id: str = None,
-        action: str = None,
-        from_plan_id: str = None,
-        to_plan_id: str = None,
-        amount: float = None,
-        reason: str = None,
-    ):
-        """记录订阅历史"""
-        try:
-            self.supabase.table("subscription_history").insert({
-                "user_id": user_id,
-                "subscription_id": subscription_id,
-                "action": action,
-                "from_plan_id": from_plan_id,
-                "to_plan_id": to_plan_id,
-                "amount": amount,
-                "reason": reason,
-                "metadata": {
-                    "recorded_at": datetime.now(timezone.utc).isoformat(),
-                }
-            }).execute()
-        except Exception as e:
-            logger.warning(f"记录订阅历史失败: {e}")
-    
     async def _update_user_tier(self, user_id: str, plan_slug: str):
         """更新用户等级"""
         try:
+            # 数据库 tier 只允许: free, pro, enterprise
             tier_mapping = {
                 "free": "free",
-                "basic": "basic",
+                "basic": "pro",      # Basic 映射到 pro
                 "pro": "pro",
-                "ultimate": "pro",  # Ultimate 也算 pro 级别
+                "ultimate": "pro",
                 "creator": "enterprise",
             }
             tier = tier_mapping.get(plan_slug, "free")

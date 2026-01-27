@@ -322,7 +322,7 @@ export class SyncManager {
       }
 
       const result = response.data as SaveStateResponse;
-      this.version = result.new_version;
+      this.version = result.version;
       this.pendingOperations = [];
       
       // 清除本地缓存
@@ -526,7 +526,7 @@ export class SyncManager {
       const result = response.data as SaveStateResponse;
 
       // 更新版本并清除已同步的操作
-      this.version = result.new_version;
+      this.version = result.version;
       this.pendingOperations = []; // 全量同步，清空所有操作
       
       // 同步成功，重置错误计数

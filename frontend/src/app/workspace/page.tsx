@@ -17,6 +17,7 @@ import {
   type FileInfo
 } from '@/features/editor/lib/workspace-api';
 import { getVideoDuration } from '@/features/editor/lib/media-cache';
+import { useCredits } from '@/lib/hooks/useCredits';
 import {
   Upload,
   X,
@@ -249,16 +250,35 @@ interface CreateProjectModalProps {
 }
 
 function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
+  // === 积分（从全局 store 获取，不会重复请求）===
+  const { credits, refetch: refetchCredits } = useCredits();
+  
+  // ★★★ 渐进式两步流程状态 ★★★
+  type Step = 'upload' | 'configure';
+  const [currentStep, setCurrentStep] = useState<Step>('upload');
+  
   // === 步骤1: 上传相关状态 ===
   const [link, setLink] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // ★ 上传进度状态
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadedSession, setUploadedSession] = useState<{
+    sessionId: string;
+    projectId: string;
+    assets?: Array<{ asset_id: string; order_index: number; upload_url: string; storage_path: string; file_name?: string }>;
+  } | null>(null);
 
   // === 步骤2: 配置相关状态 ===
   const [scriptText, setScriptText] = useState('');
   // ★ 模式选择: ai-create (智能剪辑) | voice-extract (仅提字幕)
   const [selectedMode, setSelectedMode] = useState<'ai-create' | 'voice-extract'>('ai-create');
+
+  // AI 智能剪辑消耗固定 100 积分（与后端 ai_model_credits 表一致）
+  const aiCreateCredits = 100;
 
   // === 提交状态 ===
   const [isLoading, setIsLoading] = useState(false);
@@ -309,27 +329,21 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  // === 开始处理 ===
-  const handleStart = async () => {
+  // ★★★ 步骤1: 上传视频 (不扣积分) ★★★
+  const handleUpload = async () => {
     if (selectedFiles.length === 0 && !link.trim()) return;
 
-    setIsLoading(true);
+    setIsUploading(true);
     setError(null);
+    setUploadProgress(0);
 
     try {
-      const taskType = selectedMode; // 使用选择的模式
-
-      // 确定 Source Type
-      const currentSourceType: SourceType = selectedFiles.length > 0 ? 'file' : 'link';
-      const currentSourceData: SourceData = {
-        files: selectedFiles.length > 0 ? selectedFiles : undefined,
-        file: selectedFiles.length === 1 ? selectedFiles[0] : undefined,
-        link: link.trim() || undefined
-      };
+      // 导入上传相关函数 (notifyAssetUploaded 已在 uploadMultipleFiles 内部调用)
+      const { uploadMultipleFiles, finalizeUpload } = await import('@/features/editor/lib/workspace-api');
 
       // === 多文件模式 ===
       if (selectedFiles.length > 0) {
-        debugLog('[CreateProject] 多文件模式, 文件数:', selectedFiles.length);
+        debugLog('[Upload] 多文件模式, 文件数:', selectedFiles.length);
 
         // 并行提取所有视频时长
         const filesInfo: FileInfo[] = await Promise.all(
@@ -351,72 +365,179 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
           })
         );
 
+        // ★ 创建会话 (不扣积分，仅创建 session + assets)
         const sessionResponse = await createSession({
           source_type: 'local',
-          task_type: selectedMode,  // ★ 使用选择的模式
+          task_type: 'voice-extract',  // ★ 默认使用不消耗积分的模式
           files: filesInfo,
         });
 
-        const sessionData: SessionData = {
+        debugLog('[Upload] 会话创建成功:', sessionResponse);
+
+        // ★ 上传文件 (uploadMultipleFiles 内部会自动调用 notifyAssetUploaded)
+        if (sessionResponse.assets && sessionResponse.assets.length > 0) {
+          await uploadMultipleFiles(
+            selectedFiles,
+            sessionResponse.assets,
+            sessionResponse.session_id,
+            undefined, // onFileProgress
+            (percent) => setUploadProgress(percent)
+          );
+          // 注意: notifyAssetUploaded 已在 uploadMultipleFiles 内部调用，无需重复调用
+        }
+
+        // ★★★ 关键: 完成上传，创建基础项目结构 (track + clips) ★★★
+        debugLog('[Upload] 调用 finalize-upload 创建基础项目结构...');
+        const finalizeResult = await finalizeUpload(sessionResponse.session_id);
+        debugLog('[Upload] 基础项目结构创建完成:', finalizeResult);
+
+        // ★ 上传成功，保存会话信息并进入步骤2
+        setUploadedSession({
           sessionId: sessionResponse.session_id,
           projectId: sessionResponse.project_id,
           assets: sessionResponse.assets,
-          files: selectedFiles,
-        };
+        });
+        setIsUploading(false);
+        setCurrentStep('configure');  // ★ 进入配置步骤
 
-        // ★ V2 智能分析移到 ProcessingView 上传完成后触发
-        // 避免在视频还在上传时就开始等待，导致超时
-
-        onStart(taskType, sessionData, currentSourceType, currentSourceData);
+        debugLog('[Upload] 上传完成，进入配置步骤');
         return;
       }
 
       // === 链接模式 (YouTube / URL) ===
-      // 链接模式主要用于视频文本总结，后台会自动下载视频
       if (link.trim()) {
         const sessionResponse = await createSession({
           source_type: link.includes('youtube') ? 'youtube' : 'url',
-          task_type: 'summary',  // ★ 链接模式用于总结
+          task_type: 'summary',
           source_url: link.trim(),
         });
 
+        // 链接模式直接开始处理，无需配置步骤
         const sessionData: SessionData = {
           sessionId: sessionResponse.session_id,
           projectId: sessionResponse.project_id,
-          // 链接模式无需上传，后台会自动下载处理
         };
 
-        onStart('summary', sessionData, currentSourceType, currentSourceData);
+        onStart('summary', sessionData, 'link', { link: link.trim() });
       }
 
-    } catch (err) {
-      console.error('创建会话失败:', err);
-      setError(err instanceof Error ? err.message : '创建会话失败');
+    } catch (err: unknown) {
+      console.error('上传失败:', err);
+      const error = err as { status?: number; message?: string; detail?: unknown };
+      setError(error.message || '上传失败');
+      setIsUploading(false);
+    }
+  };
+
+  // ★★★ 步骤2: 开始 AI 处理 (检查积分 + 扣积分) ★★★
+  const handleStartAI = async () => {
+    if (!uploadedSession) return;
+
+    // ★ AI 智能剪辑需要检查积分（前端快速校验）
+    if (selectedMode === 'ai-create') {
+      if (credits === null) {
+        setError('正在加载积分信息，请稍后重试');
+        return;
+      }
+      
+      const { checkCreditsAndProceed } = await import('@/lib/utils/credits-guard');
+      if (!checkCreditsAndProceed(credits.credits_balance, aiCreateCredits)) {
+        return; // 积分不足，已弹出 pricing 框
+      }
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // 导入启动 AI 处理的函数
+      const { startAIProcessing } = await import('@/features/editor/lib/workspace-api');
+
+      // ★ 调用新的 start-ai-processing 接口 (会扣积分)
+      const result = await startAIProcessing(uploadedSession.sessionId, {
+        task_type: selectedMode,
+        // output_ratio 已移除，后端会使用默认值或自动检测
+        options: scriptText ? { script: scriptText } : undefined,
+      });
+
+      debugLog('[StartAI] AI 处理已启动:', result);
+
+      // ★ 刷新积分显示
+      if (result.credits_consumed > 0) {
+        refetchCredits();
+      }
+
+      // 构建 session 数据并进入处理视图
+      const sessionData: SessionData = {
+        sessionId: uploadedSession.sessionId,
+        projectId: uploadedSession.projectId,
+        assets: uploadedSession.assets,
+        files: selectedFiles,
+      };
+
+      onStart(selectedMode, sessionData, 'file', { files: selectedFiles });
+
+    } catch (err: unknown) {
+      console.error('启动 AI 处理失败:', err);
+      
+      const error = err as { status?: number; message?: string; detail?: { error?: string; message?: string } };
+      debugLog('[handleStartAI] 错误对象:', { status: error.status, message: error.message, detail: error.detail });
+      
+      // 处理 402 积分不足错误
+      if (error.status === 402 || error.detail?.error === 'insufficient_credits') {
+        const { pricingModal } = await import('@/lib/stores/pricing-modal-store');
+        pricingModal.open({
+          triggerReason: 'quota_exceeded',
+          quotaType: 'credits',
+          onSuccess: () => {
+            refetchCredits();
+          },
+        });
+        setIsLoading(false);
+        return;
+      }
+      
+      setError(error.detail?.message || error.message || '启动 AI 处理失败');
       setIsLoading(false);
     }
   };
 
+  // ★ 返回上传步骤
+  const handleBackToUpload = () => {
+    setCurrentStep('upload');
+    setUploadedSession(null);
+    setUploadProgress(0);
+  };
+
   const hasContent = selectedFiles.length > 0 || link.trim().length > 0;
 
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col md:flex-row overflow-hidden animate-in zoom-in-95 duration-200">
-
-        {/* Left Side: Upload (Fixed Width) */}
-        <div className="flex-1 min-w-[360px] flex flex-col border-r border-gray-100 bg-white">
-          <div className="p-6 pb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-gray-900">新建项目</h2>
+  // ★★★ 渲染步骤1: 上传视频 ★★★
+  if (currentStep === 'upload') {
+    return (
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+        <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+          {/* Header */}
+          <div className="p-6 pb-4 flex items-center justify-between border-b border-gray-100">
+            <h2 className="text-lg font-bold text-gray-900">上传视频</h2>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
+            >
+              <X size={20} />
+            </button>
           </div>
 
-          <div className="flex-1 p-6 pt-0 overflow-y-auto space-y-4">
+          {/* Upload Area */}
+          <div className="flex-1 p-6 space-y-4">
             {/* Upload Dropzone */}
             <div
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => !isUploading && fileInputRef.current?.click()}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               className={cn(
-                "relative border-2 border-dashed rounded-xl py-12 flex flex-col items-center justify-center cursor-pointer transition-all duration-200 group",
+                "relative border-2 border-dashed rounded-xl py-12 flex flex-col items-center justify-center transition-all duration-200 group",
+                isUploading ? "pointer-events-none" : "cursor-pointer",
                 isDragging ? "border-gray-900 bg-gray-50" : "border-gray-200 hover:border-gray-400 hover:bg-gray-50",
                 selectedFiles.length > 0 ? "py-6 border-solid border-gray-200 bg-gray-50" : ""
               )}
@@ -428,6 +549,7 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
                 multiple
                 className="hidden"
                 onChange={handleFileSelect}
+                disabled={isUploading}
               />
 
               {selectedFiles.length === 0 ? (
@@ -450,7 +572,7 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
 
             {/* Selected File List */}
             {selectedFiles.length > 0 && (
-              <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
                 {selectedFiles.map((file, index) => (
                   <div key={`${file.name}-${index}`} className="flex items-center p-3 bg-gray-50 rounded-xl border border-gray-100 group hover:border-gray-200 transition-colors">
                     <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center border border-gray-200 flex-shrink-0 text-gray-400">
@@ -460,172 +582,265 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
                       <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
                       <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
                     </div>
-                    <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleMoveFile(index, index - 1); }}
-                        disabled={index === 0}
-                        className="p-1.5 text-gray-400 hover:bg-white hover:shadow-sm rounded-md disabled:opacity-30"
-                      >▲</button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleMoveFile(index, index + 1); }}
-                        disabled={index === selectedFiles.length - 1}
-                        className="p-1.5 text-gray-400 hover:bg-white hover:shadow-sm rounded-md disabled:opacity-30"
-                      >▼</button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors ml-1"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
+                    {!isUploading && (
+                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleMoveFile(index, index - 1); }}
+                          disabled={index === 0}
+                          className="p-1.5 text-gray-400 hover:bg-white hover:shadow-sm rounded-md disabled:opacity-30"
+                        >▲</button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleMoveFile(index, index + 1); }}
+                          disabled={index === selectedFiles.length - 1}
+                          className="p-1.5 text-gray-400 hover:bg-white hover:shadow-sm rounded-md disabled:opacity-30"
+                        >▼</button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
+                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors ml-1"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             )}
-          </div>
-        </div>
 
-        {/* Right Side: AI Settings */}
-        <div className="flex-1 bg-gray-50/50 flex flex-col min-w-[320px]">
-          <div className="p-6 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-gray-900 flex items-center space-x-2">
-              <span className="w-5 h-5 rounded-full bg-black text-white flex items-center justify-center text-xs">AI</span>
-              <span>智能处理选项</span>
-            </h3>
-            <button
-              onClick={onClose}
-              className="w-8 h-8 flex md:hidden items-center justify-center text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
-            >
-              <X size={20} />
-            </button>
-            <button
-              onClick={onClose}
-              className="hidden md:flex w-8 h-8 items-center justify-center text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
-            >
-              <X size={20} />
-            </button>
-          </div>
-
-          <div className="flex-1 p-6 pt-0 overflow-y-auto">
-            <div className={cn("space-y-4 transition-all duration-300", !hasContent ? "opacity-50 pointer-events-none grayscale" : "opacity-100")}>
-
-              <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm space-y-4">
-                <div className="flex items-center space-x-3 pb-3 border-b border-gray-100">
-                  <div className="p-2 bg-black rounded-lg text-white shadow-md">
-                    <Wand2 size={16} />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-bold text-gray-900 text-sm">AI 智能剪辑</h4>
-                    <p className="text-xs text-gray-500 font-medium">自动识别精彩片段、运镜与字幕</p>
-                  </div>
+            {/* Upload Progress */}
+            {isUploading && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-600 font-medium">上传中...</span>
+                  <span className="text-gray-900 font-bold">{uploadProgress}%</span>
                 </div>
-
-                {/* ★ 处理流程由 task_type 控制，无需用户配置 */}
-                {/* ★ 模式选择 */}
-                <div className="space-y-2 py-2">
-                  {/* 选项 1: 智能剪辑 */}
-                  <div
-                    onClick={() => setSelectedMode('ai-create')}
-                    className={cn(
-                      "flex items-center space-x-3 p-3 rounded-xl border transition-all cursor-pointer",
-                      selectedMode === 'ai-create'
-                        ? "bg-black/5 border-black/10 ring-1 ring-black/5"
-                        : "bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50"
-                    )}
-                  >
-                    <div className={cn(
-                      "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-                      selectedMode === 'ai-create' ? "bg-black text-white" : "bg-gray-100 text-gray-400"
-                    )}>
-                      <Wand2 size={14} />
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-xs font-bold text-gray-900">AI 智能剪辑</div>
-                      <div className="text-[10px] text-gray-500">自动识别精彩片段、运镜与字幕</div>
-                    </div>
-                    {selectedMode === 'ai-create' && (
-                      <div className="w-4 h-4 rounded-full bg-black text-white flex items-center justify-center">
-                        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 选项 2: 仅提取字幕 */}
-                  <div
-                    onClick={() => setSelectedMode('voice-extract')}
-                    className={cn(
-                      "flex items-center space-x-3 p-3 rounded-xl border transition-all cursor-pointer",
-                      selectedMode === 'voice-extract'
-                        ? "bg-black/5 border-black/10 ring-1 ring-black/5"
-                        : "bg-white border-gray-100 hover:border-gray-200 hover:bg-gray-50"
-                    )}
-                  >
-                    <div className={cn(
-                      "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-                      selectedMode === 'voice-extract' ? "bg-black text-white" : "bg-gray-100 text-gray-400"
-                    )}>
-                      <Mic size={14} />
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-xs font-bold text-gray-900">仅提取字幕/音频</div>
-                      <div className="text-[10px] text-gray-500">保留完整音频用于口播/vlog创作</div>
-                    </div>
-                    {selectedMode === 'voice-extract' && (
-                      <div className="w-4 h-4 rounded-full bg-black text-white flex items-center justify-center">
-                        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Script Input */}
-                <div className="relative pt-2">
-                  <div className="absolute top-5 left-3 text-gray-400">
-                    <MessageSquare size={14} />
-                  </div>
-                  <textarea
-                    value={scriptText}
-                    onChange={(e) => setScriptText(e.target.value)}
-                    placeholder="[可选] 粘贴原始脚本/文案，AI 将对比实际口播内容..."
-                    rows={3}
-                    className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-9 pr-3 py-2.5 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400 resize-none transition-all"
+                <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
                   />
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Footer Action */}
-          <div className="p-6 border-t border-gray-200 bg-white">
+          {/* Footer */}
+          <div className="p-6 pt-0">
             {error && (
-              <div className="mb-4 p-3 bg-gray-50 border border-gray-200 text-red-600 text-xs rounded-lg flex items-center">
+              <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 text-xs rounded-lg flex items-center">
                 <span className="mr-2">⚠️</span> {error}
               </div>
             )}
 
             <button
-              onClick={handleStart}
-              disabled={!hasContent || isLoading}
+              onClick={handleUpload}
+              disabled={!hasContent || isUploading}
               className={cn(
                 "w-full h-11 text-sm font-bold text-white rounded-xl shadow-lg transition-all flex items-center justify-center",
-                hasContent && !isLoading
+                hasContent && !isUploading
                   ? "bg-black hover:bg-gray-800 hover:scale-[1.02] shadow-gray-200"
                   : "bg-gray-200 cursor-not-allowed text-gray-400"
               )}
             >
-              {isLoading ? '解析中...' : '开始处理'}
-              {!isLoading && <Wand2 size={16} className="ml-2" />}
+              {isUploading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
+                  上传中...
+                </>
+              ) : (
+                <>
+                  <Upload size={16} className="mr-2" />
+                  上传视频
+                </>
+              )}
             </button>
-            <p className="text-center text-[10px] text-gray-400 mt-3">
-              {selectedMode === 'ai-create' ? '预计消耗 15 积分' : '✨ 免费'}
+            
+            <p className="text-[10px] text-gray-400 text-center mt-3">
+              上传视频不消耗积分，AI 处理时消耗
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ★★★ 渲染步骤2: 配置 AI 选项 ★★★
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+        {/* Header with back button */}
+        <div className="p-6 pb-4 flex items-center justify-between border-b border-gray-100">
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={handleBackToUpload}
+              className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <h2 className="text-lg font-bold text-gray-900">配置 AI 处理</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Upload Success Banner */}
+        <div className="px-6 py-3 bg-green-50 border-b border-green-100 flex items-center">
+          <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-3">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-green-800">
+              {selectedFiles.length > 1 
+                ? `${selectedFiles.length} 个视频上传成功` 
+                : selectedFiles[0]?.name || '视频上传成功'}
             </p>
           </div>
         </div>
 
+        {/* AI Settings */}
+        <div className="flex-1 p-6 overflow-y-auto space-y-6">
+          {/* AI 模式选择 */}
+          <div className="space-y-3">
+            <label className="text-sm font-bold text-gray-900">AI 处理模式</label>
+            <div className="space-y-2">
+              {/* 选项 1: 智能剪辑 */}
+              <div
+                onClick={() => setSelectedMode('ai-create')}
+                className={cn(
+                  "flex items-center space-x-3 p-4 rounded-xl border-2 transition-all cursor-pointer",
+                  selectedMode === 'ai-create'
+                    ? "border-black bg-black/5"
+                    : "border-gray-200 hover:border-gray-300"
+                )}
+              >
+                <div className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
+                  selectedMode === 'ai-create' ? "bg-black text-white" : "bg-gray-100 text-gray-400"
+                )}>
+                  <Wand2 size={18} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-bold text-gray-900">AI 智能剪辑</div>
+                  <div className="text-xs text-gray-500">自动识别精彩片段、运镜与字幕</div>
+                </div>
+                <div className="text-xs font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full">
+                  {aiCreateCredits} 积分
+                </div>
+                {selectedMode === 'ai-create' && (
+                  <div className="w-5 h-5 rounded-full bg-black text-white flex items-center justify-center">
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+
+              {/* 选项 2: 仅提取字幕 */}
+              <div
+                onClick={() => setSelectedMode('voice-extract')}
+                className={cn(
+                  "flex items-center space-x-3 p-4 rounded-xl border-2 transition-all cursor-pointer",
+                  selectedMode === 'voice-extract'
+                    ? "border-black bg-black/5"
+                    : "border-gray-200 hover:border-gray-300"
+                )}
+              >
+                <div className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
+                  selectedMode === 'voice-extract' ? "bg-black text-white" : "bg-gray-100 text-gray-400"
+                )}>
+                  <Mic size={18} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-bold text-gray-900">仅提取字幕/音频</div>
+                  <div className="text-xs text-gray-500">保留完整音频用于口播/vlog创作</div>
+                </div>
+                <div className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
+                  免费
+                </div>
+                {selectedMode === 'voice-extract' && (
+                  <div className="w-5 h-5 rounded-full bg-black text-white flex items-center justify-center">
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 脚本输入 (可选) */}
+          <div className="space-y-3">
+            <label className="text-sm font-bold text-gray-900">原始脚本 (可选)</label>
+            <div className="relative">
+              <div className="absolute top-3 left-3 text-gray-400">
+                <MessageSquare size={14} />
+              </div>
+              <textarea
+                value={scriptText}
+                onChange={(e) => setScriptText(e.target.value)}
+                placeholder="粘贴原始脚本/文案，AI 将对比实际口播内容..."
+                rows={3}
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-9 pr-3 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-gray-400 resize-none transition-all"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-6 pt-0 border-t border-gray-100 bg-gray-50/50">
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 text-xs rounded-lg flex items-center">
+              <span className="mr-2">⚠️</span> {error}
+            </div>
+          )}
+
+          <button
+            onClick={handleStartAI}
+            disabled={isLoading}
+            className={cn(
+              "w-full h-12 text-sm font-bold text-white rounded-xl shadow-lg transition-all flex items-center justify-center",
+              !isLoading
+                ? "bg-black hover:bg-gray-800 hover:scale-[1.02] shadow-gray-200"
+                : "bg-gray-400 cursor-not-allowed"
+            )}
+          >
+            {isLoading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
+                处理中...
+              </>
+            ) : selectedMode === 'ai-create' ? (
+              <>
+                <Wand2 size={16} className="mr-2" />
+                开始 AI 智能剪辑 · {aiCreateCredits} 积分
+              </>
+            ) : (
+              <>
+                <Mic size={16} className="mr-2" />
+                开始提取字幕
+              </>
+            )}
+          </button>
+          
+          {/* 积分余额提示 */}
+          {credits && selectedMode === 'ai-create' && (
+            <p className="text-[10px] text-gray-400 text-center mt-3">
+              当前余额: {credits.credits_balance} 积分
+              {credits.credits_balance < aiCreateCredits && (
+                <span className="text-red-500 ml-1">（余额不足）</span>
+              )}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

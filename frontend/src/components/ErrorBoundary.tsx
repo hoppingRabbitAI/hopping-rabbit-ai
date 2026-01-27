@@ -1,6 +1,7 @@
 'use client';
 
 import { Component, ReactNode } from 'react';
+import { toast } from '@/lib/stores/toast-store';
 
 interface Props {
   children: ReactNode;
@@ -209,9 +210,9 @@ class ErrorBoundary extends Component<Props, State> {
                   const logs = localStorage.getItem('error-logs');
                   if (logs) {
                     console.log('Error logs:', JSON.parse(logs));
-                    alert('错误日志已输出到控制台');
+                    toast.info('错误日志已输出到控制台');
                   } else {
-                    alert('暂无错误日志');
+                    toast.info('暂无错误日志');
                   }
                 }}
                 className="text-gray-500 text-xs hover:text-gray-400 underline"

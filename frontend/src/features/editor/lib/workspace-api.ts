@@ -149,7 +149,14 @@ async function request<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    // ★★★ 保留 HTTP 状态码和详细错误信息 ★★★
+    const err = new Error(error.detail?.message || error.detail || `HTTP ${response.status}`) as Error & { 
+      status?: number; 
+      detail?: unknown;
+    };
+    err.status = response.status;
+    err.detail = error.detail;
+    throw err;
   }
 
   return response.json();
@@ -346,6 +353,32 @@ export async function notifyAssetUploaded(
 }
 
 /**
+ * ★ 完成上传，创建基础项目结构 (track + video clips)
+ * 
+ * 上传完成后调用此接口，会：
+ * 1. 创建视频轨道和字幕轨道
+ * 2. 将上传的视频放到时间轴上（创建 video clip）
+ * 3. 此时用户可以在编辑器中预览和编辑
+ * 4. 后续 AI 处理是可选的增值功能
+ */
+export interface FinalizeUploadResponse {
+  status: string;
+  project_id: string;
+  tracks: Array<{ id: string; name?: string; order_index?: number }>;
+  clips: Array<{ id: string; asset_id: string; start_time: number; end_time: number }>;
+  message: string;
+}
+
+export async function finalizeUpload(
+  sessionId: string
+): Promise<FinalizeUploadResponse> {
+  debugLog(`[Finalize] 完成上传，创建基础项目结构: session=${sessionId}`);
+  return request(`/workspace/sessions/${sessionId}/finalize-upload`, {
+    method: 'POST',
+  });
+}
+
+/**
  * 上传多个文件（并行上传，分别报告进度）
  * @param files 文件列表
  * @param assets 后端返回的资源上传信息
@@ -439,6 +472,7 @@ export function pollSessionStatus(
     onProgress: (status: SessionStatusResponse) => void;
     onComplete: (status: SessionStatusResponse) => void;
     onError: (error: Error) => void;
+    onCancel?: () => void;  // ★ 新增：取消回调，与错误分开处理
   },
   intervalMs: number = 2000
 ): () => void {
@@ -462,7 +496,10 @@ export function pollSessionStatus(
       }
 
       if (status.status === 'cancelled') {
-        callbacks.onError(new Error('处理已取消'));
+        // ★ 取消是用户主动操作，调用 onCancel 而不是 onError
+        if (callbacks.onCancel) {
+          callbacks.onCancel();
+        }
         return;
       }
 
@@ -556,4 +593,41 @@ export async function archiveProject(projectId: string): Promise<ProjectRecord> 
     method: 'PATCH',
     body: JSON.stringify({ status: 'archived' }),
   });
+}
+
+// ============================================
+// ★ 渐进式两步流程: 启动 AI 处理 API
+// ============================================
+
+export interface StartAIProcessingRequest {
+  task_type: TaskType;
+  output_ratio?: string;  // 输出比例: "9:16", "16:9", "1:1"
+  template_id?: string;   // 模板 ID
+  options?: Record<string, unknown>;  // 其他 AI 选项
+}
+
+export interface StartAIProcessingResponse {
+  status: string;
+  message: string;
+  credits_consumed: number;
+  credits_remaining: number;
+}
+
+/**
+ * 启动 AI 处理 (步骤2: 检查积分 + 扣除积分 + 开始处理)
+ * 
+ * ★ 渐进式两步流程:
+ * 1. createSession - 创建会话 + 上传视频 (不扣积分)
+ * 2. startAIProcessing - 用户确认配置后启动 AI 处理 (本函数，扣积分)
+ */
+export async function startAIProcessing(
+  sessionId: string,
+  options: StartAIProcessingRequest
+): Promise<StartAIProcessingResponse> {
+  debugLog('[startAIProcessing] 启动 AI 处理:', sessionId, options);
+  
+  return request(`/workspace/sessions/${sessionId}/start-ai-processing`, {
+    method: 'POST',
+    body: JSON.stringify(options),
+  }, true);  // ★ 使用 ensureToken=true 确保 token 有效
 }

@@ -16,6 +16,7 @@ import {
   ArrowRightLeft,
   Sticker,
   ImagePlus,
+  Smile,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { CLIP_TYPE_COLORS, createDefaultClip } from '../types/clip';
@@ -33,14 +34,15 @@ const LIBRARY_TOOLS: LibraryTool[] = [
   { id: 'subtitles', name: 'Subtitles', icon: <Subtitles size={22} />, description: '字幕列表' },
   { id: 'assets', name: 'Assets', icon: <FolderOpen size={22} />, description: '素材库' },
   { id: 'ai-tools', name: 'AI tools', icon: <Sparkles size={22} />, description: '智能剪辑助手' },
+  { id: 'image-adjust', name: 'Adjust', icon: <Palette size={22} />, description: '调节(图片/视频)' },
+  { id: 'beauty', name: 'Beauty', icon: <Smile size={22} />, description: '美颜美体' },
   { id: 'transform', name: 'Transform', icon: <Move size={22} />, description: '变换与动画' },
   { id: 'text', name: 'Text', icon: <Type size={22} />, description: '添加文字' },
   { id: 'audio', name: 'Audio', icon: <Music size={22} />, description: '音频调节' },
   { id: 'speed', name: 'Speed', icon: <Gauge size={22} />, description: '视频变速' },
-  { id: 'brand-kit', name: 'Brand kit', icon: <Palette size={22} />, description: '品牌素材库', disabled: true },
+  { id: 'b-roll', name: 'B-roll', icon: <Film size={22} />, description: 'B-roll 素材库' },
   { id: 'template', name: 'Template', icon: <LayoutTemplate size={22} />, description: '模板库', disabled: true },
   { id: 'upload', name: 'Upload', icon: <Upload size={22} />, description: '上传素材' },
-  { id: 'b-roll', name: 'B-roll', icon: <Film size={22} />, description: 'B-roll 素材', disabled: true },
   { id: 'transition', name: 'Transition', icon: <ArrowRightLeft size={22} />, description: '转场效果', disabled: true },
   { id: 'sticker', name: 'Sticker', icon: <Sticker size={22} />, description: '贴纸表情', disabled: true },
   { id: 'image', name: 'Image', icon: <ImagePlus size={22} />, description: '图片素材', disabled: true },
@@ -154,10 +156,29 @@ export function LibrarySidebar({ onUploadClick }: LibrarySidebarProps) {
       return;
     }
 
+    // B-roll 素材库
+    if (tool.id === 'b-roll') {
+      const newPanel = activeLeftPanel === 'b-roll' ? null : 'b-roll';
+      setActiveLeftPanel(newPanel);
+      return;
+    }
+
     // AI Tools 需要选中视频 clip
     if (tool.id === 'ai-tools') {
       if (!selectedVideoClip) return;
       setActiveSidebarPanel(activeSidebarPanel === 'ai-tools' ? null : 'ai-tools');
+      return;
+    }
+
+    // Image Adjust 调节
+    if (tool.id === 'image-adjust') {
+      setActiveSidebarPanel(activeSidebarPanel === 'image-adjust' ? null : 'image-adjust');
+      return;
+    }
+
+    // Beauty 美颜美体
+    if (tool.id === 'beauty') {
+      setActiveSidebarPanel(activeSidebarPanel === 'beauty' ? null : 'beauty');
       return;
     }
 
@@ -196,6 +217,7 @@ export function LibrarySidebar({ onUploadClick }: LibrarySidebarProps) {
     if (toolId === 'subtitles') return activeLeftPanel === 'subtitles';
     if (toolId === 'assets') return activeLeftPanel === 'assets';
     if (toolId === 'ai-tools') return activeSidebarPanel === 'ai-tools';
+    if (toolId === 'beauty') return activeSidebarPanel === 'beauty';
     if (toolId === 'transform') return activeSidebarPanel === 'transform';
     if (toolId === 'text') return activeSidebarPanel === 'text';
     if (toolId === 'audio') return activeSidebarPanel === 'audio';

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Film, Mic, Volume2, VolumeX, Trash2, RectangleHorizontal, RectangleVertical, Square, ChevronRight } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
+import { toast } from '@/lib/stores/toast-store';
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
@@ -96,7 +97,7 @@ export function ContextMenu() {
         await extractSpeechFromClip(contextMenu.clipId);
       } catch (error) {
         debugError('提取语音文案失败:', error);
-        alert('提取语音文案失败：' + (error instanceof Error ? error.message : '未知错误'));
+        toast.error('提取语音文案失败：' + (error instanceof Error ? error.message : '未知错误'));
       }
     }
   };
@@ -107,7 +108,7 @@ export function ContextMenu() {
     // 检查是否是视频片段
     const clip = clips.find((c) => c.id === contextMenu.clipId);
     if (!clip || clip.clipType !== 'video') {
-      alert('只能对视频片段进行音频提取');
+      toast.warning('只能对视频片段进行音频提取');
       return;
     }
     
@@ -117,7 +118,7 @@ export function ContextMenu() {
       await extractAudio(contextMenu.clipId);
     } catch (error) {
       debugError('音频提取失败:', error);
-      alert('音频提取失败：' + (error instanceof Error ? error.message : '未知错误'));
+      toast.error('音频提取失败：' + (error instanceof Error ? error.message : '未知错误'));
     }
   };
 

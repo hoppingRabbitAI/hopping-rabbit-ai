@@ -6,6 +6,7 @@ import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { X, Download, Film, Check, ChevronDown, ExternalLink } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { exportApi } from '@/lib/api';
+import { toast } from '@/lib/stores/toast-store';
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
@@ -236,7 +237,7 @@ export function ExportDialog({ isOpen, onClose }: ExportDialogProps) {
   
   const handleExport = async () => {
     if (!enableVideoExport || !projectId) {
-      alert('请至少选择一种导出方式');
+      toast.warning('请至少选择一种导出方式');
       return;
     }
     
@@ -268,7 +269,7 @@ export function ExportDialog({ isOpen, onClose }: ExportDialogProps) {
       
     } catch (error) {
       debugError('导出失败:', error);
-      alert(error instanceof Error ? error.message : '导出失败');
+      toast.error(error instanceof Error ? error.message : '导出失败');
       setIsExporting(false);
       setExportProgress(0);
       currentJobIdRef.current = null;

@@ -7,18 +7,18 @@
 ## 当前架构
 
 ```
-VideoCanvasStore.tsx (~1400 行)
+VideoCanvasStore.tsx
 ├── 状态管理: 直接读取 EditorStore（Zustand）
 ├── 核心功能:
 │   ├── 视频渲染 + RAF 播放循环
 │   ├── 时间同步（视频 ↔ 时间轴 ↔ 音频）
 │   ├── Transform 关键帧插值
-│   └── 视频预加载/缓冲
+│   └── HLS 流式播放 + 视频预热
 ├── 覆盖层: TransformOverlay（../TransformOverlay.tsx）
 └── 工具函数:
-    ├── preloadVideoToCache()
-    ├── bufferVideoInBackground()
-    └── subscribeBufferProgress()
+    ├── preheatVideo() - 预热视频资源
+    ├── getPreheatedVideo() - 获取预热的视频
+    └── clearHlsCache() - 清理 HLS 缓存
 ```
 
 ## 核心功能
@@ -36,18 +36,16 @@ VideoCanvasStore.tsx (~1400 行)
 - 关键帧插值计算（position, scale, rotation, opacity）
 - 与 TransformOverlay 配合实现可视化编辑
 
-### 4. 视频缓存
+### 4. 视频预热
 ```ts
-// 预加载视频到缓存
-await preloadVideoToCache(url)
+// 预热视频资源（HLS 流式加载）
+await preheatVideo(assetId)
 
-// 后台缓冲
-bufferVideoInBackground(url, priority)
+// 获取预热的视频元素
+const preheated = getPreheatedVideo(assetId)
 
-// 订阅缓冲进度
-const unsubscribe = subscribeBufferProgress(url, (progress) => {
-  console.log(`缓冲进度: ${progress}%`)
-})
+// 清理 HLS 缓存（切换项目时）
+clearHlsCache()
 ```
 
 ## 使用方式
@@ -61,24 +59,6 @@ function EditorPage() {
 ```
 
 组件内部自动连接 EditorStore，无需传递 props。
-
-## 未来重构方向
-
-如需提升可测试性和复用性，可拆分为以下层次：
-
-```
-VideoCanvas（组合层）
-├── CanvasProvider（状态层 - Context）
-│   └── CanvasCore（核心渲染层）
-│       ├── Controls/（控制组件）
-│       │   ├── PlaybackControls
-│       │   ├── ProgressBar
-│       │   └── ZoomControls
-│       └── Overlays/（覆盖层）
-│           ├── TransformOverlay
-│           ├── SubtitleOverlay
-│           └── AnnotationOverlay
-```
 
 **拆分原则：**
 1. **Props 驱动** - 组件通过 props 接收数据，不直接依赖 Store

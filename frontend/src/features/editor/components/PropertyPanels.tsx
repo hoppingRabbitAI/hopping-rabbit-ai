@@ -8,6 +8,7 @@ import { AudioPanel } from './AudioPanel';
 import { AIToolsPanel } from './AIToolsPanel';
 import { SpeedPanel } from './SpeedPanel';
 import { ImageAdjustPanel } from './ImageAdjustPanel';
+import { BeautyPanel } from './BeautyPanel';
 
 export function PropertyPanels() {
   const activeSidebarPanel = useEditorStore((s) => s.activeSidebarPanel);
@@ -74,6 +75,11 @@ export function PropertyPanels() {
       {/* 图片调节面板 */}
       {activeSidebarPanel === 'image-adjust' && (
         <ImageAdjustPanel onClose={closePanel} />
+      )}
+
+      {/* 美颜美体面板 */}
+      {activeSidebarPanel === 'beauty' && (
+        <BeautyPanel onClose={closePanel} />
       )}
     </div>
   );

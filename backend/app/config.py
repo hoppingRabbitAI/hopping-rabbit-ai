@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # 本地开发可用 ngrok 等工具暴露
     callback_base_url: str = ""  # 例如: https://api.hoppingrabbit.ai
     
+    # Stripe 配置
+    stripe_secret_key: str = ""  # sk_test_xxx 或 sk_live_xxx
+    stripe_webhook_secret: str = ""  # whsec_xxx
+    stripe_success_url: str = "http://localhost:3000/settings?tab=billing&topup=success"
+    stripe_cancel_url: str = "http://localhost:3000/settings?tab=billing&topup=cancelled"
+    
     # CORS
     cors_origins: list[str] = [
         "http://localhost:3000",

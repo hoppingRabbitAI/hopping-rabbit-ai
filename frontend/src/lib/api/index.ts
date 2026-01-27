@@ -28,3 +28,4 @@ export { clipsApi, ClipsApi } from './clips';
 export { taskApi, TaskApi, transcribeVideo } from './tasks';
 export { exportApi, ExportApi, exportVideo } from './export';
 export { smartApi, SmartApi } from './smart';
+export { brollApi, BRollApi } from './broll';

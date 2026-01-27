@@ -57,7 +57,7 @@ export interface WaveformData {
 
 export interface SaveStateResponse {
   success: boolean;
-  new_version: number;
+  version: number;
   saved_at: string;
 }
 

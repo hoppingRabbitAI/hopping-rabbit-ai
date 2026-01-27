@@ -1,7 +1,7 @@
 'use client';
 
 import { useCredits } from '@/lib/hooks/useCredits';
-import { Gem, Zap, TrendingUp, AlertCircle, ChevronRight } from 'lucide-react';
+import { Gem, Zap, TrendingUp, ChevronRight, AlertCircle } from 'lucide-react';
 
 /**
  * 积分显示组件
@@ -43,12 +43,6 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
   }
 
   // 完整模式 - 用于设置页面 (白灰风格)
-  const usagePercent = credits.monthly_credits_limit > 0
-    ? Math.round((credits.monthly_credits_used / credits.monthly_credits_limit) * 100)
-    : 0;
-
-  const monthlyRemaining = credits.monthly_credits_limit - credits.monthly_credits_used;
-
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
       {/* 标题行 */}
@@ -78,44 +72,24 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
         <span className="text-gray-500 mb-1">积分</span>
       </div>
 
-      {/* 进度条 */}
-      <div className="mb-4">
-        <div className="flex justify-between text-sm mb-1">
-          <span className="text-gray-500">本月已用</span>
-          <span className="text-gray-700">
-            {credits.monthly_credits_used.toLocaleString()} / {credits.monthly_credits_limit.toLocaleString()}
-          </span>
-        </div>
-        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-          <div
-            className={`h-full transition-all duration-500 rounded-full ${
-              usagePercent > 90 ? 'bg-red-500' :
-              usagePercent > 70 ? 'bg-yellow-500' :
-              'bg-purple-500'
-            }`}
-            style={{ width: `${Math.min(usagePercent, 100)}%` }}
-          />
-        </div>
-      </div>
-
-      {/* 详细信息 */}
+      {/* 积分统计 */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
             <Zap className="w-3.5 h-3.5 text-yellow-500" />
-            <span className="text-xs text-gray-500">月度剩余</span>
+            <span className="text-xs text-gray-500">累计获得</span>
           </div>
           <span className="text-lg font-semibold text-gray-900">
-            {monthlyRemaining.toLocaleString()}
+            {(credits.credits_total_granted || 0).toLocaleString()}
           </span>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
             <TrendingUp className="w-3.5 h-3.5 text-green-500" />
-            <span className="text-xs text-gray-500">充值积分</span>
+            <span className="text-xs text-gray-500">累计消耗</span>
           </div>
           <span className="text-lg font-semibold text-gray-900">
-            {credits.paid_credits.toLocaleString()}
+            {(credits.credits_total_consumed || 0).toLocaleString()}
           </span>
         </div>
       </div>

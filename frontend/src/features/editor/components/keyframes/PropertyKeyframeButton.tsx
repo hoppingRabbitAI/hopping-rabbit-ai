@@ -114,8 +114,8 @@ export function CompoundKeyframeControls({
         disabled={isDisabled}
         className={`px-2 py-1 text-[10px] font-medium rounded flex items-center gap-1 transition-colors
           ${isDisabled 
-            ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-            : 'bg-green-600/80 text-white hover:bg-green-500'}`}
+            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+            : 'bg-gray-700 text-white hover:bg-gray-600'}`}
         title={`添加${config?.label || property}关键帧`}
       >
         <Plus size={10} />
@@ -129,8 +129,8 @@ export function CompoundKeyframeControls({
         disabled={isDisabled || !hasKeyframeAtCurrent}
         className={`px-2 py-1 text-[10px] font-medium rounded flex items-center gap-1 transition-colors
           ${isDisabled || !hasKeyframeAtCurrent 
-            ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-            : 'bg-red-600/80 text-white hover:bg-red-500'}`}
+            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
         title={!hasKeyframeAtCurrent ? '当前位置没有关键帧' : `删除${config?.label || property}关键帧`}
       >
         <Minus size={10} />
@@ -139,7 +139,7 @@ export function CompoundKeyframeControls({
 
       {/* 关键帧计数 */}
       {count > 0 && (
-        <span className="text-[10px] text-blue-500 flex items-center gap-0.5 ml-1">
+        <span className="text-[10px] text-gray-500 flex items-center gap-0.5 ml-1">
           <Diamond size={8} className="fill-current" />
           {count}
         </span>
@@ -287,8 +287,8 @@ export function KeyframeAddDeleteButtons({
         disabled={isDisabled}
         className={`px-2 py-1 text-[10px] font-medium rounded flex items-center gap-1 transition-colors
           ${isDisabled 
-            ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-            : 'bg-green-600/80 text-white hover:bg-green-500'}`}
+            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+            : 'bg-gray-700 text-white hover:bg-gray-600'}`}
         title={`添加关键帧 (${config?.label || property})`}
       >
         <Plus size={10} />
@@ -302,8 +302,8 @@ export function KeyframeAddDeleteButtons({
         disabled={isDisabled || !hasKeyframeAtCurrent}
         className={`px-2 py-1 text-[10px] font-medium rounded flex items-center gap-1 transition-colors
           ${isDisabled || !hasKeyframeAtCurrent 
-            ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-            : 'bg-red-600/80 text-white hover:bg-red-500'}`}
+            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
         title={!hasKeyframeAtCurrent ? '当前位置没有关键帧' : `删除关键帧 (${config?.label || property})`}
       >
         <Minus size={10} />
@@ -312,7 +312,7 @@ export function KeyframeAddDeleteButtons({
 
       {/* 关键帧计数 */}
       {count > 0 && (
-        <span className="text-[10px] text-blue-500 flex items-center gap-0.5 ml-1">
+        <span className="text-[10px] text-gray-500 flex items-center gap-0.5 ml-1">
           <Diamond size={8} className="fill-current" />
           {count}
         </span>

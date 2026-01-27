@@ -46,27 +46,38 @@ import {
   createFaceSwapTask,
   pollTaskStatus,
 } from '@/features/editor/lib/rabbit-hole-api';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from '@/lib/supabase/session';
+import { authFetch } from '@/lib/supabase/session';
 
-// Supabase client for realtime
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// 使用单例 Supabase 客户端（仅用于 Realtime 订阅）
+const supabase = getSupabaseClient();
 
-// 辅助函数：上传文件并获取公开 URL
+// 辅助函数：通过后端 API 上传文件
 async function uploadAndGetUrl(file: File, prefix: string): Promise<string> {
-  const timestamp = Date.now();
-  const ext = file.name.split('.').pop() || 'bin';
-  const path = `rabbit-hole/${prefix}/${timestamp}.${ext}`;
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('prefix', `rabbit-hole/${prefix}`);
   
-  const { error } = await supabase.storage
-    .from('ai-creations')
-    .upload(path, file, { upsert: true });
+  // 根据文件类型选择上传端点
+  let endpoint = '/api/upload/image';
+  if (file.type.startsWith('video/')) {
+    endpoint = '/api/upload/video';
+  } else if (file.type.startsWith('audio/')) {
+    endpoint = '/api/upload/audio';
+  }
   
-  if (error) throw new Error(`上传失败: ${error.message}`);
+  const response = await authFetch(endpoint, {
+    method: 'POST',
+    body: formData,
+  });
   
-  const { data } = supabase.storage.from('ai-creations').getPublicUrl(path);
-  return data.publicUrl;
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || '上传失败');
+  }
+  
+  const data = await response.json();
+  return data.url;
 }
 
 // ============================================
@@ -291,11 +302,6 @@ function FeatureDetail({ feature, onBack }: FeatureDetailProps) {
 
   // 上传文件并获取 URL（自动转换非标准图片格式为 JPEG）
   const uploadFileAndGetUrl = async (file: File, prefix: string): Promise<string> => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-    
-    const timestamp = Date.now();
     let uploadFile: File | Blob = file;
     let ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
     
@@ -316,16 +322,31 @@ function FeatureDetail({ feature, onBack }: FeatureDetailProps) {
       }
     }
     
-    const path = `rabbit-hole/${prefix}/${timestamp}.${ext}`;
+    // 通过后端 API 上传
+    const formData = new FormData();
+    formData.append('file', uploadFile, `file.${ext}`);
+    formData.append('prefix', `rabbit-hole/${prefix}`);
     
-    const { error } = await supabase.storage
-      .from('ai-creations')
-      .upload(path, uploadFile, { upsert: true });
+    // 根据文件类型选择上传端点
+    let endpoint = '/api/upload/image';
+    if (file.type.startsWith('video/')) {
+      endpoint = '/api/upload/video';
+    } else if (file.type.startsWith('audio/')) {
+      endpoint = '/api/upload/audio';
+    }
     
-    if (error) throw new Error(`上传失败: ${error.message}`);
+    const response = await authFetch(endpoint, {
+      method: 'POST',
+      body: formData,
+    });
     
-    const { data } = supabase.storage.from('ai-creations').getPublicUrl(path);
-    return data.publicUrl;
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || '上传失败');
+    }
+    
+    const data = await response.json();
+    return data.url;
   };
 
   // 生成处理

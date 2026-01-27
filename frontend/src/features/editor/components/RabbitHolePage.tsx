@@ -21,7 +21,7 @@ import {
   Download,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from '@/lib/supabase/session';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { 
   createLipSyncTask, 
@@ -29,11 +29,10 @@ import {
   AITaskStatus,
   AITaskResponse 
 } from '@/features/editor/lib/rabbit-hole-api';
+import { toast } from '@/lib/stores/toast-store';
 
-// Supabase 客户端（用于 Realtime 订阅）
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// 使用单例 Supabase 客户端（用于 Realtime 订阅）
+const supabase = getSupabaseClient();
 
 // 调试开关
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
@@ -159,7 +158,7 @@ export function RabbitHolePage() {
 
     // 验证文件类型
     if (!file.type.startsWith('video/')) {
-      alert('请上传视频文件');
+      toast.warning('请上传视频文件');
       return;
     }
 
@@ -182,7 +181,7 @@ export function RabbitHolePage() {
 
     // 验证文件类型
     if (!file.type.startsWith('audio/')) {
-      alert('请上传音频文件');
+      toast.warning('请上传音频文件');
       return;
     }
 
@@ -201,7 +200,7 @@ export function RabbitHolePage() {
   // 提交任务
   const handleSubmit = useCallback(async () => {
     if (!videoFile || !audioFile) {
-      alert('请先上传视频和音频文件');
+      toast.warning('请先上传视频和音频文件');
       return;
     }
 
@@ -244,7 +243,7 @@ export function RabbitHolePage() {
       }
     } catch (error) {
       debugLog('提交任务失败:', error);
-      alert(error instanceof Error ? error.message : '提交任务失败');
+      toast.error(error instanceof Error ? error.message : '提交任务失败');
     } finally {
       setUploading(false);
       setUploadProgress(0);
