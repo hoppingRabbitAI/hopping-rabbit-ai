@@ -6,7 +6,7 @@ HoppingRabbit AI - 工作台 API
 import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
-from typing import Optional, Literal, List
+from typing import Optional, Literal, List, Dict, Any
 from datetime import datetime
 from uuid import uuid4
 from enum import Enum
@@ -766,6 +766,253 @@ async def cancel_session(session_id: str):
 
 
 # ============================================
+# ★ 工作流步骤管理 API
+# ============================================
+
+class UpdateWorkflowStepRequest(BaseModel):
+    """更新工作流步骤请求"""
+    workflow_step: str  # entry, upload, processing, defiller, broll_config
+    entry_mode: Optional[str] = None  # ai-talk, refine
+
+
+@router.put("/sessions/{session_id}/workflow-step")
+async def update_workflow_step(
+    session_id: str,
+    request: UpdateWorkflowStepRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    更新会话的工作流步骤状态
+    
+    用于前端保存用户当前所在的工作流步骤，支持断点恢复。
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # 验证会话归属
+        session = supabase.table("workspace_sessions").select("user_id").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        if session.data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 更新工作流步骤
+        update_data = {
+            "current_step": request.workflow_step,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        
+        # 如果提供了 entry_mode，存储到 processing_steps JSONB 字段
+        if request.entry_mode:
+            update_data["processing_steps"] = {"entry_mode": request.entry_mode, "workflow_step": request.workflow_step}
+        
+        supabase.table("workspace_sessions").update(update_data).eq("id", session_id).execute()
+        
+        logger.info(f"[Workflow] 更新工作流步骤: session={session_id}, step={request.workflow_step}, mode={request.entry_mode}")
+        
+        return {"status": "ok", "workflow_step": request.workflow_step}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Workflow] 更新工作流步骤失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sessions/{session_id}/workflow-step")
+async def get_workflow_step(
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    获取会话的工作流步骤状态
+    
+    用于前端恢复到用户上次离开的工作流步骤。
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        if session.data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        data = session.data
+        processing_steps = data.get("processing_steps") or {}
+        
+        return {
+            "session_id": session_id,
+            "project_id": data.get("project_id"),
+            "workflow_step": processing_steps.get("workflow_step") or data.get("current_step") or "upload",
+            "entry_mode": processing_steps.get("entry_mode") or "refine",
+            "status": data.get("status"),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Workflow] 获取工作流步骤失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sessions/by-project/{project_id}/workflow-step")
+async def get_workflow_step_by_project(
+    project_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    通过项目 ID 获取会话的工作流步骤状态
+    
+    用于从项目列表点击时检查是否有未完成的工作流。
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # 通过 project_id 查找最新的会话
+        session = supabase.table("workspace_sessions")\
+            .select("*")\
+            .eq("project_id", project_id)\
+            .eq("user_id", user_id)\
+            .order("created_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if not session.data or len(session.data) == 0:
+            raise HTTPException(status_code=404, detail="未找到相关会话")
+        
+        data = session.data[0]
+        processing_steps = data.get("processing_steps") or {}
+        
+        return {
+            "session_id": data.get("id"),
+            "project_id": data.get("project_id"),
+            "workflow_step": processing_steps.get("workflow_step") or data.get("current_step") or "upload",
+            "entry_mode": processing_steps.get("entry_mode") or "refine",
+            "status": data.get("status"),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Workflow] 通过项目获取工作流步骤失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★ 保存工作流配置（B-Roll, PiP 等）
+# ============================================
+
+class WorkflowConfigRequest(BaseModel):
+    """工作流配置请求"""
+    pip_enabled: bool = False                   # 是否启用挂角人像
+    pip_position: Optional[str] = "bottom-right"  # 人像位置: bottom-right, bottom-left, top-right, top-left
+    pip_size: Optional[str] = "medium"          # 人像大小: small, medium, large
+    broll_enabled: bool = False                 # 是否启用 B-Roll
+    broll_selections: Optional[List[dict]] = None  # B-Roll 选择 [{clip_id, selected_asset_id}]
+    background_preset: Optional[str] = None     # 背景预设 ID
+
+
+@router.post("/sessions/{session_id}/workflow-config")
+async def save_workflow_config(
+    session_id: str,
+    request: WorkflowConfigRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    保存工作流配置（B-Roll, PiP 等）
+    
+    ★ 这些配置将在编辑器加载时使用，自动应用到画布上
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # 验证会话归属
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        if session.data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 更新 processing_steps JSONB 字段，保留已有配置
+        existing_steps = session.data.get("processing_steps") or {}
+        existing_steps.update({
+            "pip_enabled": request.pip_enabled,
+            "pip_position": request.pip_position,
+            "pip_size": request.pip_size,
+            "broll_enabled": request.broll_enabled,
+            "broll_selections": request.broll_selections or [],
+            "background_preset": request.background_preset,
+            "config_saved_at": datetime.utcnow().isoformat(),
+        })
+        
+        supabase.table("workspace_sessions").update({
+            "processing_steps": existing_steps,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq("id", session_id).execute()
+        
+        logger.info(f"[Workflow] 保存工作流配置: session={session_id}, pip={request.pip_enabled}, broll={request.broll_enabled}")
+        
+        return {
+            "status": "ok",
+            "message": "配置已保存",
+            "config": {
+                "pip_enabled": request.pip_enabled,
+                "broll_enabled": request.broll_enabled,
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Workflow] 保存工作流配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sessions/{session_id}/workflow-config")
+async def get_workflow_config(
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    获取工作流配置
+    
+    ★ 编辑器加载时调用，读取 PiP 和 B-Roll 配置
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        if session.data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        processing_steps = session.data.get("processing_steps") or {}
+        
+        return {
+            "session_id": session_id,
+            "project_id": session.data.get("project_id"),
+            "pip_enabled": processing_steps.get("pip_enabled", False),
+            "pip_position": processing_steps.get("pip_position", "bottom-right"),
+            "pip_size": processing_steps.get("pip_size", "medium"),
+            "broll_enabled": processing_steps.get("broll_enabled", False),
+            "broll_selections": processing_steps.get("broll_selections", []),
+            "background_preset": processing_steps.get("background_preset"),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Workflow] 获取工作流配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
 # ★ 渐进式两步流程: 启动 AI 处理 (步骤2)
 # ============================================
 
@@ -957,6 +1204,705 @@ async def start_ai_processing(
         import traceback
         logger.error(f"[AI Processing] ❌ 启动失败: {e}")
         logger.error(f"[AI Processing] ❌ 完整堆栈:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★ 口播视频精修: 口癖/废话检测 (Defiller)
+# ============================================
+
+class FillerWord(BaseModel):
+    """口癖词汇"""
+    word: str                      # 口癖词汇（如"嗯..."、"那个"）
+    count: int                     # 出现次数
+    total_duration_ms: int         # 总时长（毫秒）
+    occurrences: List[dict]        # 出现位置 [{"start": ms, "end": ms, "clip_id": str}]
+
+
+class DetectFillersRequest(BaseModel):
+    """口癖检测请求"""
+    detect_fillers: bool = True      # 识别口癖（嗯、啊、那个 + 重复词 + 卡顿）
+    detect_breaths: bool = True      # 识别换气（长时间停顿）
+
+
+class DetectFillersResponse(BaseModel):
+    """口癖检测响应"""
+    status: str
+    session_id: str
+    project_id: str
+    filler_words: List[FillerWord]           # 检测到的口癖词汇
+    silence_segments: List[dict]             # 静音片段列表（含 silence_info）
+    transcript_segments: List[dict]          # 完整转写结果
+    total_filler_duration_ms: int            # 废话总时长
+    original_duration_ms: int                # 原视频时长
+    estimated_savings_percent: float         # 预计节省百分比
+
+
+@router.post("/sessions/{session_id}/detect-fillers", response_model=DetectFillersResponse)
+async def detect_fillers(
+    session_id: str,
+    request: DetectFillersRequest = None,
+    background_tasks: BackgroundTasks = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    口癖/废话检测 (口播视频精修模式)
+    
+    ★ 复用现有 ASR + 静音检测逻辑，不执行 keyframe 分析
+    ★ 返回废话片段供前端 DefillerModal 使用
+    ★ 根据配置选项控制检测内容
+    
+    流程:
+    1. 获取会话关联的视频资源
+    2. 执行 ASR 转写（含静音检测）
+    3. 分析口癖词汇（嗯、啊、那个、就是等）
+    4. 返回结构化的废话数据
+    """
+    try:
+        user_id = current_user["user_id"]
+        now = datetime.utcnow().isoformat()
+        
+        # ★ 获取配置选项（如果没有传入，使用默认值）
+        if request is None:
+            request = DetectFillersRequest()
+        
+        detect_fillers_enabled = request.detect_fillers  # 口癖+重复词+卡顿
+        detect_breaths_enabled = request.detect_breaths   # 换气
+        
+        logger.info(f"[Defiller] 配置: fillers={detect_fillers_enabled}, breaths={detect_breaths_enabled}")
+        
+        # 1. 获取会话信息
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        session_data = session.data
+        project_id = session_data.get("project_id")
+        
+        # 校验会话归属
+        if session_data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 2. 获取关联的 assets
+        asset_ids = session_data.get("uploaded_asset_ids", [])
+        if not asset_ids:
+            single_asset_id = session_data.get("uploaded_asset_id")
+            if single_asset_id:
+                asset_ids = [single_asset_id]
+        
+        if not asset_ids:
+            raise HTTPException(status_code=400, detail="会话未关联任何资源")
+        
+        assets_result = supabase.table("assets").select("*").in_("id", asset_ids).execute()
+        assets = assets_result.data or []
+        
+        if not assets:
+            raise HTTPException(status_code=400, detail="未找到资源文件")
+        
+        # 3. 执行 ASR 转写（复用 _run_asr 函数，正确处理 Cloudflare HLS）
+        from ..services.supabase_client import get_file_url
+        
+        all_segments = []
+        total_duration_ms = 0
+        
+        # 进度回调（detect-fillers 无需实时进度，使用空函数）
+        def dummy_progress(step: str, progress: int):
+            logger.debug(f"[Defiller] Progress: {step} = {progress}%")
+        
+        for asset in assets:
+            # ★ assets 表用 storage_path 存储相对路径，需要生成签名 URL
+            storage_path = asset.get("storage_path")
+            if not storage_path:
+                logger.warning(f"[Defiller] ⚠️ Asset {asset['id']} 没有 storage_path，跳过")
+                continue
+            
+            # 使用 get_file_url 获取签名 URL (bucket 是 "clips")
+            try:
+                file_url = get_file_url("clips", storage_path, expires_in=3600)
+                if not file_url:
+                    logger.warning(f"[Defiller] ⚠️ 无法获取签名 URL: {storage_path}")
+                    continue
+            except Exception as url_err:
+                logger.warning(f"[Defiller] ⚠️ 获取签名 URL 失败: {url_err}")
+                continue
+            
+            asset_duration = float(asset.get("duration") or 0)
+            total_duration_ms += int(asset_duration * 1000)
+            
+            logger.info(f"[Defiller] 开始转写: {file_url[:80]}...")
+            
+            # ★★★ 复用 _run_asr 函数，关闭 DDC 以保留语气词 ★★★
+            # enable_ddc=False: 不启用语义顺滑，保留"嗯"、"啊"等原始语气词
+            segments = await _run_asr(
+                file_url=file_url,
+                update_progress=dummy_progress,
+                current_progress=0,
+                step_progress=100,
+                asset_id=asset["id"],
+                video_duration_sec=asset_duration,
+                enable_ddc=False  # ★ 口癖检测需要保留原始语气词
+            )
+            
+            # 为每个 segment 添加 asset_id
+            for seg in segments:
+                seg["asset_id"] = asset["id"]
+            
+            all_segments.extend(segments)
+            logger.info(f"[Defiller] 转写完成: {len(segments)} 个片段")
+        
+        # 4. ★ 使用智能口癖检测服务
+        from ..services.filler_detector import detect_all_fillers, FillerType
+        
+        filler_words_map = {}  # word -> {count, total_duration_ms, occurrences}
+        silence_segments = []
+        
+        logger.info(f"[Defiller] 🤖 开始智能口癖检测: {len(all_segments)} 个片段")
+        
+        # 直接使用 ASR 结果，无需额外下载
+        # - 静音片段：从 ASR 结果的 silence_info 提取（transcribe.py 已分类）
+        # - 语义分析：LLM 分析文本
+        analysis_result = await detect_all_fillers(
+            segments=all_segments,  # 包含静音和文本片段
+            detect_silences=detect_breaths_enabled,
+            detect_semantics=detect_fillers_enabled,
+        )
+        
+        logger.info(f"[Defiller] 🤖 检测完成: {len(analysis_result.detections)} 个问题")
+        logger.info(f"[Defiller] 🤖 分类: {analysis_result.filler_count_by_type}")
+        
+        # 将检测结果转换为 filler_words_map 格式
+        for detection in analysis_result.detections:
+            # 根据类型生成显示名称
+            type_names = {
+                FillerType.BREATH: "[换气]",
+                FillerType.HESITATION: "[卡顿]",
+                FillerType.DEAD_AIR: "[死寂]",
+                FillerType.FILLER_WORD: detection.text or "[口癖词]",
+                FillerType.REPEAT_WORD: f"[重复] {detection.text}",
+                FillerType.NG_TAKE: "[NG片段]",
+            }
+            filler_type = type_names.get(detection.filler_type, detection.text)
+            
+            duration_ms = detection.duration_ms
+            
+            if filler_type not in filler_words_map:
+                filler_words_map[filler_type] = {"count": 0, "total_duration_ms": 0, "occurrences": []}
+            
+            filler_words_map[filler_type]["count"] += 1
+            filler_words_map[filler_type]["total_duration_ms"] += duration_ms
+            filler_words_map[filler_type]["occurrences"].append({
+                "start": detection.start,
+                "end": detection.end,
+                "asset_id": detection.asset_id,
+                "text": detection.text,
+                "reason": detection.reason,
+                "confidence": detection.confidence,
+                "segment_id": detection.segment_id,
+            })
+            
+            # 如果是静音类型，添加到 silence_segments
+            if detection.filler_type in (FillerType.BREATH, FillerType.HESITATION, FillerType.DEAD_AIR):
+                silence_segments.append({
+                    "id": detection.segment_id,
+                    "text": "",
+                    "start": detection.start,
+                    "end": detection.end,
+                    "asset_id": detection.asset_id,
+                    "silence_info": {
+                        "classification": detection.filler_type.value,
+                        "duration_ms": duration_ms,
+                        "reason": detection.reason,
+                    }
+                })
+        
+        # 5. 构建响应
+        filler_words = [
+            FillerWord(
+                word=word,
+                count=data["count"],
+                total_duration_ms=data["total_duration_ms"],
+                occurrences=data["occurrences"]
+            )
+            for word, data in sorted(filler_words_map.items(), key=lambda x: -x[1]["count"])
+        ]
+        
+        total_filler_duration = sum(f.total_duration_ms for f in filler_words)
+        savings_percent = (total_filler_duration / total_duration_ms * 100) if total_duration_ms > 0 else 0
+        
+        logger.info(f"[Defiller] ✅ 检测完成: {len(filler_words)} 类口癖, 总时长 {total_filler_duration}ms")
+        logger.info(f"[Defiller]    预计节省 {savings_percent:.1f}%")
+        
+        return DetectFillersResponse(
+            status="completed",
+            session_id=session_id,
+            project_id=project_id,
+            filler_words=filler_words,
+            silence_segments=silence_segments,
+            transcript_segments=all_segments,
+            total_filler_duration_ms=total_filler_duration,
+            original_duration_ms=total_duration_ms,
+            estimated_savings_percent=round(savings_percent, 1),
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"[Defiller] ❌ 检测失败: {e}")
+        logger.error(f"[Defiller] ❌ 完整堆栈:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★ 口播视频精修: 应用修剪 (Apply Trimming)
+# ============================================
+
+class TrimSegment(BaseModel):
+    """需要删除的片段"""
+    start: int                # 开始时间（毫秒）
+    end: int                  # 结束时间（毫秒）
+    asset_id: Optional[str] = None  # 所属资源 ID
+    reason: Optional[str] = None    # 删除原因（如 "filler_word:嗯"）
+
+
+class ApplyTrimmingRequest(BaseModel):
+    """应用修剪请求"""
+    removed_fillers: List[str]        # 用户选择删除的口癖词汇
+    trim_segments: Optional[List[TrimSegment]] = None  # 可选：具体要删除的片段
+    create_clips_from_segments: bool = True  # 是否根据保留片段创建 clips
+
+
+class ApplyTrimmingResponse(BaseModel):
+    """应用修剪响应"""
+    status: str
+    session_id: str
+    project_id: str
+    clips_created: int                # 创建的 clip 数量
+    total_duration_ms: int            # 修剪后的总时长
+    removed_duration_ms: int          # 被删除的时长
+    clips: List[dict]                 # 创建的 clips 列表
+
+
+@router.post("/sessions/{session_id}/apply-trimming", response_model=ApplyTrimmingResponse)
+async def apply_trimming(
+    session_id: str,
+    request: ApplyTrimmingRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    应用口癖修剪 (口播视频精修模式)
+    
+    ★ 根据用户在 DefillerModal 中的选择，执行实际的修剪操作
+    ★ 创建新的 clips 并更新 project
+    
+    流程:
+    1. 获取会话关联的视频资源和转写结果
+    2. 根据选中的口癖词汇过滤出需要删除的片段
+    3. 计算保留片段并创建 clips
+    4. 更新数据库
+    """
+    try:
+        user_id = current_user["user_id"]
+        now = datetime.utcnow().isoformat()
+        
+        # 1. 获取会话信息
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        session_data = session.data
+        project_id = session_data.get("project_id")
+        
+        # 校验会话归属
+        if session_data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 2. 获取关联的 assets
+        asset_ids = session_data.get("uploaded_asset_ids", [])
+        if not asset_ids:
+            single_asset_id = session_data.get("uploaded_asset_id")
+            if single_asset_id:
+                asset_ids = [single_asset_id]
+        
+        if not asset_ids:
+            raise HTTPException(status_code=400, detail="会话未关联任何资源")
+        
+        assets_result = supabase.table("assets").select("*").in_("id", asset_ids).execute()
+        assets = assets_result.data or []
+        
+        if not assets:
+            raise HTTPException(status_code=400, detail="未找到资源文件")
+        
+        # 3. 获取已有的转写结果（从 clips 或 transcripts 表）
+        # 先检查是否已执行过 detect-fillers (clips 表没有 project_id，用 asset_id 查询)
+        existing_clips = supabase.table("clips").select("*").in_("asset_id", asset_ids).execute()
+        existing_clips_data = existing_clips.data or []
+        
+        # 如果有 trim_segments，直接使用；否则需要重新分析
+        trim_segments = request.trim_segments or []
+        removed_fillers = set(request.removed_fillers)
+        
+        logger.info(f"[ApplyTrimming] 开始修剪: session={session_id}, project={project_id}")
+        logger.info(f"[ApplyTrimming] 删除的口癖: {removed_fillers}")
+        
+        # 4. 如果没有提供具体的 trim_segments，需要重新执行 ASR 分析
+        if not trim_segments:
+            from ..tasks.transcribe import transcribe_audio
+            
+            all_segments = []
+            total_duration_ms = 0
+            
+            for asset in assets:
+                file_url = asset.get("file_url") or asset.get("url")
+                if not file_url:
+                    continue
+                
+                asset_duration = int((asset.get("duration") or 0) * 1000)
+                total_duration_ms += asset_duration
+                
+                # 使用缓存的转写结果（如果有）
+                cached_transcript = asset.get("metadata", {}).get("transcript_segments")
+                if cached_transcript:
+                    segments = cached_transcript
+                else:
+                    result = await transcribe_audio(
+                        audio_url=file_url,
+                        language="zh",
+                    )
+                    segments = result.get("segments", [])
+                
+                for seg in segments:
+                    seg["asset_id"] = asset["id"]
+                all_segments.extend(segments)
+            
+            # 根据 removed_fillers 标记需要删除的片段
+            FILLER_PATTERNS = list(removed_fillers)
+            
+            for seg in all_segments:
+                silence_info = seg.get("silence_info")
+                text = seg.get("text", "").strip()
+                should_remove = False
+                reason = None
+                
+                # 检查静音片段
+                if silence_info:
+                    classification = silence_info.get("classification")
+                    filler_type = f"[{classification}]"
+                    if filler_type in removed_fillers:
+                        should_remove = True
+                        reason = f"silence:{classification}"
+                
+                # 检查文本中的口癖词汇
+                if text and not should_remove:
+                    for pattern in FILLER_PATTERNS:
+                        if pattern in text and not pattern.startswith("["):
+                            should_remove = True
+                            reason = f"filler_word:{pattern}"
+                            break
+                
+                if should_remove:
+                    trim_segments.append(TrimSegment(
+                        start=int(seg.get("start", 0)),
+                        end=int(seg.get("end", 0)),
+                        asset_id=seg.get("asset_id"),
+                        reason=reason,
+                    ))
+        
+        # 5. 计算保留片段并创建 clips
+        # 按 asset 分组处理
+        asset_segments: dict = {}
+        for asset in assets:
+            asset_segments[asset["id"]] = {
+                "asset": asset,
+                "trim_segments": [],
+                "duration_ms": int((asset.get("duration") or 0) * 1000),
+            }
+        
+        for trim_seg in trim_segments:
+            if trim_seg.asset_id and trim_seg.asset_id in asset_segments:
+                asset_segments[trim_seg.asset_id]["trim_segments"].append({
+                    "start": trim_seg.start,
+                    "end": trim_seg.end,
+                })
+        
+        # 合并重叠的修剪片段
+        def merge_overlapping_segments(segments):
+            if not segments:
+                return []
+            sorted_segs = sorted(segments, key=lambda x: x["start"])
+            merged = [sorted_segs[0]]
+            for seg in sorted_segs[1:]:
+                if seg["start"] <= merged[-1]["end"]:
+                    merged[-1]["end"] = max(merged[-1]["end"], seg["end"])
+                else:
+                    merged.append(seg)
+            return merged
+        
+        # 计算保留片段
+        created_clips = []
+        total_removed_duration = 0
+        clip_start_time = 0  # 全局时间轴上的起始时间
+        
+        # 获取主轨道 (tracks 表没有 track_type，通过 order_index=0 判断主轨道)
+        track_result = supabase.table("tracks").select("id").eq("project_id", project_id).eq("order_index", 0).single().execute()
+        if not track_result.data:
+            # 创建默认主轨道 (tracks 表只有 name, order_index 等字段，没有 track_type)
+            track_id = str(uuid4())
+            supabase.table("tracks").insert({
+                "id": track_id,
+                "project_id": project_id,
+                "name": "主轨道",
+                "order_index": 0,
+                "created_at": now,
+            }).execute()
+        else:
+            track_id = track_result.data["id"]
+        
+        # 删除现有的 clips（通过 asset_ids 删除）
+        asset_ids_list = list(asset_segments.keys())
+        if asset_ids_list:
+            supabase.table("clips").delete().in_("asset_id", asset_ids_list).execute()
+        
+        for asset_id, asset_data in asset_segments.items():
+            asset = asset_data["asset"]
+            duration_ms = asset_data["duration_ms"]
+            trim_segs = merge_overlapping_segments(asset_data["trim_segments"])
+            
+            # 计算被删除的时长
+            for seg in trim_segs:
+                total_removed_duration += seg["end"] - seg["start"]
+            
+            # 计算保留片段
+            keep_segments = []
+            current_pos = 0
+            
+            for trim_seg in trim_segs:
+                if trim_seg["start"] > current_pos:
+                    keep_segments.append({
+                        "start": current_pos,
+                        "end": trim_seg["start"],
+                    })
+                current_pos = trim_seg["end"]
+            
+            # 最后一个保留片段
+            if current_pos < duration_ms:
+                keep_segments.append({
+                    "start": current_pos,
+                    "end": duration_ms,
+                })
+            
+            # 为每个保留片段创建 clip
+            for i, keep_seg in enumerate(keep_segments):
+                clip_id = str(uuid4())  # 完整的 UUID，不能截断
+                clip_duration = keep_seg["end"] - keep_seg["start"]
+                
+                clip_data = {
+                    "id": clip_id,
+                    "track_id": track_id,
+                    "asset_id": asset_id,
+                    "clip_type": "video",
+                    "start_time": clip_start_time,
+                    "end_time": clip_start_time + clip_duration,
+                    "source_start": keep_seg["start"],
+                    "source_end": keep_seg["end"],
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                
+                created_clips.append(clip_data)
+                clip_start_time += clip_duration
+        
+        # 6. 批量插入 clips
+        if created_clips:
+            supabase.table("clips").insert(created_clips).execute()
+        
+        # 7. 计算总时长（用于返回，projects 表没有 duration 字段，不更新）
+        total_duration = sum(c["end_time"] - c["start_time"] for c in created_clips)
+        supabase.table("projects").update({
+            "updated_at": now,
+        }).eq("id", project_id).execute()
+        
+        # 8. 更新会话状态
+        supabase.table("workspace_sessions").update({
+            "status": "completed",
+            "updated_at": now,
+        }).eq("id", session_id).execute()
+        
+        logger.info(f"[ApplyTrimming] ✅ 修剪完成: 创建 {len(created_clips)} 个 clips")
+        logger.info(f"[ApplyTrimming]    保留时长: {total_duration}ms, 删除时长: {total_removed_duration}ms")
+        
+        return ApplyTrimmingResponse(
+            status="completed",
+            session_id=session_id,
+            project_id=project_id,
+            clips_created=len(created_clips),
+            total_duration_ms=total_duration,
+            removed_duration_ms=total_removed_duration,
+            clips=[{
+                "id": c["id"],
+                "start": c["start_time"],
+                "duration": c["end_time"] - c["start_time"],
+                "source_start": c["source_start"],
+                "source_end": c["source_end"],
+            } for c in created_clips],
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"[ApplyTrimming] ❌ 修剪失败: {e}")
+        logger.error(f"[ApplyTrimming] ❌ 完整堆栈:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★ B-Roll 片段建议 API (口播视频精修模式)
+# ============================================
+
+class BRollAsset(BaseModel):
+    """B-Roll 素材"""
+    id: str
+    thumbnail_url: str
+    video_url: str
+    source: str  # pexels, local, ai-generated
+    duration: int  # 毫秒
+    width: int
+    height: int
+    relevance_score: Optional[float] = None
+
+
+class ClipSuggestion(BaseModel):
+    """AI 片段建议"""
+    clip_id: str
+    clip_number: int
+    text: str
+    time_range: dict  # {start: int, end: int}
+    suggested_assets: List[BRollAsset]
+    selected_asset_id: Optional[str] = None
+
+
+class GetClipSuggestionsResponse(BaseModel):
+    """获取片段建议响应"""
+    status: str
+    session_id: str
+    project_id: str
+    clips: List[ClipSuggestion]
+    total_duration_ms: int
+
+
+@router.post("/sessions/{session_id}/clip-suggestions", response_model=GetClipSuggestionsResponse)
+async def get_clip_suggestions(
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    获取 AI 片段建议 (口播视频精修模式)
+    
+    ★ 根据 ASR 转写结果，为每个片段推荐合适的 B-Roll 素材
+    ★ 使用关键词提取 + Pexels 搜索实现
+    
+    流程:
+    1. 获取会话的转写片段（从 detect-fillers 结果）
+    2. 对每个片段进行关键词提取
+    3. 使用关键词搜索 Pexels B-Roll 素材
+    4. 返回片段 + 推荐素材列表
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # 1. 获取会话信息
+        session = supabase.table("workspace_sessions").select("*").eq("id", session_id).single().execute()
+        if not session.data:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        session_data = session.data
+        project_id = session_data.get("project_id")
+        
+        # 校验会话归属
+        if session_data.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+        
+        # 2. 获取项目的 clips
+        tracks_result = supabase.table("tracks").select("id").eq("project_id", project_id).execute()
+        track_ids = [t["id"] for t in (tracks_result.data or [])]
+        
+        if not track_ids:
+            raise HTTPException(status_code=400, detail="项目没有轨道")
+        
+        clips_result = supabase.table("clips").select("*").in_("track_id", track_ids).order("start_time").execute()
+        clips = clips_result.data or []
+        
+        if not clips:
+            raise HTTPException(status_code=400, detail="项目没有片段")
+        
+        # 3. 为每个片段生成建议
+        suggestions = []
+        total_duration = 0
+        
+        for i, clip in enumerate(clips):
+            clip_id = clip["id"]
+            start_time = clip.get("start_time", 0)
+            end_time = clip.get("end_time", 0)
+            duration = end_time - start_time
+            total_duration += duration
+            
+            # 获取片段文本（从 content_text 或 metadata）
+            text = clip.get("content_text", "")
+            if not text:
+                metadata = clip.get("metadata", {}) or {}
+                text = metadata.get("transcript_text", f"片段 {i + 1}")
+            
+            # TODO: 使用 LLM 提取关键词并搜索 Pexels
+            # 目前返回模拟数据
+            suggested_assets = [
+                BRollAsset(
+                    id=f"pexels-{clip_id[:8]}-1",
+                    thumbnail_url="https://images.pexels.com/videos/3571264/free-video-3571264.jpg?auto=compress&cs=tinysrgb&dpr=1&w=500",
+                    video_url="",
+                    source="pexels",
+                    duration=5000,
+                    width=1920,
+                    height=1080,
+                    relevance_score=0.95,
+                ),
+                BRollAsset(
+                    id=f"pexels-{clip_id[:8]}-2",
+                    thumbnail_url="https://images.pexels.com/videos/3571264/free-video-3571264.jpg?auto=compress&cs=tinysrgb&dpr=1&w=500",
+                    video_url="",
+                    source="pexels",
+                    duration=6000,
+                    width=1920,
+                    height=1080,
+                    relevance_score=0.87,
+                ),
+            ]
+            
+            suggestions.append(ClipSuggestion(
+                clip_id=clip_id,
+                clip_number=i + 1,
+                text=text[:100] if text else f"片段 {i + 1}",
+                time_range={"start": start_time, "end": end_time},
+                suggested_assets=suggested_assets,
+            ))
+        
+        logger.info(f"[ClipSuggestions] ✅ 生成 {len(suggestions)} 个片段建议")
+        
+        return GetClipSuggestionsResponse(
+            status="completed",
+            session_id=session_id,
+            project_id=project_id,
+            clips=suggestions,
+            total_duration_ms=total_duration,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"[ClipSuggestions] ❌ 获取建议失败: {e}")
+        logger.error(f"[ClipSuggestions] ❌ 完整堆栈:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1288,6 +2234,10 @@ async def _extract_audio_for_asr(video_url: str, asset_id: str, update_progress,
     try:
         update_progress("extract_audio", current_progress)
         logger.info(f"[ASR优化] 🔧 FFmpeg 流式提取音频...")
+        logger.info(f"[ASR优化] 📍 输入 URL: {video_url[:120]}...")
+        
+        # 检测是否是 HLS (m3u8) 流
+        is_hls = 'm3u8' in video_url.lower()
         
         # ★ 优化：添加网络超时和更快的编码参数
         cmd = [
@@ -1295,6 +2245,16 @@ async def _extract_audio_for_asr(video_url: str, asset_id: str, update_progress,
             "-reconnect", "1",           # 断线重连
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "5", # 最大重连延迟 5 秒
+        ]
+        
+        # HLS 需要额外参数
+        if is_hls:
+            cmd.extend([
+                "-protocol_whitelist", "file,http,https,tcp,tls,crypto",  # 允许的协议
+                "-allowed_extensions", "ALL",  # 允许所有扩展名
+            ])
+        
+        cmd.extend([
             "-i", video_url,
             "-vn",                       # 不要视频
             "-ar", "16000",              # 16kHz 采样率
@@ -1303,7 +2263,9 @@ async def _extract_audio_for_asr(video_url: str, asset_id: str, update_progress,
             "-f", "mp3",
             "-progress", "pipe:1",       # ★ 输出进度到 stdout
             audio_path
-        ]
+        ])
+        
+        logger.info(f"[ASR优化] 🔧 FFmpeg 命令: {' '.join(cmd[:10])}...")
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1354,8 +2316,20 @@ async def _extract_audio_for_asr(video_url: str, asset_id: str, update_progress,
         stderr_text = await stderr_task
         
         if process.returncode != 0:
-            logger.error(f"[ASR优化] ❌ FFmpeg 失败: {stderr_text[:500]}")
-            raise Exception(f"音频提取失败: {stderr_text[:200]}")
+            # 提取真正的错误信息（跳过 FFmpeg 版本信息）
+            error_lines = stderr_text.split('\n')
+            real_errors = [line for line in error_lines if 
+                          'error' in line.lower() or 
+                          'failed' in line.lower() or 
+                          'invalid' in line.lower() or
+                          'unable' in line.lower() or
+                          'no such' in line.lower()]
+            error_summary = '\n'.join(real_errors[-5:]) if real_errors else stderr_text[-500:]
+            
+            logger.error(f"[ASR优化] ❌ FFmpeg 失败 (returncode={process.returncode}):")
+            logger.error(f"[ASR优化] ❌ 错误摘要: {error_summary}")
+            logger.error(f"[ASR优化] ❌ 完整 stderr (最后 1000 字符): {stderr_text[-1000:]}")
+            raise Exception(f"音频提取失败: {error_summary[:300]}")
         
         audio_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
         logger.info(f"[ASR优化] ✅ 音频流式提取完成: {audio_size_mb:.1f}MB")
@@ -1394,12 +2368,16 @@ async def _extract_audio_for_asr(video_url: str, asset_id: str, update_progress,
             logger.warning(f"[ASR优化] ⚠️ 清理临时文件失败: {e}")
 
 
-async def _run_asr(file_url: str, update_progress, current_progress: int, step_progress: int, asset_id: str = None, video_duration_sec: float = None) -> list:
+async def _run_asr(file_url: str, update_progress, current_progress: int, step_progress: int, asset_id: str = None, video_duration_sec: float = None, enable_ddc: bool = True) -> list:
     """
     执行 ASR 语音转写
     
     优化1：如果 asset_id 在 tasks 表中已有转写结果，直接复用
     优化2：如果提供了 asset_id 且是大文件（视频），会先提取音频再转写
+    
+    Args:
+        enable_ddc: 是否启用语义顺滑（DDC），会删除"嗯"、"啊"等语气词
+                    ★ 口癖检测（detect_fillers）时应设为 False
     """
     logger.info(f"[_run_asr] 🎤 开始 ASR 转写")
     logger.info(f"[_run_asr]    file_url: {file_url[:100]}...")
@@ -1436,50 +2414,76 @@ async def _run_asr(file_url: str, update_progress, current_progress: int, step_p
                     update_progress("transcribe", current_progress + step_progress)
                     return segments
         
-        # 判断是否是视频文件，需要提取音频
-        is_video = any(ext in file_url.lower() for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'])
+        # ★ Cloudflare HLS URL：FFmpeg 支持直接读取 HLS，提取音频用于 ASR
+        is_cloudflare_hls = 'videodelivery.net' in file_url and 'm3u8' in file_url
         
-        # 如果是视频且有 asset_id，先提取音频（大幅提升速度）
         actual_audio_url = file_url
-        if is_video and asset_id:
-            logger.info(f"[_run_asr] 🎬 检测到视频文件，先提取音频以优化上传速度")
-            try:
-                # 提取音频占用 20% 进度
-                audio_progress = int(step_progress * 0.2)
-                actual_audio_url = await _extract_audio_for_asr(
-                    video_url=file_url,
-                    asset_id=asset_id,
-                    update_progress=update_progress,
-                    current_progress=current_progress,
-                    video_duration_sec=video_duration_sec  # ★ 传入视频时长用于进度计算
-                )
-                # 调整剩余进度
-                current_progress += audio_progress
-                step_progress -= audio_progress
-                logger.info(f"[_run_asr] ✅ 音频提取成功，使用压缩音频进行转写")
-            except Exception as e:
-                logger.warning(f"[_run_asr] ⚠️ 音频提取失败，回退到原始文件: {e}")
-                actual_audio_url = file_url
         
-        # 验证文件是否可访问（等待上传完成）
-        max_retries = 30  # 最多等待 30 秒
-        for retry in range(max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.head(actual_audio_url)
-                    if resp.status_code == 200:
-                        logger.info(f"[_run_asr] ✅ 文件可访问，开始转写")
-                        break
-                    else:
-                        logger.warning(f"[_run_asr] ⏳ 文件不可访问 (HTTP {resp.status_code})，等待... ({retry+1}/{max_retries})")
-            except Exception as e:
-                logger.warning(f"[_run_asr] ⏳ 文件检查失败: {e}，等待... ({retry+1}/{max_retries})")
-            
-            if retry < max_retries - 1:
-                await asyncio.sleep(1)
+        if is_cloudflare_hls:
+            # Cloudflare HLS：从 HLS 提取音频
+            logger.info(f"[_run_asr] ☁️ Cloudflare HLS，使用 FFmpeg 提取音频")
+            audio_progress = int(step_progress * 0.2)
+            actual_audio_url = await _extract_audio_for_asr(
+                video_url=file_url,
+                asset_id=asset_id,
+                update_progress=update_progress,
+                current_progress=current_progress,
+                video_duration_sec=video_duration_sec
+            )
+            current_progress += audio_progress
+            step_progress -= audio_progress
+            logger.info(f"[_run_asr] ✅ Cloudflare HLS 音频提取成功")
         else:
-            logger.error(f"[_run_asr] ❌ 文件在 {max_retries} 秒后仍不可访问")
-            return []
+            # 判断是否是视频文件，需要提取音频
+            is_video = any(ext in file_url.lower() for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'])
+            
+            # 如果是视频且有 asset_id，先提取音频（大幅提升速度）
+            actual_audio_url = file_url
+            if is_video and asset_id:
+                logger.info(f"[_run_asr] 🎬 检测到视频文件，先提取音频以优化上传速度")
+                try:
+                    # 提取音频占用 20% 进度
+                    audio_progress = int(step_progress * 0.2)
+                    actual_audio_url = await _extract_audio_for_asr(
+                        video_url=file_url,
+                        asset_id=asset_id,
+                        update_progress=update_progress,
+                        current_progress=current_progress,
+                        video_duration_sec=video_duration_sec  # ★ 传入视频时长用于进度计算
+                    )
+                    # 调整剩余进度
+                    current_progress += audio_progress
+                    step_progress -= audio_progress
+                    logger.info(f"[_run_asr] ✅ 音频提取成功，使用压缩音频进行转写")
+                except Exception as e:
+                    logger.warning(f"[_run_asr] ⚠️ 音频提取失败，回退到原始文件: {e}")
+                    actual_audio_url = file_url
+        
+        # ★ Cloudflare HLS URL 不需要验证（直接可用）
+        is_cloudflare_hls = 'videodelivery.net' in actual_audio_url and 'm3u8' in actual_audio_url
+        
+        if not is_cloudflare_hls:
+            # 验证文件是否可访问（等待上传完成）
+            max_retries = 30  # 最多等待 30 秒
+            for retry in range(max_retries):
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.head(actual_audio_url)
+                        if resp.status_code == 200:
+                            logger.info(f"[_run_asr] ✅ 文件可访问，开始转写")
+                            break
+                        else:
+                            logger.warning(f"[_run_asr] ⏳ 文件不可访问 (HTTP {resp.status_code})，等待... ({retry+1}/{max_retries})")
+                except Exception as e:
+                    logger.warning(f"[_run_asr] ⏳ 文件检查失败: {e}，等待... ({retry+1}/{max_retries})")
+                
+                if retry < max_retries - 1:
+                    await asyncio.sleep(1)
+            else:
+                logger.error(f"[_run_asr] ❌ 文件在 {max_retries} 秒后仍不可访问")
+                return []
+        else:
+            logger.info(f"[_run_asr] ☁️ Cloudflare HLS URL，跳过验证")
         
         def on_asr_progress(progress: int, step: str):
             mapped_progress = current_progress + int(progress * step_progress / 100)
@@ -1488,6 +2492,7 @@ async def _run_asr(file_url: str, update_progress, current_progress: int, step_p
         asr_result = await transcribe_audio(
             audio_url=actual_audio_url,
             language="zh",
+            enable_ddc=enable_ddc,  # ★ 传递语义顺滑开关
             on_progress=on_asr_progress,
         )
         
@@ -1540,23 +2545,9 @@ async def _run_asr(file_url: str, update_progress, current_progress: int, step_p
         return []
 
 
-async def _run_silence_detection(file_url: str) -> list:
-    """执行静音检测"""
-    try:
-        from ..tasks.vad import detect_silence_segments
-        
-        result = await detect_silence_segments(
-            audio_url=file_url,
-            min_silence_duration=0.5,
-            silence_threshold_db=-35,
-        )
-        
-        segments = result.get("segments", [])
-        logger.info(f"[Workspace] ✅ 静音检测完成，检测到 {len(segments)} 个静音片段")
-        return segments
-    except Exception as e:
-        logger.error(f"[Workspace] ❌ 静音检测失败: {e}")
-        return []
+# NOTE: _run_silence_detection 已删除 (2025-01-28)
+# 静音检测功能已整合到 filler_detector.py 中
+# detect_fillers API 直接调用 filler_detector.detect_all_fillers
 
 
 # NOTE: _create_clips_from_segments 已删除 (2025-01-27)
@@ -1676,72 +2667,10 @@ async def _process_session_multi_assets(
         logger.info(f"[Workspace] ✅ 获取 {len(asset_infos)} 个素材元数据，总时长 {total_duration:.1f}s")
         
         # ========================================
-        # 🚀 启动 HLS 后台生成（所有需要转码的视频 + 大视频）
+        # ★ Cloudflare Stream：无需本地处理
         # ========================================
-        # ★ 移除阻塞转码！HLS 流本身就是 H.264 编码，前端优先使用 HLS 播放
-        # ★ ProRes 等浏览器不支持的格式会通过 HLS 转码后播放
-        from ..tasks.asset_processing import generate_hls_from_url
-        
-        # HLS 生成条件：
-        # 1. 需要转码的视频（ProRes、HEVC 等）- 必须生成 HLS 才能播放
-        # 2. 时长 > 2分钟 或 分辨率 > 1080p 的视频 - 优化播放体验
-        HLS_DURATION_THRESHOLD = 120  # 秒
-        HLS_RESOLUTION_THRESHOLD = 1920  # 像素
-        
-        assets_need_hls = [
-            info for info in asset_infos
-            if info.get("needs_transcode")  # ★ ProRes 等必须生成 HLS
-               or info["duration"] > HLS_DURATION_THRESHOLD 
-               or max(info["width"], info["height"]) > HLS_RESOLUTION_THRESHOLD
-        ]
-        
-        # ★ 标记需要 HLS 的素材（前端会等待 HLS 就绪后再播放）
-        for info in assets_need_hls:
-            asset_id = info["asset_id"]
-            needs_transcode = info.get("needs_transcode", False)
-            try:
-                supabase.table("assets").update({
-                    "hls_status": "pending",  # pending -> processing -> ready
-                    "needs_transcode": needs_transcode,
-                }).eq("id", asset_id).execute()
-            except Exception as e:
-                logger.warning(f"[Workspace] 更新 HLS 状态失败: {e}")
-        
-        async def generate_all_hls():
-            """顺序生成 HLS，避免多个 FFmpeg 并发导致资源竞争"""
-            for info in assets_need_hls:
-                asset_id = info["asset_id"]
-                file_url = info["file_url"]
-                codec = info.get("codec", "unknown")
-                logger.info(f"[Workspace] 🎬 启动 HLS 生成: {asset_id} (codec={codec}, duration={info['duration']:.1f}s)")
-                try:
-                    hls_path = await generate_hls_from_url(asset_id, file_url)
-                    if hls_path:
-                        # ★ 成功：同时设置 hls_status 和 hls_path
-                        supabase.table("assets").update({
-                            "hls_status": "ready",
-                            "hls_path": hls_path
-                        }).eq("id", asset_id).execute()
-                        logger.info(f"[Workspace] ✅ HLS 生成成功: {asset_id}, path={hls_path}")
-                    else:
-                        # HLS 生成返回 None（失败）
-                        supabase.table("assets").update({
-                            "hls_status": "failed"
-                        }).eq("id", asset_id).execute()
-                        logger.error(f"[Workspace] ❌ HLS 生成失败（返回空）: {asset_id}")
-                except Exception as e:
-                    logger.error(f"[Workspace] HLS 生成失败 {asset_id}: {e}")
-                    supabase.table("assets").update({
-                        "hls_status": "failed"
-                    }).eq("id", asset_id).execute()
-        
-        # 后台启动 HLS 生成（不阻塞主流程）
-        hls_task = None
-        if assets_need_hls:
-            hls_task = asyncio.create_task(generate_all_hls())
-            logger.info(f"[Workspace] 📦 已启动 HLS 生成任务（{len(assets_need_hls)}/{len(asset_infos)} 个素材需要 HLS）")
-        else:
-            logger.info(f"[Workspace] ⏭️ 跳过 HLS 生成（所有 {len(asset_infos)} 个素材都是小视频，直接播放原文件）")
+        # Cloudflare 自动处理：HLS 转码、自适应码率、CDN 分发
+        logger.info(f"[Workspace] ☁️ {len(asset_infos)} 个素材（Cloudflare 自动处理）")
         
         # ========================================
         # Step 2: 复用已有轨道（finalize_upload 已创建）
@@ -1841,6 +2770,7 @@ async def _process_session_multi_assets(
             
             asset_id = info["asset_id"]
             file_url = info["file_url"]
+            storage_path = info.get("storage_path", "")
             asset_duration_ms = info["duration_ms"]
             
             if asset_duration_ms <= 0:
@@ -1850,6 +2780,10 @@ async def _process_session_multi_assets(
             base_progress = 10 + int(idx * progress_per_asset)
             logger.info(f"[Workspace] 📹 处理素材 {idx + 1}/{len(asset_infos)}: {info['name'][:30]}...")
             logger.debug(f"[Workspace]    asset_id: {asset_id}, 时长: {info['duration']:.1f}s, 模式: {'AI智能切片' if ai_create_mode else '整体提取'}")
+            
+            # ★ Cloudflare 视频：无需等待 MP4，ASR 会从 HLS 提取音频
+            if storage_path.startswith("cloudflare:"):
+                logger.info(f"[Workspace] ☁️ Cloudflare 视频，ASR 将从 HLS 提取音频")
             
             # Step 1: ASR 转写（获取语音片段）
             transcript_segments = []
@@ -2268,22 +3202,8 @@ async def _process_session_multi_assets(
                 logger.warning(f"[Workspace] ⚠️ 创建字幕 clips 失败: {e}")
         
         # ========================================
-        # 🎬 等待 HLS 后台任务完成（带超时）
+        # ★ Cloudflare 简化：无需等待 HLS 任务
         # ========================================
-        update_progress("prepare", 90)
-        
-        if 'hls_task' in locals() and hls_task:
-            logger.debug(f"[Workspace] ⏳ 等待 HLS 生成任务完成（最多 120 秒）...")
-            try:
-                # 设置超时，避免无限等待
-                await asyncio.wait_for(hls_task, timeout=120.0)
-                logger.debug(f"[Workspace] ✅ HLS 生成任务完成")
-            except asyncio.TimeoutError:
-                logger.warning(f"[Workspace] ⚠️ HLS 任务超时（120秒），继续处理...")
-                hls_task.cancel()
-            except Exception as e:
-                logger.warning(f"[Workspace] ⚠️ HLS 任务异常: {e}")
-        
         update_progress("prepare", 95)
         
         # 更新项目
@@ -2319,20 +3239,11 @@ async def _process_session_multi_assets(
     except SessionCancelledException:
         # 用户主动取消，不需要更新状态（已经是 cancelled）
         logger.info(f"[Workspace] 🛑 多素材会话 {session_id} 处理已被用户取消")
-        # 取消未完成的 HLS 任务
-        if 'hls_task' in locals() and hls_task and not hls_task.done():
-            hls_task.cancel()
-            logger.info(f"[Workspace] 🛑 取消 HLS 任务")
         return
     except Exception as e:
         logger.error(f"[Workspace] ❌ 多素材处理失败: {e}")
         import traceback
         traceback.print_exc()
-        
-        # 取消未完成的 HLS 任务
-        if 'hls_task' in locals() and hls_task and not hls_task.done():
-            hls_task.cancel()
-            logger.info(f"[Workspace] 🛑 取消 HLS 任务")
         
         supabase.table("workspace_sessions").update({
             "status": "failed",
@@ -2433,11 +3344,12 @@ async def _create_clips_from_segments_with_offset(
         valid_segments.append((seg_idx, seg, seg_duration, clip_name, is_breath, silence_info))
     
     # ========== 第二阶段：LLM 语义分析（可选）==========
-    llm_results = {}
+    # 存储分析结果: {segment_id: SegmentAnalysis}
+    llm_results: Dict[str, Any] = {}
     if enable_llm and valid_segments:
-        from ..services.llm_service import analyze_segments_batch, is_llm_configured
+        from ..services.llm import llm_service
         
-        if is_llm_configured():
+        if llm_service.is_configured():
             logger.info(f"[Workspace] 🤖 开始 LLM 语义分析...")
             # 构建待分析的文本片段
             text_segments = []
@@ -2448,7 +3360,10 @@ async def _create_clips_from_segments_with_offset(
             
             if text_segments:
                 try:
-                    llm_results = await analyze_segments_batch(text_segments)
+                    emotion_result = await llm_service.analyze_emotions(text_segments)
+                    # 直接使用 SegmentAnalysis 对象
+                    for seg_analysis in emotion_result.results:
+                        llm_results[seg_analysis.id] = seg_analysis
                     logger.info(f"[Workspace] ✅ LLM 分析完成: {len(llm_results)} 条结果")
                 except Exception as e:
                     logger.warning(f"[Workspace] ⚠️ LLM 分析失败: {e}，使用默认值")
@@ -2469,21 +3384,12 @@ async def _create_clips_from_segments_with_offset(
     contexts = []
     for seg_idx, seg, seg_duration, clip_name, is_breath, silence_info in valid_segments:
         seg_text = seg.get("text", "").strip()
+        seg_id_str = str(seg_idx)
         
         # 从 LLM 结果获取情绪和重要性，或使用默认值
-        seg_id_str = str(seg_idx)
-        llm_data = llm_results.get(seg_id_str, {})
-        emotion_str = llm_data.get("emotion", "neutral")
-        importance_str = llm_data.get("importance", "medium")
-        
-        try:
-            emotion = EmotionType(emotion_str)
-        except ValueError:
-            emotion = EmotionType.NEUTRAL
-        try:
-            importance = ImportanceLevel(importance_str)
-        except ValueError:
-            importance = ImportanceLevel.MEDIUM
+        seg_analysis = llm_results.get(seg_id_str)
+        emotion = seg_analysis.emotion if seg_analysis else EmotionType.NEUTRAL
+        importance = seg_analysis.importance if seg_analysis else ImportanceLevel.MEDIUM
         
         context = SegmentContext(
             segment_id=seg_id_str,

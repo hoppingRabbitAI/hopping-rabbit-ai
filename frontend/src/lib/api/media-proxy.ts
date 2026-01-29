@@ -1,12 +1,53 @@
 /**
  * 媒体代理工具
- * 解决 Supabase Storage CORS 问题
+ * 支持 Cloudflare Stream 和 Supabase Storage
  */
 
 import { API_BASE_URL } from './client';
 
 // Supabase 项目 ID (从 URL 提取)
 const SUPABASE_PROJECT_REF = 'rduiyxvzknaxomrrehzs';
+
+// Cloudflare 通用域名
+const CLOUDFLARE_DELIVERY_DOMAIN = 'videodelivery.net';
+
+/**
+ * 检查 storage_path 是否是 Cloudflare 视频
+ */
+export function isCloudflareVideo(storagePath: string | undefined): boolean {
+  return storagePath?.startsWith('cloudflare:') ?? false;
+}
+
+/**
+ * 从 storage_path 提取 Cloudflare UID
+ */
+export function extractCloudflareUid(storagePath: string): string | null {
+  if (storagePath.startsWith('cloudflare:')) {
+    return storagePath.replace('cloudflare:', '');
+  }
+  return null;
+}
+
+/**
+ * 获取 Cloudflare HLS URL
+ */
+export function getCloudflareHlsUrl(uid: string): string {
+  return `https://${CLOUDFLARE_DELIVERY_DOMAIN}/${uid}/manifest/video.m3u8`;
+}
+
+/**
+ * 获取 Cloudflare MP4 下载 URL（需先启用）
+ */
+export function getCloudflareMp4Url(uid: string): string {
+  return `https://${CLOUDFLARE_DELIVERY_DOMAIN}/${uid}/downloads/default.mp4`;
+}
+
+/**
+ * 获取 Cloudflare 缩略图 URL
+ */
+export function getCloudflareThumbnailUrl(uid: string, timestamp: number = 1): string {
+  return `https://${CLOUDFLARE_DELIVERY_DOMAIN}/${uid}/thumbnails/thumbnail.jpg?time=${timestamp}s`;
+}
 
 /**
  * 将媒体 URL 转换为代理 URL（用于解决 CORS 问题）
@@ -61,23 +102,20 @@ export function getAssetStreamUrl(assetId: string): string {
 }
 
 /**
- * 获取代理视频 URL（720p 低码率版本，用于编辑预览）
- * 如果代理视频不存在，返回原始视频 URL
+ * 获取视频播放 URL
+ * ★ 已简化：Cloudflare 视频优先使用 HLS，其他使用流式代理
+ * @deprecated 推荐使用 checkHlsAvailable 获取正确的播放 URL
  */
 export function getAssetProxyUrl(assetId: string): string {
+  // 保留接口兼容性，后端会自动重定向到 Cloudflare
   return `${API_BASE_URL}/assets/proxy/${assetId}`;
 }
 
 /**
  * 智能获取视频 URL
- * 优先使用代理视频（加载快），如果不存在则使用原始视频
- * @param assetId - 资源 ID
- * @param preferProxy - 是否优先使用代理视频（默认 true）
+ * ★ 已简化：统一返回流式代理 URL（后端处理 Cloudflare 重定向）
  */
-export function getSmartVideoUrl(assetId: string, preferProxy: boolean = true): string {
-  if (preferProxy) {
-    return getAssetProxyUrl(assetId);
-  }
+export function getSmartVideoUrl(assetId: string, _preferProxy: boolean = true): string {
   return getAssetStreamUrl(assetId);
 }
 
@@ -117,6 +155,9 @@ export interface HlsStatus {
   needsTranscode: boolean;  // ★ 是否需要转码（ProRes 等）
   hlsStatus: string | null;  // ★ HLS 生成状态: pending/processing/ready/failed
   canPlayMp4: boolean;       // ★ 是否可以直接播放 MP4
+  isCloudflare: boolean;     // ★ 是否是 Cloudflare 视频
+  cloudflareUid: string | null;  // ★ Cloudflare UID
+  cloudflareStatus: string | null;  // ★ Cloudflare 状态: uploading/processing/ready/error
 }
 
 export async function checkHlsAvailable(assetId: string): Promise<HlsStatus> {
@@ -136,10 +177,19 @@ export async function checkHlsAvailable(assetId: string): Promise<HlsStatus> {
         needsTranscode: false,
         hlsStatus: null,
         canPlayMp4: true,
+        isCloudflare: false,
+        cloudflareUid: null,
+        cloudflareStatus: null,
       };
     }
     const data = await response.json();
     debugLog('✅ HLS 状态:', data);
+    
+    // 检查是否是 Cloudflare 视频
+    const storagePath = data.storage_path ?? '';
+    const isCloudflare = storagePath.startsWith('cloudflare:');
+    const cloudflareUid = isCloudflare ? storagePath.replace('cloudflare:', '') : null;
+    
     return {
       available: data.available ?? false,
       playlistUrl: data.playlist_url ?? null,
@@ -147,6 +197,9 @@ export async function checkHlsAvailable(assetId: string): Promise<HlsStatus> {
       needsTranscode: data.needs_transcode ?? false,
       hlsStatus: data.hls_status ?? null,
       canPlayMp4: data.can_play_mp4 ?? true,
+      isCloudflare,
+      cloudflareUid,
+      cloudflareStatus: data.cloudflare_status ?? null,
     };
   } catch (error) {
     debugLog('❌ HLS 检查失败:', error);
@@ -157,6 +210,9 @@ export async function checkHlsAvailable(assetId: string): Promise<HlsStatus> {
       needsTranscode: false,
       hlsStatus: null,
       canPlayMp4: true,
+      isCloudflare: false,
+      cloudflareUid: null,
+      cloudflareStatus: null,
     };
   }
 }

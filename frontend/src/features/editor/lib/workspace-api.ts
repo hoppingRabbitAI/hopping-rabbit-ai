@@ -5,8 +5,9 @@
 
 import { API_BASE_URL, getAuthToken, handleAuthExpired, ensureValidToken } from '@/lib/api/client';
 import * as tus from 'tus-js-client';
+import { uploadToCloudflare, type UploadProgressCallback as CFProgressCallback } from '@/lib/api/cloudflare-stream';
 
-// Supabase 配置
+// Supabase 配置（备用，暂时保留）
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
@@ -150,8 +151,8 @@ async function request<T>(
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     // ★★★ 保留 HTTP 状态码和详细错误信息 ★★★
-    const err = new Error(error.detail?.message || error.detail || `HTTP ${response.status}`) as Error & { 
-      status?: number; 
+    const err = new Error(error.detail?.message || error.detail || `HTTP ${response.status}`) as Error & {
+      status?: number;
       detail?: unknown;
     };
     err.status = response.status;
@@ -306,27 +307,30 @@ async function uploadWithPresignedUrl(
 }
 
 /**
- * 上传文件（自动选择上传方式）
- * - 小文件 (<50MB)：使用预签名 URL 直接上传
- * - 大文件 (>=50MB)：使用 TUS 协议分片上传
+ * 上传文件到 Cloudflare Stream
+ * 
+ * ★★★ 治本方案：直接走 Cloudflare，不经过 Supabase ★★★
  */
 export async function uploadFile(
-  uploadUrl: string,
+  uploadUrl: string,  // 保留参数兼容性（暂不使用）
   file: File,
   onProgress?: (percent: number) => void,
-  storagePath?: string
+  storagePath?: string,  // 保留参数兼容性（暂不使用）
+  assetId?: string  // ★ 新增：asset_id 用于 Cloudflare 上传
 ): Promise<void> {
-  const useChunkUpload = file.size >= CHUNK_UPLOAD_THRESHOLD;
+  debugLog(`[Upload] 🌩️ Cloudflare Stream 上传: ${file.name}, ${(file.size / 1024 / 1024).toFixed(2)}MB`);
 
-  debugLog(`[Upload] 文件: ${file.name}, 大小: ${(file.size / 1024 / 1024).toFixed(2)}MB, 使用${useChunkUpload ? '分片' : '直接'}上传`);
-
-  if (useChunkUpload && storagePath) {
-    // 大文件：使用 TUS 分片上传
-    await uploadWithTus(file, storagePath, onProgress);
-  } else {
-    // 小文件：使用预签名 URL 直接上传
-    await uploadWithPresignedUrl(uploadUrl, file, onProgress);
+  if (!assetId) {
+    throw new Error('Cloudflare 上传需要 assetId');
   }
+
+  // 适配进度回调类型
+  const cfProgress: CFProgressCallback = (p) => {
+    onProgress?.(p.percentage);
+  };
+
+  // ★ waitForReady=true：等待 Cloudflare 转码完成，进度条会显示"转码中"
+  await uploadToCloudflare(file, assetId, cfProgress, true);
 }
 
 /**
@@ -425,7 +429,8 @@ export async function uploadMultipleFiles(
             onFileProgress?.(asset.asset_id, percent);
             updateAllProgress();
           },
-          asset.storage_path
+          asset.storage_path,
+          asset.asset_id  // ★ 传入 asset_id 用于 Cloudflare 上传
         );
 
         // 上传完成后通知后端
@@ -625,8 +630,132 @@ export async function startAIProcessing(
   options: StartAIProcessingRequest
 ): Promise<StartAIProcessingResponse> {
   debugLog('[startAIProcessing] 启动 AI 处理:', sessionId, options);
-  
+
   return request(`/workspace/sessions/${sessionId}/start-ai-processing`, {
+    method: 'POST',
+    body: JSON.stringify(options),
+  }, true);  // ★ 使用 ensureToken=true 确保 token 有效
+}
+
+
+// ============================================
+// ★ 口播视频精修: 口癖/废话检测 API
+// ============================================
+
+export interface FillerWord {
+  word: string;                 // 口癖词汇（如"嗯..."、"那个"）
+  count: number;                // 出现次数
+  total_duration_ms: number;    // 总时长（毫秒）
+  occurrences: Array<{          // 出现位置
+    start: number;
+    end: number;
+    asset_id?: string;
+    text?: string;
+  }>;
+}
+
+export interface DetectFillersResponse {
+  status: string;
+  session_id: string;
+  project_id: string;
+  filler_words: FillerWord[];           // 检测到的口癖词汇
+  silence_segments: Array<{             // 静音片段列表
+    id: string;
+    start: number;
+    end: number;
+    silence_info?: {
+      classification: string;
+      duration_ms: number;
+      reason: string;
+    };
+  }>;
+  transcript_segments: Array<{          // 完整转写结果
+    id: string;
+    text: string;
+    start: number;
+    end: number;
+    asset_id?: string;
+    silence_info?: {
+      classification: string;
+      duration_ms: number;
+      reason: string;
+    };
+  }>;
+  total_filler_duration_ms: number;     // 废话总时长
+  original_duration_ms: number;         // 原视频时长
+  estimated_savings_percent: number;    // 预计节省百分比
+}
+
+/**
+ * 口癖/废话检测 (口播视频精修模式)
+ * 
+ * ★ 复用 ASR + 静音检测逻辑，返回废话片段供 DefillerModal 使用
+ */
+export interface DetectFillersOptions {
+  detect_fillers?: boolean;      // 识别口癖（含重复词）
+  detect_breaths?: boolean;      // 识别换气
+}
+
+export async function detectFillers(
+  sessionId: string,
+  options?: DetectFillersOptions
+): Promise<DetectFillersResponse> {
+  debugLog('[detectFillers] 开始口癖检测:', sessionId, options);
+
+  return request(`/workspace/sessions/${sessionId}/detect-fillers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {}),
+  }, true);  // ★ 使用 ensureToken=true 确保 token 有效
+}
+
+
+// ============================================
+// ★ 口播视频精修: 应用修剪 API
+// ============================================
+
+export interface TrimSegment {
+  start: number;              // 开始时间（毫秒）
+  end: number;                // 结束时间（毫秒）
+  asset_id?: string;          // 所属资源 ID
+  reason?: string;            // 删除原因
+}
+
+export interface ApplyTrimmingRequest {
+  removed_fillers: string[];                // 用户选择删除的口癖词汇
+  trim_segments?: TrimSegment[];            // 可选：具体要删除的片段
+  create_clips_from_segments?: boolean;     // 是否根据保留片段创建 clips
+}
+
+export interface ApplyTrimmingResponse {
+  status: string;
+  session_id: string;
+  project_id: string;
+  clips_created: number;              // 创建的 clip 数量
+  total_duration_ms: number;          // 修剪后的总时长
+  removed_duration_ms: number;        // 被删除的时长
+  clips: Array<{                      // 创建的 clips 列表
+    id: string;
+    start: number;
+    duration: number;
+    source_start: number;
+    source_end: number;
+  }>;
+}
+
+/**
+ * 应用口癖修剪 (口播视频精修模式)
+ * 
+ * ★ 根据用户在 DefillerModal 中的选择，执行实际的修剪操作
+ * ★ 创建新的 clips 并更新 project
+ */
+export async function applyTrimming(
+  sessionId: string,
+  options: ApplyTrimmingRequest
+): Promise<ApplyTrimmingResponse> {
+  debugLog('[applyTrimming] 应用修剪:', sessionId, options);
+
+  return request(`/workspace/sessions/${sessionId}/apply-trimming`, {
     method: 'POST',
     body: JSON.stringify(options),
   }, true);  // ★ 使用 ensureToken=true 确保 token 有效

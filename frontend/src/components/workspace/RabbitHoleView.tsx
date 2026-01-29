@@ -85,6 +85,7 @@ async function uploadAndGetUrl(file: File, prefix: string): Promise<string> {
 // ============================================
 
 type FeatureId = 
+  | 'smart-broadcast'
   | 'lip-sync' 
   | 'text-to-video' 
   | 'image-to-video' 
@@ -111,6 +112,17 @@ interface Feature {
 // ============================================
 
 const features: Feature[] = [
+  // ⭐ 推荐功能
+  {
+    id: 'smart-broadcast',
+    title: '智能播报',
+    subtitle: 'Smart Broadcast',
+    description: '上传图片和脚本，一键生成会说话的数字人视频',
+    icon: Sparkles,
+    category: 'video',
+    badge: 'hot',
+    previewType: 'video',
+  },
   // 视频生成
   {
     id: 'lip-sync',
@@ -119,7 +131,6 @@ const features: Feature[] = [
     description: '上传视频和音频，AI 自动同步口型',
     icon: Mic,
     category: 'video',
-    badge: 'hot',
     previewType: 'video',
   },
   {
@@ -254,6 +265,9 @@ export function RabbitHoleView({ initialFeatureId, onFeatureChange }: RabbitHole
 // 功能详情页
 // ============================================
 
+// 导入智能播报面板
+import { SmartBroadcastPanel } from './SmartBroadcastPanel';
+
 interface FeatureDetailProps {
   feature: Feature;
   onBack: () => void;
@@ -284,7 +298,21 @@ interface FormData {
   imageFidelity?: string;   // 0-1 的字符串
 }
 
+// 智能播报使用独立面板组件
+function SmartBroadcastFeature({ onBack }: { onBack: () => void }) {
+  return <SmartBroadcastPanel onBack={onBack} />;
+}
+
 function FeatureDetail({ feature, onBack }: FeatureDetailProps) {
+  // 智能播报使用独立面板
+  if (feature.id === 'smart-broadcast') {
+    return <SmartBroadcastFeature onBack={onBack} />;
+  }
+
+  return <OtherFeatureDetail feature={feature} onBack={onBack} />;
+}
+
+function OtherFeatureDetail({ feature, onBack }: FeatureDetailProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);

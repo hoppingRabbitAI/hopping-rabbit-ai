@@ -13,6 +13,8 @@ import {
   Plus,
   Settings2,
   Mic,
+  Tag,
+  Sparkles,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { formatTimeSec } from '../lib/time-utils';
@@ -104,6 +106,24 @@ function ClipItem({
     }
   };
 
+  // 获取 AI 分析数据
+  const aiAnalysis = clip.metadata?.ai_analysis;
+  const keywords: string[] = aiAnalysis?.keywords || [];
+  const emotion = aiAnalysis?.emotion;
+  const importance = aiAnalysis?.importance;
+
+  // 情绪标签颜色映射
+  const getEmotionColor = (em?: string) => {
+    switch (em) {
+      case 'excited': return 'bg-orange-100 text-orange-700';
+      case 'happy': return 'bg-yellow-100 text-yellow-700';
+      case 'neutral': return 'bg-gray-100 text-gray-600';
+      case 'sad': return 'bg-blue-100 text-blue-700';
+      case 'serious': return 'bg-purple-100 text-purple-700';
+      default: return 'bg-gray-100 text-gray-600';
+    }
+  };
+
   return (
     <div
       ref={setItemRef}
@@ -120,60 +140,90 @@ function ClipItem({
         <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 rounded-l" />
       )}
 
-      {/* 单行布局：序号时间 + 文本显示/输入 + 操作按钮 */}
-      <div className="flex items-center gap-2 px-2 py-1.5">
-        {/* 序号 + 时间（紧凑） */}
-        <div
-          className="flex items-center gap-1 flex-shrink-0 text-[10px] text-gray-400 font-mono min-w-[90px]"
-          title={`${formatTimeSec(clip.start / 1000)} - ${formatTimeSec((clip.start + clip.duration) / 1000)}`}
-        >
-          <span className="font-bold text-gray-500 w-4">
-            {String(index + 1).padStart(2, '0')}
-          </span>
-          <span>{formatTimeSec(clip.start / 1000)}</span>
-        </div>
+      {/* 主内容区域 */}
+      <div className="px-2 py-1.5">
+        {/* 第一行：序号时间 + 文本显示/输入 + 操作按钮 */}
+        <div className="flex items-center gap-2">
+          {/* 序号 + 时间（紧凑） */}
+          <div
+            className="flex items-center gap-1 flex-shrink-0 text-[10px] text-gray-400 font-mono min-w-[90px]"
+            title={`${formatTimeSec(clip.start / 1000)} - ${formatTimeSec((clip.start + clip.duration) / 1000)}`}
+          >
+            <span className="font-bold text-gray-500 w-4">
+              {String(index + 1).padStart(2, '0')}
+            </span>
+            <span>{formatTimeSec(clip.start / 1000)}</span>
+          </div>
 
-        {/* 文本：编辑模式时显示输入框，否则只读显示 */}
-        {isEditing ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={localText}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            onBlur={() => setIsEditing(false)}
-            onClick={(e) => e.stopPropagation()}
-            placeholder="输入字幕..."
-            className="flex-1 text-sm bg-white border border-yellow-300 rounded px-1.5 py-0.5
-                       outline-none focus:ring-1 focus:ring-yellow-400
-                       placeholder:text-gray-300 min-w-0
-                       text-gray-800"
-          />
-        ) : (
-          <span className={`flex-1 text-sm truncate min-w-0 py-0.5 ${displayText ? 'text-gray-700' : 'text-gray-400 italic'
+          {/* 文本：编辑模式时显示输入框，否则只读显示 */}
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              type="text"
+              value={localText}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onBlur={() => setIsEditing(false)}
+              onClick={(e) => e.stopPropagation()}
+              placeholder="输入字幕..."
+              className="flex-1 text-sm bg-white border border-yellow-300 rounded px-1.5 py-0.5
+                         outline-none focus:ring-1 focus:ring-yellow-400
+                         placeholder:text-gray-300 min-w-0
+                         text-gray-800"
+            />
+          ) : (
+            <span className={`flex-1 text-sm truncate min-w-0 py-0.5 ${displayText ? 'text-gray-700' : 'text-gray-400 italic'
+              }`}>
+              {displayText || '双击编辑...'}
+            </span>
+          )}
+
+          {/* 操作按钮（选中时显示） */}
+          <div className={`flex items-center gap-0.5 flex-shrink-0 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0'
             }`}>
-            {displayText || '双击编辑...'}
-          </span>
-        )}
-
-        {/* 操作按钮（选中时显示） */}
-        <div className={`flex items-center gap-0.5 flex-shrink-0 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0'
-          }`}>
-          <button
-            onClick={(e) => { e.stopPropagation(); onEdit(); }}
-            className="p-1 hover:bg-gray-200 rounded transition-colors"
-            title="编辑片段"
-          >
-            <Scissors size={12} className="text-gray-400 hover:text-gray-700" />
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="p-1 hover:bg-red-100 rounded transition-colors"
-            title="删除片段"
-          >
-            <Trash2 size={12} className="text-gray-400 hover:text-red-500" />
-          </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onEdit(); }}
+              className="p-1 hover:bg-gray-200 rounded transition-colors"
+              title="编辑片段"
+            >
+              <Scissors size={12} className="text-gray-400 hover:text-gray-700" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="p-1 hover:bg-red-100 rounded transition-colors"
+              title="删除片段"
+            >
+              <Trash2 size={12} className="text-gray-400 hover:text-red-500" />
+            </button>
+          </div>
         </div>
+
+        {/* 第二行：AI 标签（关键词 + 情绪） - 只在有数据时显示 */}
+        {(keywords.length > 0 || emotion) && (
+          <div className="flex items-center gap-1 mt-1 ml-[90px] overflow-hidden">
+            {/* 情绪标签 */}
+            {emotion && (
+              <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${getEmotionColor(emotion)}`}>
+                <Sparkles size={10} />
+                {emotion}
+              </span>
+            )}
+            {/* 关键词标签 */}
+            {keywords.slice(0, 3).map((kw, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-600 truncate max-w-[80px]"
+                title={kw}
+              >
+                <Tag size={9} />
+                {kw}
+              </span>
+            ))}
+            {keywords.length > 3 && (
+              <span className="text-[10px] text-gray-400">+{keywords.length - 3}</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

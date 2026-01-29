@@ -145,21 +145,32 @@ interface ClipThumbnailProps {
   height: number;
 }
 
+// 全局生成锁，防止同一个 clip 重复生成
+const generatingClips = new Set<string>();
+
 export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }: ClipThumbnailProps) {
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isInView, setIsInView] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // 计算需要显示的缩略图数量 - 填满整个 clip 宽度
+  // 计算需要显示的缩略图数量 - 稳定化，只在首次计算
+  // 使用 ref 记住首次计算的值，避免 width 微小变化导致重复生成
+  const thumbnailCountRef = useRef<number | null>(null);
   const thumbnailCount = useMemo(() => {
+    // 如果已经计算过，返回之前的值（稳定化）
+    if (thumbnailCountRef.current !== null) {
+      return thumbnailCountRef.current;
+    }
     // 每个缩略图的理想宽度（基于视频宽高比，假设 16:9）
     const aspectRatio = 16 / 9;
     const idealThumbWidth = height * aspectRatio;
     // 计算能填满宽度需要多少个缩略图
     const count = Math.max(1, Math.ceil(width / idealThumbWidth));
     // 限制最大数量以提升性能，但允许更多以填满
-    return Math.min(count, 20);
+    const result = Math.min(count, 20);
+    thumbnailCountRef.current = result;
+    return result;
   }, [width, height]);
   
   // 懒加载：只有进入视口才开始生成
@@ -186,29 +197,49 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
     return () => observer.disconnect();
   }, []);
   
-  // 生成缩略图（带缓存）
+  // 生成缩略图（带缓存和生成锁）
   useEffect(() => {
     if (!isInView || !clip.mediaUrl || clip.clipType !== 'video') {
       setIsLoading(false);
       return;
     }
     
-    // 检查缓存
-    const cached = getCachedThumbnails(clip.id, thumbnailCount);
+    // 检查缓存 - 使用 assetId + sourceStart 作为缓存 key（同 asset 可复用）
+    const cacheKey = clip.assetId || clip.id;
+    const cached = getCachedThumbnails(cacheKey, thumbnailCount);
     if (cached) {
       setThumbnails(cached);
       setIsLoading(false);
       return;
     }
     
+    // 检查是否正在生成中（防止重复触发）
+    const lockKey = `${cacheKey}:${thumbnailCount}`;
+    if (generatingClips.has(lockKey)) {
+      // 已经在生成中，等待完成后重试
+      const checkInterval = setInterval(() => {
+        const result = getCachedThumbnails(cacheKey, thumbnailCount);
+        if (result) {
+          setThumbnails(result);
+          setIsLoading(false);
+          clearInterval(checkInterval);
+        }
+      }, 500);
+      return () => clearInterval(checkInterval);
+    }
+    
+    // 加锁
+    generatingClips.add(lockKey);
+    
     let isCancelled = false;
     const video = document.createElement('video');
     video.src = clip.mediaUrl;
-    console.log('[Thumbnail] 🖼️ 开始加载视频缩略图:', {
-      clipId: clip.id?.slice(-8),
-      assetId: clip.assetId?.slice(-8),
-      mediaUrl: clip.mediaUrl,
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Thumbnail] 🖼️ 开始加载视频缩略图:', {
+        clipId: clip.id?.slice(-8),
+        assetId: clip.assetId?.slice(-8),
+      });
+    }
     video.crossOrigin = 'anonymous';
     video.preload = 'metadata';
     video.muted = true; // 静音以避免自动播放限制
@@ -217,25 +248,22 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
       try {
         await new Promise<void>((resolve, reject) => {
           video.onloadedmetadata = () => {
-            console.log('[Thumbnail] 视频元数据加载成功:', { clipId: clip.id.slice(-8), duration: video.duration, width: video.videoWidth, height: video.videoHeight });
+            if (process.env.NODE_ENV === 'development') {
+              console.log('[Thumbnail] 视频元数据加载成功:', { clipId: clip.id.slice(-8), duration: video.duration });
+            }
             resolve();
           };
           video.onerror = (e) => {
             // 如果已取消，忽略错误（可能是清理函数清空了 src）
             if (isCancelled) {
-              console.log('[Thumbnail] 已取消，忽略加载错误');
               return;
             }
-            console.error('[Thumbnail] 视频加载失败:', { 
-              clipId: clip.id.slice(-8), 
-              mediaUrl: clip.mediaUrl,
-              assetId: clip.assetId,
-              error: e,
-              networkState: video.networkState,
-              readyState: video.readyState,
-              errorCode: video.error?.code,
-              errorMessage: video.error?.message
-            });
+            if (process.env.NODE_ENV === 'development') {
+              console.error('[Thumbnail] 视频加载失败:', { 
+                clipId: clip.id.slice(-8), 
+                errorCode: video.error?.code,
+              });
+            }
             reject(e);
           };
           // 超时保护
@@ -281,8 +309,8 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
         }
         
         if (!isCancelled && newThumbnails.length > 0) {
-          // 缓存结果
-          setCachedThumbnails(clip.id, thumbnailCount, newThumbnails);
+          // 缓存结果 - 使用 cacheKey
+          setCachedThumbnails(cacheKey, thumbnailCount, newThumbnails);
           setThumbnails(newThumbnails);
         }
       } catch (error) {
@@ -292,6 +320,8 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
         }
         // 不设置缩略图，让 UI 显示渐变色后备
       } finally {
+        // 解锁
+        generatingClips.delete(lockKey);
         if (!isCancelled) setIsLoading(false);
       }
     };
@@ -300,13 +330,14 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
     
     return () => {
       isCancelled = true;
+      // 注意：取消时不解锁，让其他等待者继续等待直到超时
       // 延迟清空 src，避免中断正在进行的异步操作
       setTimeout(() => {
         video.src = '';
         video.load();
       }, 100);
     };
-  }, [clip.id, clip.mediaUrl, clip.clipType, clip.duration, clip.sourceStart, thumbnailCount, isInView]);
+  }, [clip.id, clip.assetId, clip.mediaUrl, clip.clipType, clip.duration, clip.sourceStart, thumbnailCount, isInView]);
   
   // 视频片段：显示缩略图
   if (clip.clipType === 'video') {

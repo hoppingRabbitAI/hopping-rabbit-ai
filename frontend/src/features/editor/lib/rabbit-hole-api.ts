@@ -191,6 +191,54 @@ export interface FaceSwapRequest {
 }
 
 // ============================================
+// 10. 智能播报 (Smart Broadcast) 类型
+// ============================================
+
+export interface PresetVoice {
+  id: string;
+  name: string;
+  description: string;
+  language: 'zh' | 'en';
+  gender: 'male' | 'female';
+  style: string;
+  sample_url?: string;
+  model_id: string;
+}
+
+export interface GetVoicesResponse {
+  success: boolean;
+  voices: PresetVoice[];
+  total: number;
+}
+
+export interface SmartBroadcastRequest {
+  // 必填 - 人物图片
+  image_url: string;
+  
+  // 模式 1: 图片 + 音频
+  audio_url?: string;
+  
+  // 模式 2/3: 图片 + 脚本
+  script?: string;
+  voice_id?: string;  // 预设音色 ID (模式2)
+  voice_clone_audio_url?: string;  // 声音样本 (模式3: 克隆声音)
+  
+  // 视频选项
+  duration?: '5' | '10';
+  image_prompt?: string;
+  
+  // 音频选项
+  sound_volume?: number;
+  original_audio_volume?: number;
+}
+
+export interface SmartBroadcastResponse extends AITaskCreateResponse {
+  mode: 'audio' | 'tts' | 'voice_clone';
+  mode_description: string;
+  estimated_time: string;
+}
+
+// ============================================
 // 口播工作流类型
 // ============================================
 
@@ -466,6 +514,42 @@ export async function createOmniImageTask(params: OmniImageRequest): Promise<AIT
  */
 export async function createFaceSwapTask(params: FaceSwapRequest): Promise<AITaskCreateResponse> {
   return request<AITaskCreateResponse>('/kling/face-swap', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// ============================================
+// 10. 智能播报 (Smart Broadcast)
+// ============================================
+
+/**
+ * 获取预设音色列表
+ */
+export async function getPresetVoices(params?: {
+  language?: 'zh' | 'en';
+  gender?: 'male' | 'female';
+}): Promise<GetVoicesResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.language) searchParams.set('language', params.language);
+  if (params?.gender) searchParams.set('gender', params.gender);
+  
+  const queryString = searchParams.toString();
+  const url = queryString ? `/kling/smart-broadcast/voices?${queryString}` : '/kling/smart-broadcast/voices';
+  
+  return request<GetVoicesResponse>(url);
+}
+
+/**
+ * 创建智能播报任务
+ * 
+ * 三种模式:
+ * 1. 图片 + 音频: { image_url, audio_url }
+ * 2. 图片 + 脚本 + 预设音色: { image_url, script, voice_id }
+ * 3. 图片 + 脚本 + 声音克隆: { image_url, script, voice_clone_audio_url }
+ */
+export async function createSmartBroadcastTask(params: SmartBroadcastRequest): Promise<SmartBroadcastResponse> {
+  return request<SmartBroadcastResponse>('/kling/smart-broadcast', {
     method: 'POST',
     body: JSON.stringify(params),
   });

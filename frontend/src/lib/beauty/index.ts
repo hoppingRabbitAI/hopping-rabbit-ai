@@ -92,5 +92,12 @@ export type {
   UseVideoBeautyReturn,
 } from './hooks';
 
+// 上下文导出
+export {
+  BeautyProvider,
+  useBeautyContext,
+  useBeautyContextOptional,
+} from './context';
+
 // 着色器导出
 export { BEAUTY_SHADERS } from './shaders';

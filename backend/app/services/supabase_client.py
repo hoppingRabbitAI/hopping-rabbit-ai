@@ -6,13 +6,55 @@ from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 import httpx
 from app.config import get_settings
-from functools import lru_cache
-from typing import Optional, Any, List, Dict
+from functools import lru_cache, wraps
+from typing import Optional, Any, List, Dict, Callable, TypeVar
 import time
 import logging
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+T = TypeVar('T')
+
+
+# ============================================
+# 重试装饰器 - 解决 HTTP/2 "Server disconnected" 问题
+# ============================================
+def with_retry(max_retries: int = 3, retry_delay: float = 0.5):
+    """
+    装饰器：自动重试 Supabase 操作，处理 HTTP/2 断连问题
+    
+    Args:
+        max_retries: 最大重试次数
+        retry_delay: 重试间隔（秒）
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            last_error = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        logger.warning(f"[Supabase] 连接断开，重试 {attempt + 1}/{max_retries}: {e}")
+                        time.sleep(retry_delay * (attempt + 1))  # 指数退避
+                        # 重置连接池
+                        _reset_client()
+                    else:
+                        logger.error(f"[Supabase] 重试 {max_retries} 次后仍失败: {e}")
+                        raise
+            raise last_error
+        return wrapper
+    return decorator
+
+
+def _reset_client():
+    """重置 Supabase 客户端连接"""
+    global _client, supabase
+    _client = None
+    supabase = get_supabase()
 
 _client: Optional[Client] = None
 
@@ -110,7 +152,7 @@ def get_file_url(bucket: str, path: str, expires_in: int = SIGNED_URL_EXPIRES_SE
     
     Args:
         bucket: 存储桶名称 (如 'clips', 'videos')
-        path: 文件路径（可以是相对路径或完整 URL）
+        path: 文件路径（可以是相对路径或完整 URL，或 cloudflare:video_uid）
         expires_in: 签名 URL 有效期（秒），默认 7 天
         
     Returns:
@@ -119,6 +161,12 @@ def get_file_url(bucket: str, path: str, expires_in: int = SIGNED_URL_EXPIRES_SE
     # 空路径检查
     if not path:
         return ""
+    
+    # ★ Cloudflare Stream 视频：返回 HLS URL（FFmpeg 直接支持 HLS 输入）
+    if path.startswith('cloudflare:'):
+        video_uid = path.replace('cloudflare:', '')
+        # 使用 HLS URL（FFmpeg 支持，无需等待 MP4 下载启用）
+        return f"https://videodelivery.net/{video_uid}/manifest/video.m3u8"
     
     # 如果 path 已经是完整的 URL，直接返回
     if path.startswith('http://') or path.startswith('https://'):
@@ -238,8 +286,19 @@ def get_file_urls_batch(bucket: str, paths: List[str], expires_in: int = SIGNED_
     result = {}
     paths_to_sign = []
     
-    # 先从缓存获取
+    # 先处理特殊路径和缓存
     for path in paths:
+        # ★ Cloudflare 视频：返回 HLS URL（FFmpeg 支持直接读取）
+        if path.startswith('cloudflare:'):
+            video_uid = path.replace('cloudflare:', '')
+            result[path] = f"https://videodelivery.net/{video_uid}/manifest/video.m3u8"
+            continue
+        
+        # 已经是完整 URL
+        if path.startswith('http://') or path.startswith('https://'):
+            result[path] = path
+            continue
+        
         cache_key = f"{bucket}:{path}"
         if cache_key in _url_cache:
             cached = _url_cache[cache_key]

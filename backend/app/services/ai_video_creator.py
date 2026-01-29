@@ -555,9 +555,13 @@ class AIVideoCreatorService:
         """
         Step 3: 使用 LLM 分析文本情绪和重要性
         """
-        from app.services.llm_service import analyze_segments_batch, is_llm_configured
+        from app.services.llm import llm_service
+        from app.config import get_settings
         
-        if not is_llm_configured():
+        settings = get_settings()
+        
+        # 检查 LLM 是否配置
+        if not (settings.volcengine_ark_api_key or settings.gemini_api_key):
             logger.warning("   ⚠️ LLM API 未配置，跳过语义分析")
             return segments
         
@@ -577,8 +581,19 @@ class AIVideoCreatorService:
             logger.info(f"      [{i+1}] {text_preview}")
         
         try:
-            logger.info(f"   → 调用豆包 LLM 进行情绪分析...")
-            analyzed = await analyze_segments_batch(text_segments)
+            logger.info(f"   → 调用 LLM 进行情绪分析...")
+            result = await llm_service.analyze_emotions(text_segments)
+            
+            # 转换为字典格式
+            analyzed = {
+                item.id: {
+                    "emotion": item.emotion.value,
+                    "importance": item.importance.value,
+                    "keywords": item.keywords,
+                    "focus_word": item.focus_word or "",
+                }
+                for item in result.results
+            }
             
             logger.info(f"   ✓ LLM 返回 {len(analyzed)} 条分析结果")
             

@@ -10,3 +10,5 @@ export { AITaskProgress, AITaskList } from './AITaskProgress';
 // 智能一键成片 V2
 export { SmartProcessingView } from './SmartProcessingView';
 export { ReviewView } from './ReviewView';
+export { ParsingView } from './ParsingView';
+export { DefillerModal, type FillerWord } from './DefillerModal';

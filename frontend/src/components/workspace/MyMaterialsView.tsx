@@ -18,7 +18,10 @@ import {
   Square,
   CheckCheck,
   Play,
-  Plus
+  Plus,
+  User,
+  Mic2,
+  FolderHeart
 } from 'lucide-react';
 import { 
   getAITaskList, 
@@ -31,10 +34,14 @@ import {
 import { projectApi } from '@/lib/api';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { toast } from '@/lib/stores/toast-store';
+import { UserMaterialsView } from './UserMaterialsView';
 
 // ============================================
 // 类型定义
 // ============================================
+
+/** 顶级标签页类型 */
+type TopTab = 'ai-creations' | 'my-materials';
 
 interface Project {
   id: string;
@@ -257,10 +264,10 @@ function TaskCard({ task, onAddToProject, addedTaskIds, selectMode, isSelected, 
 }
 
 // ============================================
-// 主组件
+// AI 创作列表内容组件
 // ============================================
 
-export function MyMaterialsView() {
+function AICreationsContent() {
   const [tasks, setTasks] = useState<AITaskResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -418,7 +425,7 @@ export function MyMaterialsView() {
   const processingCount = tasks.filter(t => t.status === 'processing').length;
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-gray-50">
+    <div className="flex-1 flex flex-col h-full">
       {/* 自定义确认弹窗 */}
       {confirmDialog?.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -451,23 +458,13 @@ export function MyMaterialsView() {
         </div>
       )}
 
-      {/* Header - 简洁版 */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl flex items-center justify-center">
-            <Sparkles size={20} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">我的素材</h1>
-            <p className="text-sm text-gray-500">
-              {completedCount} 个完成 · {processingCount} 个处理中
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
+        {/* 统计信息 */}
+        <p className="text-sm text-gray-500 mb-4">
+          {completedCount} 个完成 · {processingCount} 个处理中
+        </p>
+        
         {/* 列表标题行 - 参考首页样式 */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-4">
@@ -635,6 +632,69 @@ export function MyMaterialsView() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================
+// 主组件 - 包含顶级标签页切换
+// ============================================
+
+export function MyMaterialsView() {
+  const [activeTab, setActiveTab] = useState<TopTab>('ai-creations');
+  
+  return (
+    <div className="flex-1 flex flex-col h-full bg-gray-50">
+      {/* Header with Tabs */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl flex items-center justify-center">
+              <FolderHeart size={20} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">我的素材</h1>
+            </div>
+          </div>
+        </div>
+        
+        {/* Tab Switch */}
+        <div className="flex gap-1 mt-4 p-1 bg-gray-100 rounded-lg w-fit">
+          <button
+            onClick={() => setActiveTab('ai-creations')}
+            className={`
+              px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2
+              ${activeTab === 'ai-creations' 
+                ? 'bg-white text-gray-900 shadow-sm' 
+                : 'text-gray-600 hover:text-gray-900'}
+            `}
+          >
+            <Sparkles size={16} />
+            AI 创作
+          </button>
+          <button
+            onClick={() => setActiveTab('my-materials')}
+            className={`
+              px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2
+              ${activeTab === 'my-materials' 
+                ? 'bg-white text-gray-900 shadow-sm' 
+                : 'text-gray-600 hover:text-gray-900'}
+            `}
+          >
+            <User size={16} />
+            我的素材库
+          </button>
+        </div>
+      </div>
+      
+      {/* Content */}
+      <div className="flex-1 overflow-hidden">
+        {activeTab === 'ai-creations' ? (
+          <AICreationsContent />
+        ) : (
+          <UserMaterialsView />
+        )}
+      </div>
     </div>
   );
 }

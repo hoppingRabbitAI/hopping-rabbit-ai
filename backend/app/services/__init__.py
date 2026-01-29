@@ -10,11 +10,10 @@ from .transform_rules import (
     TransformParams,
     SegmentContext,
 )
-from .llm_service import (
-    call_doubao_llm,
-    analyze_segments_batch,
-    is_llm_configured,
-)
+from .llm import llm_service, LLMService
+
+# 可灵AI 客户端（推荐使用新客户端）
+from .kling_client import get_kling_client, KlingClient, close_kling_client
 
 __all__ = [
     # AI 成片服务
@@ -30,7 +29,10 @@ __all__ = [
     "TransformParams",
     "SegmentContext",
     # LLM 服务
-    "call_doubao_llm",
-    "analyze_segments_batch",
-    "is_llm_configured",
+    "llm_service",
+    "LLMService",
+    # 可灵AI 客户端
+    "get_kling_client",
+    "KlingClient",
+    "close_kling_client",
 ]

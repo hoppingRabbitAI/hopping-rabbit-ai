@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-测试火山方舟 (豆包) LLM API 连接
+测试 LangChain LLM 服务
 """
 import asyncio
 import sys
@@ -9,7 +9,7 @@ import os
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.llm_service import call_doubao_llm, is_llm_configured, analyze_segments_batch
+from app.services.llm import llm_service
 
 
 async def test_basic_call():
@@ -18,17 +18,16 @@ async def test_basic_call():
     print("🧪 测试 1: 基础 API 调用")
     print("=" * 50)
     
-    if not is_llm_configured():
+    if not llm_service.is_configured():
         print("❌ LLM API 未配置")
         return False
     
     print("✅ API Key 已配置")
     
     # 简单测试
-    response = await call_doubao_llm(
+    response = await llm_service.call(
         prompt="请用一句话介绍你自己。",
         system_prompt="你是一个友好的AI助手。",
-        max_tokens=100
     )
     
     if response:
@@ -55,42 +54,68 @@ async def test_emotion_analysis():
     
     print(f"📤 发送 {len(test_segments)} 个测试片段...")
     
-    results = await analyze_segments_batch(test_segments)
+    result = await llm_service.analyze_emotions(test_segments)
     
-    if results:
+    if result and result.results:
         print("✅ 情绪分析成功!")
-        for seg_id, analysis in results.items():
-            print(f"  [{seg_id}] emotion={analysis['emotion']}, importance={analysis['importance']}, keywords={analysis['keywords']}")
+        for item in result.results:
+            print(f"  [{item.id}] emotion={item.emotion.value}, importance={item.importance.value}, keywords={item.keywords}")
         return True
     else:
         print("❌ 情绪分析返回空结果")
         return False
 
 
+async def test_script_generation():
+    """测试脚本生成功能"""
+    print("\n" + "=" * 50)
+    print("🧪 测试 3: 脚本生成功能")
+    print("=" * 50)
+    
+    script = await llm_service.generate_script(
+        topic="如何提高工作效率",
+        style="professional",
+        duration=30,
+    )
+    
+    if script and script.segments:
+        print("✅ 脚本生成成功!")
+        print(f"📌 标题: {script.title}")
+        print(f"📌 片段数: {len(script.segments)}")
+        for i, seg in enumerate(script.segments[:3]):
+            print(f"  [{i+1}] {seg.text[:50]}...")
+        return True
+    else:
+        print("❌ 脚本生成返回空结果")
+        return False
+
+
 async def main():
-    print("\n🚀 火山方舟 LLM API 测试")
+    print("\n🚀 LangChain LLM 服务测试")
     print("=" * 50)
     
     # 显示配置信息
     from app.config import get_settings
     settings = get_settings()
-    print(f"📌 API Base: https://ark.cn-beijing.volces.com/api/v3")
+    print(f"📌 Provider: {llm_service.provider}")
     print(f"📌 Model: {settings.doubao_model_endpoint}")
-    print(f"📌 API Key: {settings.volcengine_ark_api_key[:8]}...{settings.volcengine_ark_api_key[-4:]}")
+    print(f"📌 Configured: {llm_service.is_configured()}")
     
     # 执行测试
     test1_passed = await test_basic_call()
     test2_passed = await test_emotion_analysis()
+    test3_passed = await test_script_generation()
     
     # 总结
     print("\n" + "=" * 50)
     print("📊 测试结果汇总")
     print("=" * 50)
-    print(f"  基础调用: {'✅ PASS' if test1_passed else '❌ FAIL'}")
-    print(f"  情绪分析: {'✅ PASS' if test2_passed else '❌ FAIL'}")
+    print(f"  基础调用:   {'✅ PASS' if test1_passed else '❌ FAIL'}")
+    print(f"  情绪分析:   {'✅ PASS' if test2_passed else '❌ FAIL'}")
+    print(f"  脚本生成:   {'✅ PASS' if test3_passed else '❌ FAIL'}")
     
-    if test1_passed and test2_passed:
-        print("\n🎉 所有测试通过！LLM API 已就绪。")
+    if test1_passed and test2_passed and test3_passed:
+        print("\n🎉 所有测试通过！LLM 服务已就绪。")
     else:
         print("\n⚠️ 部分测试失败，请检查配置。")
 

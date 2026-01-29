@@ -146,7 +146,18 @@ export function ProcessingView({
       debugLog('🚀 doUpload 开始, sessionData:', {
         filesCount: sessionData.files?.length,
         assetsCount: sessionData.assets?.length,
+        uploadComplete: sessionData.uploadComplete,  // ★ 新增日志
       });
+
+      // ★★★ 修复：如果文件已在 page.tsx 上传完成，跳过上传阶段 ★★★
+      if (sessionData.uploadComplete) {
+        debugLog('✅ 文件已上传完成（uploadComplete=true），跳过上传阶段');
+        setUploadPhase('done');
+        setProgress(40);
+        timingRef.current.uploadEndTime = Date.now();
+        timingRef.current.processingStartTime = Date.now();
+        return;
+      }
 
       // === 文件上传模式（统一用 assets 数组）===
       if (sessionData.files && sessionData.files.length > 0 && sessionData.assets && sessionData.assets.length > 0) {

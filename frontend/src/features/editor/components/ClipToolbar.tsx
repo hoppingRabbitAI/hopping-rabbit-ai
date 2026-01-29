@@ -9,8 +9,10 @@ import {
   Trash2,
   Undo2,
   Redo2,
+  Merge,
 } from 'lucide-react';
 import { useEditorStore, ToolMode } from '../store/editor-store';
+import { DirectorModeCompact } from './DirectorModeSwitcher';
 
 // 格式化时间为 00:00:00 格式
 function formatTimeHMS(ms: number): string {
@@ -66,6 +68,7 @@ function ToolButton({ icon, label, onClick, disabled, active, variant = 'default
 export function ClipToolbar() {
   // 订阅状态
   const selectedClipId = useEditorStore((s) => s.selectedClipId);
+  const selectedClipIds = useEditorStore((s) => s.selectedClipIds);
   const clips = useEditorStore((s) => s.clips);
   const toolMode = useEditorStore((s) => s.toolMode);
   const historyIndex = useEditorStore((s) => s.historyIndex);
@@ -77,6 +80,7 @@ export function ClipToolbar() {
   const splitAllAtTime = useEditorStore((s) => s.splitAllAtTime);
   const duplicateClip = useEditorStore((s) => s.duplicateClip);
   const deleteSelectedClip = useEditorStore((s) => s.deleteSelectedClip);
+  const mergeSelectedClips = useEditorStore((s) => s.mergeSelectedClips);
   const setToolMode = useEditorStore((s) => s.setToolMode);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -90,6 +94,39 @@ export function ClipToolbar() {
   const canUndoNow = historyIndex >= 0;
   const canRedoNow = historyIndex < historyLength - 1;
   const selectedClip = clips.find(c => c.id === selectedClipId);
+
+  // 检查是否可以合并选中的片段
+  const canMerge = useMemo(() => {
+    // 需要至少选中 2 个片段
+    if (selectedClipIds.size < 2) return false;
+    
+    const selectedClips = Array.from(selectedClipIds)
+      .map(id => clips.find(c => c.id === id))
+      .filter((c): c is typeof clips[0] => c !== undefined)
+      .sort((a, b) => a.start - b.start);
+    
+    if (selectedClips.length < 2) return false;
+    
+    // 检查是否在同一轨道且类型相同
+    const trackId = selectedClips[0].trackId;
+    const clipType = selectedClips[0].clipType;
+    
+    for (const clip of selectedClips) {
+      if (clip.trackId !== trackId || clip.clipType !== clipType) {
+        return false;
+      }
+    }
+    
+    // 检查是否相邻（允许 100ms 容差）
+    for (let i = 1; i < selectedClips.length; i++) {
+      const gap = selectedClips[i].start - (selectedClips[i-1].start + selectedClips[i-1].duration);
+      if (Math.abs(gap) > 100) {
+        return false;
+      }
+    }
+    
+    return true;
+  }, [selectedClipIds, clips]);
 
   // 工具操作
   const handleToolModeChange = useCallback((mode: ToolMode) => {
@@ -126,6 +163,12 @@ export function ClipToolbar() {
       deleteSelectedClip();
     }
   }, [selectedClipId, deleteSelectedClip]);
+
+  const handleMerge = useCallback(() => {
+    if (canMerge) {
+      mergeSelectedClips();
+    }
+  }, [canMerge, mergeSelectedClips]);
 
   const handleUndo = useCallback(() => {
     if (canUndoNow) undo();
@@ -213,6 +256,18 @@ export function ClipToolbar() {
           disabled={!selectedClipId}
           variant="danger"
         />
+        <ToolButton
+          icon={<Merge size={15} />}
+          label="合并"
+          onClick={handleMerge}
+          disabled={!canMerge}
+        />
+        
+        {/* 分隔符 */}
+        <div className="w-px h-6 bg-gray-200 mx-1" />
+        
+        {/* 导演模式切换 */}
+        <DirectorModeCompact />
       </div>
 
       {/* 右侧：撤销/重做 */}

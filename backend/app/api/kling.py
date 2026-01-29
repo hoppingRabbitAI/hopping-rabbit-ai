@@ -23,6 +23,7 @@ import logging
 from datetime import datetime
 
 from ..services.kling_ai_service import kling_client, koubo_service
+from ..services.tts_service import tts_service, get_preset_voices
 from .auth import get_current_user_id
 
 # 导入所有 Celery 任务
@@ -36,6 +37,7 @@ from ..tasks.video_extend import process_video_extend
 from ..tasks.image_generation import process_image_generation
 from ..tasks.omni_image import process_omni_image
 from ..tasks.face_swap import process_face_swap
+from ..tasks.smart_broadcast import process_smart_broadcast
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +208,39 @@ class FaceSwapRequest(BaseModel):
 
 
 # ============================================
+# 智能播报请求模型
+# ============================================
+
+class SmartBroadcastRequest(BaseModel):
+    """
+    智能播报请求
+    
+    三种输入模式:
+    1. 图片 + 音频: image_url + audio_url
+    2. 图片 + 脚本 + 预设音色: image_url + script + voice_id
+    3. 图片 + 脚本 + 声音克隆: image_url + script + voice_clone_audio_url
+    """
+    # 必填 - 人物图片
+    image_url: str = Field(..., description="人物图片 URL (需包含清晰人脸)")
+    
+    # 音频输入 (三选一)
+    audio_url: Optional[str] = Field(None, description="音频 URL (模式1: 直接上传音频)")
+    script: Optional[str] = Field(None, description="文本脚本 (模式2/3: 使用 TTS 合成)")
+    
+    # TTS 配置
+    voice_id: Optional[str] = Field("zh_female_gentle", description="预设音色 ID (模式2)")
+    voice_clone_audio_url: Optional[str] = Field(None, description="声音样本 URL，用于克隆您的声音 (模式3)")
+    
+    # 视频生成选项
+    duration: str = Field("5", description="视频时长: 5/10 秒")
+    image_prompt: Optional[str] = Field(None, description="图片动态化提示词")
+    
+    # 音频混合选项
+    sound_volume: float = Field(1.0, ge=0, le=2, description="配音音量")
+    original_audio_volume: float = Field(0.0, ge=0, le=2, description="原视频音量 (通常为0)")
+
+
+# ============================================
 # 口播场景封装请求
 # ============================================
 
@@ -262,6 +297,146 @@ async def create_lip_sync(
         
     except Exception as e:
         logger.error(f"[KlingAPI] 创建口型同步任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 智能播报 API (一键数字人播报)
+# ============================================
+
+@router.get("/smart-broadcast/voices", summary="获取预设音色列表", tags=["智能播报"])
+async def get_voices(
+    language: Optional[str] = Query(None, description="语言过滤: zh/en"),
+    gender: Optional[str] = Query(None, description="性别过滤: male/female"),
+):
+    """
+    获取 TTS 预设音色列表
+    
+    用于前端展示音色选择器
+    """
+    voices = get_preset_voices(language=language, gender=gender)
+    return {
+        "success": True,
+        "voices": voices,
+        "total": len(voices),
+    }
+
+
+@router.post("/smart-broadcast", summary="智能播报", tags=["智能播报"])
+async def create_smart_broadcast(
+    request: SmartBroadcastRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    🎙️ 智能播报 - 一键生成数字人播报视频
+    
+    ## 三种输入模式
+    
+    ### 模式 1: 图片 + 音频
+    直接上传人物图片和配音音频，AI 自动同步口型
+    ```json
+    {
+        "image_url": "https://xxx/person.jpg",
+        "audio_url": "https://xxx/voice.mp3"
+    }
+    ```
+    
+    ### 模式 2: 图片 + 脚本 + 预设音色
+    上传图片和文字脚本，使用预设音色合成语音
+    ```json
+    {
+        "image_url": "https://xxx/person.jpg",
+        "script": "大家好，欢迎来到我的频道...",
+        "voice_id": "zh_female_gentle"
+    }
+    ```
+    
+    ### 模式 3: 图片 + 脚本 + 声音克隆
+    上传图片、脚本和声音样本，克隆您的声音生成播报
+    ```json
+    {
+        "image_url": "https://xxx/person.jpg",
+        "script": "大家好，欢迎来到我的频道...",
+        "voice_clone_audio_url": "https://xxx/my_voice_sample.mp3"
+    }
+    ```
+    
+    ## 处理流程
+    1. (可选) TTS 语音合成
+    2. 图生视频 - 将静态图片转为动态人像视频
+    3. 口型同步 - 音频驱动口型动作
+    4. 输出最终播报视频
+    
+    ## 预计时长
+    - 5秒视频: 约 3-5 分钟
+    - 10秒视频: 约 5-8 分钟
+    """
+    # 验证输入
+    if not request.audio_url and not request.script:
+        raise HTTPException(
+            status_code=400,
+            detail="请提供 audio_url (上传音频) 或 script (文本脚本)"
+        )
+    
+    if request.script and request.audio_url:
+        raise HTTPException(
+            status_code=400,
+            detail="audio_url 和 script 只能选择一个"
+        )
+    
+    try:
+        # 构建输入参数记录
+        input_params = {
+            "image_url": request.image_url,
+            "mode": "audio" if request.audio_url else ("voice_clone" if request.voice_clone_audio_url else "tts"),
+        }
+        if request.audio_url:
+            input_params["audio_url"] = request.audio_url
+        if request.script:
+            input_params["script"] = request.script[:100] + "..." if len(request.script) > 100 else request.script
+            input_params["voice_id"] = request.voice_id
+        if request.voice_clone_audio_url:
+            input_params["voice_clone"] = True
+        
+        ai_task_id = _create_ai_task(user_id, "smart_broadcast", input_params)
+        
+        process_smart_broadcast.delay(
+            ai_task_id=ai_task_id,
+            user_id=user_id,
+            image_url=request.image_url,
+            audio_url=request.audio_url,
+            script=request.script,
+            voice_id=request.voice_id,
+            voice_clone_audio_url=request.voice_clone_audio_url,
+            options={
+                "duration": request.duration,
+                "image_prompt": request.image_prompt,
+                "sound_volume": request.sound_volume,
+                "original_audio_volume": request.original_audio_volume,
+            }
+        )
+        
+        # 返回模式说明
+        mode_desc = {
+            "audio": "图片 + 音频模式",
+            "tts": "图片 + 脚本 + 预设音色模式",
+            "voice_clone": "图片 + 脚本 + 声音克隆模式",
+        }
+        
+        logger.info(f"[KlingAPI] 智能播报任务已创建: {ai_task_id}, mode={input_params['mode']}")
+        return {
+            "success": True,
+            "task_id": ai_task_id,
+            "status": "pending",
+            "mode": input_params["mode"],
+            "mode_description": mode_desc[input_params["mode"]],
+            "estimated_time": "3-8 分钟",
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KlingAPI] 创建智能播报任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -519,8 +694,63 @@ async def create_face_swap(
 
 
 # ============================================
-# 任务管理 API
+# 统一任务查询 API（直接查询可灵AI）
 # ============================================
+
+@router.get("/tasks/{category}/{task_type}/{task_id}", summary="统一任务查询", tags=["任务管理"])
+async def get_kling_task_status(
+    category: str,
+    task_type: str,
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    统一任务查询接口 - 直接查询可灵AI API
+    
+    路径匹配可灵API结构: /{category}/{task_type}/{task_id}
+    
+    示例:
+    - 文生视频: GET /kling/tasks/videos/text2video/{task_id}
+    - 图生视频: GET /kling/tasks/videos/image2video/{task_id}
+    - 多图生视频: GET /kling/tasks/videos/multi-image2video/{task_id}
+    - 动作控制: GET /kling/tasks/videos/motion-control/{task_id}
+    - 视频延长: GET /kling/tasks/videos/video-extend/{task_id}
+    - 口型同步: GET /kling/tasks/videos/advanced-lip-sync/{task_id}
+    - 图像生成: GET /kling/tasks/images/generations/{task_id}
+    - Omni图像: GET /kling/tasks/images/omni-image/{task_id}
+    """
+    from ..services.kling_client import get_kling_client
+    
+    try:
+        client = get_kling_client()
+        endpoint_base = f"/{category}/{task_type}"
+        
+        response = await client.get_task(endpoint_base, task_id)
+        
+        if response.get("code") != 0:
+            raise HTTPException(
+                status_code=400, 
+                detail=response.get("message", "Unknown error")
+            )
+        
+        task_data = response.get("data", {})
+        
+        return {
+            "task_id": task_data.get("task_id", task_id),
+            "task_status": task_data.get("task_status", "unknown"),
+            "task_status_msg": task_data.get("task_status_msg"),
+            "task_result": task_data.get("task_result"),
+            "task_info": task_data.get("task_info"),
+            "created_at": task_data.get("created_at"),
+            "updated_at": task_data.get("updated_at"),
+            "raw_data": task_data,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KlingAPI] 查询可灵任务失败: {category}/{task_type}/{task_id} - {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================

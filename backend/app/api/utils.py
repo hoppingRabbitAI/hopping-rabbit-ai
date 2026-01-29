@@ -155,7 +155,12 @@ async def get_asset_download_url(asset_id: str) -> Optional[str]:
     if not storage_path:
         return None
     
-    # 生成签名 URL
+    # ★ Cloudflare 视频：返回 HLS URL（FFmpeg 可直接读取）
+    if storage_path.startswith("cloudflare:"):
+        video_uid = storage_path.replace("cloudflare:", "")
+        return f"https://videodelivery.net/{video_uid}/manifest/video.m3u8"
+    
+    # Supabase 存储：生成签名 URL
     url_result = supabase.storage.from_("clips").create_signed_url(storage_path, 3600)
     return url_result.get("signedURL")
 

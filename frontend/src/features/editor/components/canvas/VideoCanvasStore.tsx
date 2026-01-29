@@ -38,11 +38,13 @@ import type { Keyframe } from '../../types/keyframe';
 import { getAssetProxyUrl, getHlsPlaylistUrl, checkHlsAvailable } from '@/lib/api/media-proxy';
 
 const DEBUG_ENABLED = process.env.NODE_ENV === 'development';
-// 视频播放/缓冲专用调试日志（★ 调试多素材播放问题，临时开启）
-const DEBUG_VIDEO_BUFFER = false; // 已关闭缓冲日志，减少控制台输出
+// 视频播放/缓冲专用调试日志（生产环境关闭）
+const DEBUG_VIDEO_BUFFER = false;
 const debugLog = (...args: unknown[]) => { if (DEBUG_ENABLED) console.log('[VideoCanvas]', ...args); };
 const debugError = (...args: unknown[]) => { if (DEBUG_ENABLED) console.error('[VideoCanvas]', ...args); };
 const bufferLog = (...args: unknown[]) => { if (DEBUG_VIDEO_BUFFER) console.log('[VideoBuffer]', ...args); };
+// 预热日志（仅在 development 模式下打印）
+const preheatLog = (...args: unknown[]) => { if (DEBUG_ENABLED) console.log('[Preheat]', ...args); };
 
 type AspectRatio = '16:9' | '9:16' | '1:1';
 
@@ -64,19 +66,173 @@ const STORE_UPDATE_INTERVAL = 33;   // 30fps 节流 store 更新
 // 超过 1 的部分需要通过 Web Audio API 的 GainNode 实现，暂时先限制到 1
 const clampVolume = (vol: number | undefined): number => Math.min(1, Math.max(0, vol ?? 1));
 
+// ★★★ 构建滤镜/调色 CSS filter 字符串 ★★★
+// 注意：美颜（磨皮、美白、瘦脸等）必须通过 AI 处理，不能用 CSS filter 模拟
+// 这里只处理：滤镜预设（全局色彩调整）和图像调节（亮度、对比度等）
+function buildFilterStyle(clip: { effectParams?: unknown; metadata?: Record<string, unknown> }): string {
+  const filters: string[] = [];
+  const effectParams = clip.effectParams as Record<string, unknown> | undefined;
+  
+  // ★ 滤镜预设 (effectParams.filter) - 全局色彩效果，不需要人脸
+  if (effectParams?.filter) {
+    const filterData = effectParams.filter as { id?: string; intensity?: number };
+    const filterId = filterData.id;
+    const intensity = (filterData.intensity ?? 100) / 100;
+    
+    if (filterId && filterId !== 'none' && intensity > 0) {
+      switch (filterId) {
+        case 'natural':
+          filters.push(`saturate(${1 + 0.1 * intensity})`);
+          break;
+        case 'fresh':
+          filters.push(`saturate(${1 + 0.15 * intensity}) brightness(${1 + 0.02 * intensity})`);
+          break;
+        case 'soft':
+          filters.push(`brightness(${1 + 0.03 * intensity})`);
+          break;
+        case 'warm':
+        case 'warmwhite':
+          filters.push(`sepia(${0.15 * intensity}) saturate(${1.1})`);
+          break;
+        case 'cool':
+        case 'coldwhite':
+          filters.push(`hue-rotate(${-10 * intensity}deg) saturate(${0.95})`);
+          break;
+        case 'pinkwhite':
+        case 'rosy':
+          filters.push(`hue-rotate(${5 * intensity}deg) brightness(${1.02})`);
+          break;
+        case 'peach':
+        case 'cream':
+          filters.push(`saturate(${0.9}) brightness(${1 + 0.05 * intensity})`);
+          break;
+        case 'ins':
+        case 'film':
+        case 'vintage':
+          filters.push(`sepia(${0.2 * intensity}) contrast(${1.1})`);
+          break;
+        case 'blackwhite':
+        case 'bw':
+          filters.push(`grayscale(${intensity})`);
+          break;
+        case 'drama':
+          filters.push(`contrast(${1 + 0.3 * intensity}) saturate(${1 + 0.2 * intensity})`);
+          break;
+        case 'fade':
+          filters.push(`contrast(${1 - 0.1 * intensity}) brightness(${1 + 0.05 * intensity})`);
+          break;
+      }
+    }
+  }
+  
+  // ★ 图片/视频调节参数 (metadata.imageAdjustments) - 全局调色，不需要人脸
+  const adjustments = clip.metadata?.imageAdjustments as Record<string, number> | undefined;
+  if (adjustments) {
+    if (adjustments.temperature !== undefined && adjustments.temperature !== 0) {
+      filters.push(`hue-rotate(${adjustments.temperature * 0.5}deg)`);
+    }
+    if (adjustments.tint !== undefined && adjustments.tint !== 0) {
+      filters.push(`hue-rotate(${adjustments.tint * 1.8}deg)`);
+    }
+    if (adjustments.saturation !== undefined && adjustments.saturation !== 0) {
+      filters.push(`saturate(${1 + adjustments.saturation / 100})`);
+    }
+    if (adjustments.brightness !== undefined && adjustments.brightness !== 0) {
+      filters.push(`brightness(${1 + adjustments.brightness / 100})`);
+    }
+    if (adjustments.contrast !== undefined && adjustments.contrast !== 0) {
+      filters.push(`contrast(${1 + adjustments.contrast / 100})`);
+    }
+  }
+  
+  return filters.length > 0 ? filters.join(' ') : '';
+}
+
+// ★★★ 检测是否需要 AI 美颜处理（面部变形功能需要 MediaPipe） ★★★
+function needsAIBeautyProcessing(clip: { effectParams?: unknown }): boolean {
+  const effectParams = clip.effectParams as Record<string, unknown> | undefined;
+  if (!effectParams?.beauty) return false;
+  
+  const beauty = effectParams.beauty as Record<string, number>;
+  
+  // 面部变形功能需要 AI 处理（不能用 CSS filter 实现）
+  return (
+    (beauty.thinFace ?? 0) > 0 ||
+    (beauty.smallFace ?? 0) > 0 ||
+    (beauty.vFace ?? 0) > 0 ||
+    (beauty.chin ?? 0) !== 0 ||
+    (beauty.forehead ?? 0) !== 0 ||
+    (beauty.cheekbone ?? 0) > 0 ||
+    (beauty.jawbone ?? 0) > 0 ||
+    (beauty.bigEye ?? 0) > 0 ||
+    (beauty.eyeDistance ?? 0) !== 0 ||
+    (beauty.eyeAngle ?? 0) !== 0 ||
+    (beauty.brightenEye ?? 0) > 0 ||
+    (beauty.thinNose ?? 0) > 0 ||
+    (beauty.noseWing ?? 0) > 0 ||
+    (beauty.noseTip ?? 0) !== 0 ||
+    (beauty.noseBridge ?? 0) > 0 ||
+    (beauty.mouthSize ?? 0) !== 0 ||
+    (beauty.lipThickness ?? 0) !== 0 ||
+    (beauty.smile ?? 0) > 0 ||
+    (beauty.teethWhiten ?? 0) > 0 ||
+    (beauty.removeAcne ?? 0) > 0 ||
+    (beauty.removeDarkCircle ?? 0) > 0 ||
+    (beauty.removeWrinkle ?? 0) > 0
+  );
+}
+
+// ★★★ 检测是否需要 AI 美体处理 ★★★
+function needsAIBodyProcessing(clip: { effectParams?: unknown }): boolean {
+  const effectParams = clip.effectParams as Record<string, unknown> | undefined;
+  if (!effectParams?.body) return false;
+  
+  const body = effectParams.body as Record<string, number>;
+  
+  return (
+    (body.autoBody ?? 0) > 0 ||
+    (body.slimBody ?? 0) > 0 ||
+    (body.longLeg ?? 0) > 0 ||
+    (body.slimLeg ?? 0) > 0 ||
+    (body.slimWaist ?? 0) > 0 ||
+    (body.slimArm ?? 0) > 0 ||
+    (body.shoulder ?? 0) !== 0 ||
+    (body.hip ?? 0) > 0 ||
+    (body.swanNeck ?? 0) > 0
+  );
+}
+
 // ★★★ HLS 流式播放配置 ★★★
+// 优化要点：
+// 1. 增大缓冲区：maxBufferLength 从 30s 增加到 120s，支持长视频顺畅播放
+// 2. 增加分片加载超时：fragLoadingTimeOut 从 20s 增加到 60s，适应慢网络
+// 3. 增加重试次数：fragLoadingMaxRetry 从 6 增加到 8，提高容错能力
+// 4. 提前缓冲策略：backBufferLength 保留 30s 已播放内容用于回看
 const HLS_CONFIG: Partial<HlsConfig> = {
-  maxBufferLength: 30,           // 最大缓冲 30 秒
-  maxMaxBufferLength: 60,        // 极限缓冲 60 秒
-  maxBufferSize: 60 * 1000 * 1000, // 60MB 缓冲上限
+  // ★ 前向缓冲 - 支持长视频
+  maxBufferLength: 120,          // 最大缓冲 120 秒（原 30s）
+  maxMaxBufferLength: 300,       // 极限缓冲 5 分钟（原 60s）
+  maxBufferSize: 200 * 1000 * 1000, // 200MB 缓冲上限（原 60MB）
   maxBufferHole: 0.5,            // 允许的缓冲空洞
-  manifestLoadingTimeOut: 10000,  // playlist 加载超时 10s
-  manifestLoadingMaxRetry: 3,     // 重试 3 次
-  levelLoadingTimeOut: 10000,
-  fragLoadingTimeOut: 20000,
-  fragLoadingMaxRetry: 6,
+  
+  // ★ 后向缓冲 - 支持快速回看
+  backBufferLength: 60,          // 保留 60 秒已播放内容（新增）
+  
+  // ★ 加载超时配置 - 增强网络容错
+  manifestLoadingTimeOut: 15000,  // playlist 加载超时 15s（原 10s）
+  manifestLoadingMaxRetry: 5,     // 重试 5 次（原 3 次）
+  levelLoadingTimeOut: 15000,    // （原 10s）
+  levelLoadingMaxRetry: 4,       // 新增
+  fragLoadingTimeOut: 60000,     // 分片加载超时 60s（原 20s）★ 关键
+  fragLoadingMaxRetry: 8,        // 重试 8 次（原 6 次）
+  
+  // ★ 预加载策略 - 主动缓冲
+  startFragPrefetch: true,       // 预加载起始分片（新增）
+  testBandwidth: true,           // 带宽测试以选择最佳质量（新增）
+  
+  // ★ 其他配置
   lowLatencyMode: false,
-  startLevel: -1,
+  startLevel: -1,                // 自动选择质量
   startPosition: -1,
   debug: false,
 };
@@ -132,57 +288,38 @@ async function getHlsSource(assetId: string): Promise<HlsSourceInfo> {
     try {
       bufferLog('  ↳ 调用 checkHlsAvailable...');
       const status = await checkHlsAvailable(assetId);
-      bufferLog('  ↳ HLS 状态:', status);
+      bufferLog('  ↳ HLS 状态:', status.available ? 'ready' : status.cloudflareStatus || status.hlsStatus || 'processing');
       
       let info: HlsSourceInfo;
     
-    if (status.available) {
-      // HLS 已就绪，但需要验证 playlist 真的可以访问
-      const playlistUrl = getHlsPlaylistUrl(assetId);
-      bufferLog('  ↳ 验证 HLS playlist:', playlistUrl);
+    if (status.available && status.playlistUrl) {
+      // ★ HLS 已就绪，直接使用
+      let playlistUrl = status.playlistUrl;
       
-      try {
-        const checkResponse = await fetch(playlistUrl, { method: 'HEAD' });
-        if (!checkResponse.ok) {
-          // ★★★ HLS 状态说可用，但 playlist 实际不存在！这是严重错误！★★★
-          throw new Error(`HLS playlist 不可访问！status=${checkResponse.status}, url=${playlistUrl}`);
-        }
-        bufferLog('  ✓ HLS playlist 可访问');
-      } catch (fetchError) {
-        // ★★★ 网络错误或 playlist 不存在 ★★★
-        throw new Error(`HLS playlist 获取失败！url=${playlistUrl}, error=${fetchError}`);
+      // 相对路径加上 API 基础 URL
+      if (playlistUrl.startsWith('/')) {
+        playlistUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${playlistUrl}`;
       }
       
       info = { 
         url: playlistUrl, 
         type: 'hls', 
         checked: true,
-        needsTranscode: status.needsTranscode,
-        hlsStatus: status.hlsStatus ?? undefined,
+        needsTranscode: false,
+        hlsStatus: 'ready',
       };
-    } else if (status.needsTranscode && !status.canPlayMp4) {
-      // ★ 需要转码但 HLS 未就绪 → 显示"转码中"
+    } else {
+      // ★ HLS 未就绪，显示处理中
       info = { 
         url: '', 
         type: 'transcoding', 
         checked: true,
         needsTranscode: true,
-        hlsStatus: status.hlsStatus ?? undefined,
-      };
-      bufferLog('⏳ 视频转码中:', assetId.slice(-8), 'hlsStatus:', status.hlsStatus);
-    } else {
-      // 可以直接播放 MP4
-      info = { 
-        url: getAssetProxyUrl(assetId), 
-        type: 'mp4', 
-        checked: true,
-        needsTranscode: status.needsTranscode,
-        hlsStatus: status.hlsStatus ?? undefined,
+        hlsStatus: status.cloudflareStatus || status.hlsStatus || 'processing',
       };
     }
     
     hlsSourceCache.set(assetId, info);
-    bufferLog('📡 HLS 源:', assetId.slice(-8), '→', info.type.toUpperCase());
     return info;
   } catch (error) {
     // ★★★ 不再静默回退到 MP4，直接抛出异常 ★★★
@@ -347,7 +484,8 @@ async function doPreheatVideo(assetId: string): Promise<boolean> {
         video.load();
       }
       
-      // 超时保护 30 秒（HLS 需要下载 manifest + 第一个分片，远程存储可能较慢）
+      // 超时保护 90 秒（长视频需要更长时间下载 manifest + 第一个分片）
+      // ★ 从 30s 增加到 90s，支持大文件和慢网络
       setTimeout(() => {
         if (!resolved) {
           resolved = true;
@@ -367,7 +505,7 @@ async function doPreheatVideo(assetId: string): Promise<boolean> {
           // 播放时会重新加载，预热失败不影响使用
           resolve();
         }
-      }, 30000);
+      }, 90000); // ★ 90 秒超时（从 30s 增加）
     });
     
     await loadPromise;
@@ -540,6 +678,135 @@ export function clearHlsCache(): void {
   preloadingAssets.clear();
   
   bufferLog('🗑️ HLS 缓存 + 预热池已清理');
+}
+
+// ★★★ 滑动预热窗口配置 ★★★
+const PRELOAD_WINDOW_SIZE = 5;  // 预热窗口：当前 ± 2 个 clip（共5个）
+const MAX_POOL_SIZE = 8;        // 预热池最大容量（超出时清理最老的）
+
+/**
+ * ★★★ 滑动窗口预热管理 ★★★
+ * 根据当前播放位置，维护一个预热窗口，自动预热窗口内的视频，释放窗口外的资源
+ * 
+ * @param allVideoClips 所有视频 clips（按时间轴顺序）
+ * @param currentClipIndex 当前播放的 clip 索引
+ */
+export function updatePreloadWindow(
+  allVideoClips: Array<{ id: string; assetId?: string; start: number }>,
+  currentClipIndex: number
+): void {
+  if (allVideoClips.length === 0) return;
+  
+  // 计算窗口范围：当前 ± 2
+  const windowStart = Math.max(0, currentClipIndex - 2);
+  const windowEnd = Math.min(allVideoClips.length - 1, currentClipIndex + 2);
+  
+  // 获取窗口内需要预热的 assetIds
+  const windowAssetIds = new Set<string>();
+  for (let i = windowStart; i <= windowEnd; i++) {
+    const assetId = allVideoClips[i]?.assetId;
+    if (assetId) {
+      windowAssetIds.add(assetId);
+    }
+  }
+  
+  bufferLog('📦 更新预热窗口:', 
+    `当前索引=${currentClipIndex}`,
+    `窗口范围=[${windowStart}-${windowEnd}]`,
+    `窗口内资源数=${windowAssetIds.size}`
+  );
+  
+  // 1. 预热窗口内未预热的资源
+  windowAssetIds.forEach(assetId => {
+    if (!videoPreloadPool.has(assetId) && !preloadingAssets.has(assetId)) {
+      bufferLog('🔥 窗口预热:', assetId.slice(-8));
+      preheatVideo(assetId);
+    }
+  });
+  
+  // 2. 清理窗口外的资源（但保留最近使用的）
+  if (videoPreloadPool.size > MAX_POOL_SIZE) {
+    const poolEntries = Array.from(videoPreloadPool.entries());
+    
+    // 按预热时间排序（最老的在前）
+    poolEntries.sort((a, b) => a[1].preheatedAt - b[1].preheatedAt);
+    
+    // 找出不在窗口内的资源
+    const toRemove = poolEntries.filter(([assetId]) => !windowAssetIds.has(assetId));
+    
+    // 只清理超出最大容量的部分
+    const removeCount = Math.max(0, videoPreloadPool.size - MAX_POOL_SIZE);
+    
+    for (let i = 0; i < Math.min(removeCount, toRemove.length); i++) {
+      const [assetId, entry] = toRemove[i];
+      bufferLog('🗑️ 窗口外清理:', assetId.slice(-8));
+      
+      // 清理资源
+      if (entry.hlsInstance) {
+        entry.hlsInstance.destroy();
+      }
+      if (entry.videoElement.parentNode) {
+        entry.videoElement.parentNode.removeChild(entry.videoElement);
+      }
+      entry.videoElement.src = '';
+      entry.videoElement.load();
+      
+      videoPreloadPool.delete(assetId);
+    }
+  }
+}
+
+/**
+ * ★★★ 新素材自动预热 ★★★
+ * 当添加新素材到时间轴时调用，自动预热新素材
+ */
+export async function preheatNewAsset(assetId: string): Promise<boolean> {
+  if (!assetId) return false;
+  
+  // 已经在预热池中
+  if (videoPreloadPool.has(assetId)) {
+    bufferLog('✅ 新素材已在预热池:', assetId.slice(-8));
+    return true;
+  }
+  
+  // 正在预热中
+  if (preloadingAssets.has(assetId)) {
+    bufferLog('⏳ 新素材正在预热中:', assetId.slice(-8));
+    return preloadPromises.get(assetId) ?? Promise.resolve(false);
+  }
+  
+  bufferLog('🆕 预热新素材:', assetId.slice(-8));
+  return preheatVideo(assetId);
+}
+
+/**
+ * ★★★ 获取预热池状态 ★★★
+ * 用于调试和监控
+ */
+export function getPreloadPoolStatus(): {
+  size: number;
+  maxSize: number;
+  entries: Array<{
+    assetId: string;
+    readyState: number;
+    bufferedPercent: number;
+    preheatedAt: number;
+    type: string;
+  }>;
+} {
+  const entries = Array.from(videoPreloadPool.entries()).map(([assetId, entry]) => ({
+    assetId: assetId.slice(-8),
+    readyState: entry.readyState,
+    bufferedPercent: entry.bufferedPercent,
+    preheatedAt: entry.preheatedAt,
+    type: entry.sourceInfo.type,
+  }));
+  
+  return {
+    size: videoPreloadPool.size,
+    maxSize: MAX_POOL_SIZE,
+    entries,
+  };
 }
 
 /** 
@@ -1276,7 +1543,7 @@ export function VideoCanvasNew() {
   const [bufferProgress, setBufferProgress] = useState(0);
   const [showControls, setShowControls] = useState(true);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [loadingStage, setLoadingStage] = useState<'loading' | 'buffering'>('loading');
+  // ★ loadingStage 已移除，加载状态由预热流程统一管理
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // ★★★ 追踪视频容器是否已挂载 ★★★
@@ -1358,151 +1625,512 @@ export function VideoCanvasNew() {
     }
   }, [currentTime, videoClips]);
   
-  // ★★★ 智能预热策略：根据项目总时长选择不同策略 ★★★
-  // 短项目（<= 30秒）：阻塞等全部预热完，确保流畅播放
-  // 长项目（> 30秒）：边播边缓冲，用户可以立即操作
-  const SHORT_PROJECT_THRESHOLD = 30; // 30秒以下为短项目
-  
+  // ★★★ 智能预热策略：统一使用阻塞式预热，确保所有 clip 准备好后才可操作 ★★★
   const preheatedRef = useRef<Set<string>>(new Set()); // 记录已预热的 assetId
   const [isPreheatComplete, setIsPreheatComplete] = useState(false);
-  const [preheatStrategy, setPreheatStrategy] = useState<'short' | 'long' | null>(null);
+  // ★★★ 预热进度追踪 ★★★
+  const [preheatProgress, setPreheatProgress] = useState({ done: 0, total: 0 });
   
-  // 计算项目总时长
-  const projectTotalDuration = useMemo(() => {
-    if (videoClips.length === 0) return 0;
-    const lastClip = videoClips[videoClips.length - 1];
-    return (lastClip.start + (lastClip.duration || 0)) / 1000; // 转换为秒
+  // ★★★ 计算所有 clip 的 assetId 列表（用于检测素材替换）★★★
+  const videoClipAssetIds = useMemo(() => {
+    return videoClips.map(c => c.assetId || '').join(',');
   }, [videoClips]);
   
-  // ★★★ 核心修复：项目加载时，为所有 clip 预先创建并加载视频元素 ★★★
+  // ★★★ 核心修复：项目加载时，为所有 clip 预先创建并加载视频元素（使用 HLS）★★★
   useEffect(() => {
-    if (videoClips.length === 0) return;
-    
-    // 为每个 clip 创建预加载的视频元素
-    const preloadClipVideos = async () => {
-      bufferLog('🔥 开始预热所有 clip 的视频元素，共', videoClips.length, '个');
-      
-      for (const clip of videoClips) {
-        // 如果已经挂载了，跳过
-        if (mountedVideosRef.current.has(clip.id)) {
-          continue;
-        }
-        
-        // 获取 URL
-        let mediaUrl = clip.mediaUrl;
-        if (!mediaUrl && clip.assetId) {
-          const asset = assets.find(a => a.id === clip.assetId);
-          if (asset?.url && (asset.url.startsWith('http://') || asset.url.startsWith('https://'))) {
-            mediaUrl = asset.url;
-          } else if (clip.assetId) {
-            mediaUrl = getAssetProxyUrl(clip.assetId);
-          }
-        }
-        
-        if (!mediaUrl) continue;
-        
-        // 检查预热池是否有 HLS 源
-        const preheatedVideo = clip.assetId ? getPreheatedVideo(clip.assetId) : null;
-        const effectiveUrl = preheatedVideo?.sourceInfo?.url || mediaUrl;
-        
-        // 创建隐藏的视频元素并加载
-        const video = document.createElement('video');
-        video.preload = 'auto';
-        video.playsInline = true;
-        video.muted = true;
-        video.crossOrigin = 'anonymous';
-        video.src = effectiveUrl;
-        video.style.position = 'absolute';
-        video.style.visibility = 'hidden';
-        video.style.width = '1px';
-        video.style.height = '1px';
-        document.body.appendChild(video);
-        
-        // 等待加载
-        await new Promise<void>((resolve) => {
-          const onReady = () => {
-            video.removeEventListener('canplay', onReady);
-            video.removeEventListener('loadeddata', onReady);
-            video.removeEventListener('error', onError);
-            resolve();
-          };
-          const onError = () => {
-            video.removeEventListener('canplay', onReady);
-            video.removeEventListener('loadeddata', onReady);
-            video.removeEventListener('error', onError);
-            resolve(); // 失败也继续
-          };
-          video.addEventListener('canplay', onReady);
-          video.addEventListener('loadeddata', onReady);
-          video.addEventListener('error', onError);
-          
-          // 超时保护
-          setTimeout(resolve, 5000);
-        });
-        
-        // 注册到挂载池
-        mountedVideosRef.current.set(clip.id, {
-          element: video,
-          hlsInstance: null,
-          isReady: video.readyState >= 2,
-        });
-        
-        // 设置正确的时间点
-        if (video.readyState >= 1) {
-          video.currentTime = calcMediaTime(0, clip);
-        }
-        
-        bufferLog('✅ Clip 视频预热完成:', clip.id.slice(-8), 'readyState:', video.readyState);
-      }
-      
-      bufferLog('🎉 所有 clip 视频预热完成');
+    if (videoClips.length === 0) {
+      // 没有视频 clip 时直接完成
       setIsPreheatComplete(true);
       setIsInitialLoading(false);
-      setIsVideoReady(true);
-    };
-    
-    // 同时也执行 assetId 级别的预热（获取 HLS 源等）
-    const orderedAssetIds: string[] = [];
-    const seen = new Set<string>();
-    for (const clip of videoClips) {
-      if (clip.assetId && !seen.has(clip.assetId) && !preheatedRef.current.has(clip.assetId)) {
-        orderedAssetIds.push(clip.assetId);
-        seen.add(clip.assetId);
-      }
+      return;
     }
-    orderedAssetIds.forEach(id => preheatedRef.current.add(id));
     
-    // 先预热 assetId（获取 HLS 源），然后预热 clip
-    Promise.all(orderedAssetIds.map(id => preheatVideo(id).catch(() => false)))
-      .then(() => preloadClipVideos())
-      .catch((err) => {
-        bufferLog('⚠️ 预热失败:', err);
-        setIsPreheatComplete(true);
-        setIsInitialLoading(false);
+    // 重置状态
+    setIsPreheatComplete(false);
+    setIsInitialLoading(true);
+    setPreheatProgress({ done: 0, total: videoClips.length });
+    
+    preheatLog('🚀 开始预热视频，共', videoClips.length, '个 clips');
+    
+    // 为每个 clip 创建预加载的视频元素（使用 HLS 流式加载）
+    const preloadClipVideos = async () => {
+      const totalClips = videoClips.length;
+      let completedCount = 0;
+      let firstClipReady = false;
+      
+      // ★★★ 并行预热所有 clip，但限制并发数避免网络拥塞 ★★★
+      const CONCURRENT_LIMIT = 3;
+      const queue = [...videoClips];
+      const inProgress: Promise<void>[] = [];
+      
+      const preloadOneClip = async (clip: typeof videoClips[0], index: number) => {
+        const clipLabel = `[${index + 1}/${totalClips}] ${clip.id.slice(-8)}`;
+        const assetId = clip.assetId;
+        
+        // 如果已经挂载了这个 clip，跳过
+        if (mountedVideosRef.current.has(clip.id)) {
+          preheatLog(`  ✓ ${clipLabel} 已挂载，跳过`);
+          completedCount++;
+          setPreheatProgress({ done: completedCount, total: totalClips });
+          
+          // ★★★ 第一个 clip 就绪后立即解除阻塞 ★★★
+          if (index === 0 && !firstClipReady) {
+            firstClipReady = true;
+            preheatLog('🎬 第一个视频就绪，解除阻塞');
+            setIsInitialLoading(false);
+            setIsVideoReady(true);
+          }
+          return;
+        }
+        
+        if (!assetId) {
+          preheatLog(`  ⚠️ ${clipLabel} 无 assetId，跳过`);
+          completedCount++;
+          setPreheatProgress({ done: completedCount, total: totalClips });
+          return;
+        }
+        
+        // ★★★ 多 clip 共享 asset：检查同 asset 是否已有 clip 预热过 ★★★
+        const existingClipWithSameAsset = Array.from(mountedVideosRef.current.entries())
+          .find(([, info]) => {
+            // 找到使用同一 asset 的已挂载 clip
+            const clipInfo = videoClips.find(c => c.id === info.element?.dataset?.clipId);
+            return clipInfo?.assetId === assetId;
+          });
+        
+        if (existingClipWithSameAsset) {
+          // 复用已预热的视频元素（需要克隆，否则多个 clip 会冲突）
+          preheatLog(`  ♻️ ${clipLabel} 复用同 asset 的预热结果`);
+        }
+        
+        preheatLog(`  ⏳ ${clipLabel} 开始预热...`);
+        
+        try {
+          // 1. 获取 HLS 源信息（有缓存，同 asset 只请求一次）
+          const sourceInfo = await getHlsSource(assetId);
+          
+          // 2. 如果正在转码，跳过预热
+          if (sourceInfo.type === 'transcoding') {
+            preheatLog(`  ⏳ ${clipLabel} 视频转码中，跳过预热`);
+            completedCount++;
+            setPreheatProgress({ done: completedCount, total: totalClips });
+            return;
+          }
+          
+          // 3. 创建视频元素（每个 clip 需要独立的视频元素，因为 currentTime 不同）
+          // ★★★ 治本：不能用 visibility:hidden 或 1px，否则浏览器可能不加载 ★★★
+          const video = document.createElement('video');
+          video.preload = 'auto';
+          video.playsInline = true;
+          video.muted = true;
+          video.dataset.clipId = clip.id; // ★ 标记所属 clip
+          video.dataset.assetId = assetId; // ★ 标记所属 asset
+          // ★★★ 关键：不设置 crossOrigin，避免跨域问题 ★★★
+          // video.crossOrigin = 'anonymous';
+          
+          // ★★★ 使用 offscreen 方式隐藏，而不是 visibility:hidden ★★★
+          video.style.position = 'fixed';
+          video.style.left = '-9999px';
+          video.style.top = '-9999px';
+          video.style.width = '320px';  // 给一个合理的尺寸
+          video.style.height = '240px';
+          video.style.opacity = '0';
+          video.style.pointerEvents = 'none';
+          document.body.appendChild(video);
+          
+          let hlsInstance: Hls | null = null;
+          
+          // 4. 根据源类型初始化
+          if (sourceInfo.type === 'hls' && Hls.isSupported()) {
+            // ★★★ 关键：为每个 clip 创建独立的 HLS 实例 ★★★
+            hlsInstance = new Hls({
+              ...HLS_CONFIG,
+              // 预热时使用更激进的缓冲策略
+              maxBufferLength: 60,  // 预热时缓冲 60s
+              startFragPrefetch: true,
+            });
+            
+            // ★★★ 修复：等待视频真正可以播放（canplay），而不仅仅是 manifest 解析 ★★★
+            await new Promise<void>((resolve, reject) => {
+              let resolved = false;
+              
+              // 监听视频元素的 canplay 事件（readyState >= 3）
+              const onCanPlay = () => {
+                if (!resolved) {
+                  resolved = true;
+                  video.removeEventListener('canplay', onCanPlay);
+                  video.removeEventListener('loadeddata', onCanPlay);
+                  preheatLog(`    📦 ${clipLabel} 视频可播放，readyState=${video.readyState}`);
+                  resolve();
+                }
+              };
+              
+              // canplay 或 loadeddata 都可以
+              video.addEventListener('canplay', onCanPlay);
+              video.addEventListener('loadeddata', onCanPlay);
+              
+              hlsInstance!.on(Hls.Events.ERROR, (_, data) => {
+                if (data.fatal && !resolved) {
+                  resolved = true;
+                  video.removeEventListener('canplay', onCanPlay);
+                  video.removeEventListener('loadeddata', onCanPlay);
+                  reject(new Error(data.details));
+                }
+              });
+              
+              hlsInstance!.loadSource(sourceInfo.url);
+              hlsInstance!.attachMedia(video);
+              
+              // 超时保护 60s（增加到 60s，确保有足够时间加载）
+              setTimeout(() => {
+                if (!resolved) {
+                  resolved = true;
+                  video.removeEventListener('canplay', onCanPlay);
+                  video.removeEventListener('loadeddata', onCanPlay);
+                  preheatLog(`    ⚠️ ${clipLabel} 预热超时，当前 readyState=${video.readyState}`);
+                  resolve(); // 超时也继续，不阻塞其他 clip
+                }
+              }, 60000);
+            });
+            
+          } else {
+            // MP4 模式
+            video.src = sourceInfo.url || getAssetProxyUrl(assetId);
+            
+            // ★★★ 治本：等待 canplay（readyState >= 3）或至少 loadeddata（readyState >= 2）★★★
+            await new Promise<void>((resolve) => {
+              let resolved = false;
+              
+              const onReady = () => {
+                if (resolved) return;
+                // 只有 readyState >= 2 才算真正就绪
+                if (video.readyState >= 2) {
+                  resolved = true;
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
+                  video.removeEventListener('canplaythrough', onReady);
+                  video.removeEventListener('error', onError);
+                  preheatLog(`    📦 ${clipLabel} MP4 数据加载完成，readyState=${video.readyState}`);
+                  resolve();
+                }
+              };
+              
+              const onError = () => {
+                if (resolved) return;
+                resolved = true;
+                video.removeEventListener('canplay', onReady);
+                video.removeEventListener('loadeddata', onReady);
+                video.removeEventListener('canplaythrough', onReady);
+                video.removeEventListener('error', onError);
+                preheatLog(`    ❌ ${clipLabel} MP4 加载出错`);
+                resolve();
+              };
+              
+              video.addEventListener('canplay', onReady);
+              video.addEventListener('loadeddata', onReady);
+              video.addEventListener('canplaythrough', onReady);
+              video.addEventListener('error', onError);
+              
+              // 触发加载
+              video.load();
+              
+              // 超时 30s
+              setTimeout(() => {
+                if (!resolved) {
+                  resolved = true;
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
+                  video.removeEventListener('canplaythrough', onReady);
+                  video.removeEventListener('error', onError);
+                  preheatLog(`    ⚠️ ${clipLabel} MP4 加载超时，readyState=${video.readyState}`);
+                  resolve();
+                }
+              }, 30000);
+            });
+          }
+          
+          // 5. 注册到挂载池（★★★ 关键：只有 readyState >= 2 才算真正准备好 ★★★）
+          const isVideoReady = video.readyState >= 2;
+          mountedVideosRef.current.set(clip.id, {
+            element: video,
+            hlsInstance,
+            isReady: isVideoReady,
+          });
+          
+          // ★★★ 如果还没准备好，继续等待 ★★★
+          if (!isVideoReady) {
+            preheatLog(`    ⏳ ${clipLabel} 等待视频数据加载... (readyState=${video.readyState})`);
+            await new Promise<void>((resolve) => {
+              const checkReady = () => {
+                if (video.readyState >= 2) {
+                  const info = mountedVideosRef.current.get(clip.id);
+                  if (info) info.isReady = true;
+                  video.removeEventListener('canplay', checkReady);
+                  video.removeEventListener('loadeddata', checkReady);
+                  resolve();
+                }
+              };
+              video.addEventListener('canplay', checkReady);
+              video.addEventListener('loadeddata', checkReady);
+              // 10秒超时
+              setTimeout(() => {
+                video.removeEventListener('canplay', checkReady);
+                video.removeEventListener('loadeddata', checkReady);
+                resolve();
+              }, 10000);
+            });
+          }
+          
+          // 6. 设置正确的初始时间点，并等待 seek 完成
+          // ★★★ 关键修复：seek 后需要等待 seeked 事件，否则 readyState 会降回 1 ★★★
+          if (video.readyState >= 1) {
+            const mediaTime = calcMediaTime(clip.start, clip);
+            const targetTime = Math.max(0, mediaTime);
+            
+            // 只有在需要 seek 时才 seek
+            if (Math.abs(video.currentTime - targetTime) > 0.1) {
+              video.currentTime = targetTime;
+              
+              // 等待 seek 完成
+              await new Promise<void>((resolve) => {
+                const onSeeked = () => {
+                  video.removeEventListener('seeked', onSeeked);
+                  resolve();
+                };
+                video.addEventListener('seeked', onSeeked, { once: true });
+                // 超时保护 5s
+                setTimeout(() => {
+                  video.removeEventListener('seeked', onSeeked);
+                  resolve();
+                }, 5000);
+              });
+              
+              // seek 后可能需要重新等待数据加载
+              if (video.readyState < 2) {
+                await new Promise<void>((resolve) => {
+                  const onReady = () => {
+                    if (video.readyState >= 2) {
+                      video.removeEventListener('canplay', onReady);
+                      video.removeEventListener('loadeddata', onReady);
+                      resolve();
+                    }
+                  };
+                  video.addEventListener('canplay', onReady);
+                  video.addEventListener('loadeddata', onReady);
+                  setTimeout(resolve, 5000);
+                });
+              }
+            }
+          }
+          
+          completedCount++;
+          setPreheatProgress({ done: completedCount, total: totalClips });
+          
+          // ★★★ 最终状态日志 ★★★
+          const finalReady = video.readyState >= 2;
+          const info = mountedVideosRef.current.get(clip.id);
+          if (info) info.isReady = finalReady;
+          
+          preheatLog(`  ${finalReady ? '✅' : '⚠️'} ${clipLabel} 预热${finalReady ? '完成' : '未完全就绪'} (${completedCount}/${totalClips})`,
+            '| 源类型:', sourceInfo.type,
+            '| readyState:', video.readyState,
+            '| isReady:', finalReady);
+          
+          // ★★★ 第一个 clip 就绪后立即解除阻塞 ★★★
+          if (index === 0 && finalReady && !firstClipReady) {
+            firstClipReady = true;
+            preheatLog('🎬 第一个视频就绪，解除阻塞');
+            setIsInitialLoading(false);
+            setIsVideoReady(true);
+          }
+            
+        } catch (error) {
+          completedCount++;
+          setPreheatProgress({ done: completedCount, total: totalClips });
+          preheatLog(`  ❌ ${clipLabel} 预热失败 (${completedCount}/${totalClips}):`, error);
+        }
+      };
+      
+      // 使用有限并发处理队列（带索引追踪）
+      let clipIndex = 0;
+      while (queue.length > 0 || inProgress.length > 0) {
+        // 填充并发队列
+        while (queue.length > 0 && inProgress.length < CONCURRENT_LIMIT) {
+          const clip = queue.shift()!;
+          const currentIndex = clipIndex++;
+          const promise = preloadOneClip(clip, currentIndex).finally(() => {
+            const idx = inProgress.indexOf(promise);
+            if (idx !== -1) inProgress.splice(idx, 1);
+          });
+          inProgress.push(promise);
+        }
+        
+        // 等待任意一个完成
+        if (inProgress.length > 0) {
+          await Promise.race(inProgress);
+        }
+      }
+      
+      // ★★★ 治本：检查是否所有视频都真正就绪 ★★★
+      const notReadyClips = videoClips.filter(clip => {
+        const info = mountedVideosRef.current.get(clip.id);
+        return !info || !info.isReady || info.element.readyState < 2;
       });
       
-  }, [videoClips.length, assets]); // 只在 clip 数量变化时重新预热
+      if (notReadyClips.length > 0) {
+        preheatLog('⏳ 有', notReadyClips.length, '个视频未就绪，继续等待...');
+        
+        // 继续等待未就绪的视频
+        await Promise.all(notReadyClips.map(clip => {
+          return new Promise<void>((resolve) => {
+            const info = mountedVideosRef.current.get(clip.id);
+            if (!info) {
+              resolve();
+              return;
+            }
+            
+            if (info.element.readyState >= 2) {
+              info.isReady = true;
+              resolve();
+              return;
+            }
+            
+            // ★ 使用轮询检查，避免事件丢失的竞态条件
+            let checkCount = 0;
+            const maxChecks = 60; // 30秒 / 500ms = 60次
+            
+            const checkReady = () => {
+              checkCount++;
+              if (info.element.readyState >= 2) {
+                info.isReady = true;
+                preheatLog(`  ✅ ${clip.id.slice(-8)} 轮询就绪，readyState:`, info.element.readyState);
+                resolve();
+                return;
+              }
+              
+              if (checkCount >= maxChecks) {
+                preheatLog(`  ⚠️ ${clip.id.slice(-8)} 最终超时，readyState:`, info.element.readyState);
+                // 即使超时也标记为 ready，让用户可以尝试播放
+                info.isReady = info.element.readyState >= 1;
+                resolve();
+                return;
+              }
+              
+              setTimeout(checkReady, 500);
+            };
+            
+            // 同时监听事件（可能更快）
+            const onReady = () => {
+              info.element.removeEventListener('canplay', onReady);
+              info.element.removeEventListener('loadeddata', onReady);
+              if (!info.isReady) {
+                info.isReady = true;
+                preheatLog(`  ✅ ${clip.id.slice(-8)} 事件就绪，readyState:`, info.element.readyState);
+                resolve();
+              }
+            };
+            
+            info.element.addEventListener('canplay', onReady);
+            info.element.addEventListener('loadeddata', onReady);
+            
+            // 启动轮询
+            setTimeout(checkReady, 500);
+          });
+        }));
+      }
+      
+      // 最终状态日志
+      const readyCount = videoClips.filter(clip => {
+        const info = mountedVideosRef.current.get(clip.id);
+        return info?.isReady;
+      }).length;
+      
+      preheatLog('🎉 预热完成！', readyCount, '/', totalClips, '个视频就绪');
+      setIsPreheatComplete(true);
+      setIsInitialLoading(false);
+      setIsVideoReady(readyCount > 0);
+    };
+    
+    // 直接开始预热
+    preloadClipVideos().catch((err) => {
+      preheatLog('❌ 预热过程出错:', err);
+      setIsPreheatComplete(true);
+      setIsInitialLoading(false);
+    });
+    
+    // ★★★ 依赖说明 ★★★
+    // - videoClips.length: clip 数量变化（添加/删除/切分）
+    // - assets: 素材库变化（添加新素材）
+    // - videoClipAssetIds: clip 的 assetId 变化（替换素材）
+  }, [videoClips.length, assets, videoClipAssetIds]);
   
-  // ★★★ 播放时动态预取：当前clip播放时，预热后续2个视频 ★★★
+  // ★★★ 播放时动态预取：提前 3 秒预热下一个 clip 的视频 ★★★
   useEffect(() => {
-    if (!currentVideoClip || videoClips.length <= 1) return;
+    if (!isPlaying || !currentVideoClip || videoClips.length <= 1) return;
     
     const currentIndex = videoClips.findIndex(c => c.id === currentVideoClip.id);
-    if (currentIndex === -1) return;
+    if (currentIndex === -1 || currentIndex >= videoClips.length - 1) return;
     
-    // 预热后续 2 个视频（去重 + 过滤已预热的）
-    const nextClips = videoClips.slice(currentIndex + 1, currentIndex + 3);
-    const nextAssetIds = Array.from(new Set(
-      nextClips
-        .map(c => c.assetId)
-        .filter((id): id is string => !!id && !videoPreloadPool.has(id))
-    ));
+    // 计算当前 clip 剩余时间
+    const clipEndTime = currentVideoClip.start + currentVideoClip.duration;
+    const remainingTime = clipEndTime - currentTime;
     
-    if (nextAssetIds.length > 0) {
-      bufferLog('⏩ 预取后续视频:', nextAssetIds.map(id => id.slice(-8)));
-      nextAssetIds.forEach(id => preheatVideo(id));
+    // 当剩余时间 < 5 秒时，检查下一个 clip 是否已预热
+    if (remainingTime > 5000) return;
+    
+    const nextClip = videoClips[currentIndex + 1];
+    if (!nextClip) return;
+    
+    // 检查下一个 clip 是否已在挂载池
+    const nextMounted = mountedVideosRef.current.get(nextClip.id);
+    
+    if (!nextMounted || nextMounted.element.readyState < 2) {
+      // 下一个 clip 未准备好，紧急预热
+      bufferLog('⚡ 紧急预热下一个 clip:', nextClip.id.slice(-8), 
+        '| 剩余时间:', (remainingTime / 1000).toFixed(1) + 's');
+      
+      // 如果挂载池没有，触发预热
+      if (!nextMounted && nextClip.assetId) {
+        getHlsSource(nextClip.assetId).then(async (sourceInfo) => {
+          if (sourceInfo.type === 'transcoding') return;
+          
+          const video = document.createElement('video');
+          video.preload = 'auto';
+          video.playsInline = true;
+          video.muted = true;
+          video.crossOrigin = 'anonymous';
+          video.style.cssText = 'position:absolute;visibility:hidden;width:1px;height:1px';
+          document.body.appendChild(video);
+          
+          let hlsInst: Hls | null = null;
+          
+          if (sourceInfo.type === 'hls' && Hls.isSupported()) {
+            hlsInst = new Hls(HLS_CONFIG);
+            hlsInst.loadSource(sourceInfo.url);
+            hlsInst.attachMedia(video);
+          } else {
+            video.src = sourceInfo.url || getAssetProxyUrl(nextClip.assetId!);
+          }
+          
+          mountedVideosRef.current.set(nextClip.id, {
+            element: video,
+            hlsInstance: hlsInst,
+            isReady: false,
+          });
+        });
+      }
+    } else if (nextMounted.element.readyState >= 2) {
+      // 已准备好，确保缓冲足够
+      const buffered = nextMounted.element.buffered;
+      if (buffered.length > 0) {
+        const bufferedSeconds = buffered.end(buffered.length - 1);
+        if (bufferedSeconds < 5) {
+          bufferLog('⏳ 下一个 clip 缓冲不足:', bufferedSeconds.toFixed(1) + 's');
+          // HLS 会自动继续缓冲，这里只是记录日志
+        }
+      }
     }
-  }, [currentVideoClip?.id, videoClips]);
+  }, [currentTime, isPlaying, currentVideoClip?.id, videoClips]);
   
   // ★★★ HLS 状态管理 ★★★
   const [hlsSource, setHlsSource] = useState<HlsSourceInfo | null>(null);
@@ -1724,8 +2352,23 @@ export function VideoCanvasNew() {
   }, [transformTargetClip, currentTime, keyframes]);
 
   // Seek 定位逻辑（带防抖）
+  // ★★★ 关键修复：拖动播放头时必须暂停播放 ★★★
   const seekToTime = useCallback((timelineTimeMs: number, options?: { showIndicator?: boolean }) => {
     const mainVideo = videoRefInternal.current;
+    
+    // ★★★ 治本：拖动播放头时暂停播放 ★★★
+    const wasPlaying = useEditorStore.getState().isPlaying;
+    if (wasPlaying) {
+      bufferLog('⏸️ Seek 时暂停播放');
+      setIsPlaying(false);
+      
+      // 暂停所有已挂载的视频
+      mountedVideosRef.current.forEach((info) => {
+        if (!info.element.paused) {
+          info.element.pause();
+        }
+      });
+    }
     
     // 即使没有视频也要处理防抖逻辑
     const now = Date.now();
@@ -1753,10 +2396,55 @@ export function VideoCanvasNew() {
     });
     
     let needsAnySeek = false;
+    let hasUnmountedClip = false;
     
     visibleClips.forEach(clip => {
       const videoInfo = mountedVideosRef.current.get(clip.id); // ★★★ 治本：用 clip.id ★★★
-      if (!videoInfo || videoInfo.element.readyState < 1) return;
+      
+      // ★★★ 关键：如果目标 clip 未挂载，触发紧急预热 ★★★
+      if (!videoInfo) {
+        hasUnmountedClip = true;
+        bufferLog('⚡ Seek 到未挂载的 clip，紧急预热:', clip.id.slice(-8));
+        
+        if (clip.assetId) {
+          getHlsSource(clip.assetId).then(async (sourceInfo) => {
+            if (sourceInfo.type === 'transcoding') return;
+            
+            const video = document.createElement('video');
+            video.preload = 'auto';
+            video.playsInline = true;
+            video.muted = true;
+            video.crossOrigin = 'anonymous';
+            video.style.cssText = 'position:absolute;visibility:hidden;width:1px;height:1px';
+            document.body.appendChild(video);
+            
+            let hlsInst: Hls | null = null;
+            
+            if (sourceInfo.type === 'hls' && Hls.isSupported()) {
+              hlsInst = new Hls(HLS_CONFIG);
+              hlsInst.loadSource(sourceInfo.url);
+              hlsInst.attachMedia(video);
+            } else {
+              video.src = sourceInfo.url || getAssetProxyUrl(clip.assetId!);
+            }
+            
+            mountedVideosRef.current.set(clip.id, {
+              element: video,
+              hlsInstance: hlsInst,
+              isReady: false,
+            });
+            
+            // 设置正确的时间点
+            const mediaTimeSec = calcMediaTime(timelineTimeMs, clip);
+            video.addEventListener('loadedmetadata', () => {
+              video.currentTime = Math.max(0, mediaTimeSec);
+            }, { once: true });
+          });
+        }
+        return;
+      }
+      
+      if (videoInfo.element.readyState < 1) return;
       
       const mediaTimeSec = calcMediaTime(timelineTimeMs, clip);
       const needsSeek = Math.abs(videoInfo.element.currentTime - mediaTimeSec) > SEEK_THRESHOLD;
@@ -1768,17 +2456,18 @@ export function VideoCanvasNew() {
     });
     
     // 显示 seek 指示器
-    if (needsAnySeek) {
+    if (needsAnySeek || hasUnmountedClip) {
       if (options?.showIndicator !== false) {
-        setSeekingLabel('seeking');
+        setSeekingLabel(hasUnmountedClip ? 'loading' : 'seeking');
         setIsSeeking(true);
       }
       
-      // 超时保护：1秒后自动清除定位状态
+      // 超时保护：未挂载 clip 需要更长时间
+      const timeout = hasUnmountedClip ? 3000 : 1000;
       setTimeout(() => {
         setSeekingLabel(null);
         setIsSeeking(false);
-      }, 1000);
+      }, timeout);
     } else {
       // 不需要 seek，清除状态
       setSeekingLabel(null);
@@ -1794,9 +2483,13 @@ export function VideoCanvasNew() {
         if (Math.abs(el.currentTime - audioTimeSec) > SEEK_THRESHOLD) {
           el.currentTime = Math.max(0, audioTimeSec);
         }
+        // ★ seek 时也暂停音频
+        if (!el.paused) {
+          el.pause();
+        }
       }
     });
-  }, [currentVideoClip, videoClips, audioClips]);
+  }, [currentVideoClip, videoClips, audioClips, setIsPlaying]);
 
   // 音频同步
   const syncAudioClips = useCallback((timelineTimeMs: number, shouldPlay: boolean) => {
@@ -2006,11 +2699,25 @@ export function VideoCanvasNew() {
     const hls = new Hls(HLS_CONFIG);
     hlsRef.current = hls;
     (hls as Hls & { url?: string }).url = effectiveUrl;
+    
+    // ★ 错误恢复计数器
+    let networkErrorRetries = 0;
+    let mediaErrorRetries = 0;
+    const MAX_NETWORK_RETRIES = 5;
+    const MAX_MEDIA_RETRIES = 3;
 
     // 绑定事件
     hls.on(Events.MANIFEST_PARSED, () => {
       bufferLog('✅ HLS Manifest 解析完成');
       setIsVideoReady(true);
+      // 重置错误计数
+      networkErrorRetries = 0;
+      mediaErrorRetries = 0;
+    });
+    
+    // ★ 分片加载成功时重置网络错误计数
+    hls.on(Events.FRAG_LOADED, () => {
+      networkErrorRetries = 0;
     });
 
     hls.on(Events.FRAG_BUFFERED, () => {
@@ -2025,26 +2732,60 @@ export function VideoCanvasNew() {
     });
 
     hls.on(Events.ERROR, (event, data) => {
-      debugError('[HLS] 错误:', data.type, data.details);
+      // ★ 非致命错误只记录日志，HLS.js 会自动处理
+      if (!data.fatal) {
+        bufferLog('[HLS] 非致命错误（自动恢复）:', data.type, data.details);
+        return;
+      }
       
-      if (data.fatal) {
-        switch (data.type) {
-          case ErrorTypes.NETWORK_ERROR:
-            bufferLog('⚠️ HLS 网络错误，尝试恢复...');
-            hls.startLoad();
-            break;
-          case ErrorTypes.MEDIA_ERROR:
-            bufferLog('⚠️ HLS 媒体错误，尝试恢复...');
-            hls.recoverMediaError();
-            break;
-          default:
-            debugError('[HLS] 致命错误，回退到 MP4');
+      debugError('[HLS] 致命错误:', data.type, data.details);
+      
+      switch (data.type) {
+        case ErrorTypes.NETWORK_ERROR:
+          networkErrorRetries++;
+          bufferLog(`⚠️ HLS 网络错误，尝试恢复... (${networkErrorRetries}/${MAX_NETWORK_RETRIES})`);
+          
+          if (networkErrorRetries <= MAX_NETWORK_RETRIES) {
+            // ★ 延迟重试，给网络恢复时间
+            setTimeout(() => {
+              if (hlsRef.current === hls) {
+                hls.startLoad();
+              }
+            }, 1000 * networkErrorRetries); // 递增延迟
+          } else {
+            debugError('[HLS] 网络错误超过重试次数，回退到 MP4');
             hls.destroy();
             hlsRef.current = null;
-            // 回退到 MP4
-            video.src = effectiveUrl;
-            break;
-        }
+            video.src = getAssetProxyUrl(currentAssetId || '');
+          }
+          break;
+          
+        case ErrorTypes.MEDIA_ERROR:
+          mediaErrorRetries++;
+          bufferLog(`⚠️ HLS 媒体错误，尝试恢复... (${mediaErrorRetries}/${MAX_MEDIA_RETRIES})`);
+          
+          if (mediaErrorRetries <= MAX_MEDIA_RETRIES) {
+            if (mediaErrorRetries === 1) {
+              hls.recoverMediaError();
+            } else {
+              // 第二次及以后尝试 swap audio codec
+              hls.swapAudioCodec();
+              hls.recoverMediaError();
+            }
+          } else {
+            debugError('[HLS] 媒体错误超过重试次数，回退到 MP4');
+            hls.destroy();
+            hlsRef.current = null;
+            video.src = getAssetProxyUrl(currentAssetId || '');
+          }
+          break;
+          
+        default:
+          debugError('[HLS] 其他致命错误，回退到 MP4');
+          hls.destroy();
+          hlsRef.current = null;
+          video.src = getAssetProxyUrl(currentAssetId || '');
+          break;
       }
     });
 
@@ -2336,39 +3077,9 @@ export function VideoCanvasNew() {
         container.style.transform = transform;
         container.style.opacity = String(opacity);
         
-        // ★★★ 应用图片/视频调节参数 (imageAdjustments) ★★★
-        const adjustments = activeClipForTransform.metadata?.imageAdjustments;
-        let filterString = '';
-        if (adjustments) {
-          const filters: string[] = [];
-          
-          // 色彩
-          if (adjustments.temperature !== undefined && adjustments.temperature !== 0) {
-            filters.push(`hue-rotate(${adjustments.temperature * 0.5}deg)`);
-          }
-          if (adjustments.tint !== undefined && adjustments.tint !== 0) {
-            filters.push(`hue-rotate(${adjustments.tint * 1.8}deg)`);
-          }
-          if (adjustments.saturation !== undefined && adjustments.saturation !== 0) {
-            filters.push(`saturate(${1 + adjustments.saturation / 100})`);
-          }
-          
-          // 明度
-          if (adjustments.brightness !== undefined && adjustments.brightness !== 0) {
-            filters.push(`brightness(${1 + adjustments.brightness / 100})`);
-          }
-          if (adjustments.contrast !== undefined && adjustments.contrast !== 0) {
-            filters.push(`contrast(${1 + adjustments.contrast / 100})`);
-          }
-          
-          // 效果
-          if (adjustments.sharpness !== undefined && adjustments.sharpness > 0) {
-            filters.push(`contrast(${1 + adjustments.sharpness / 200})`);
-          }
-          
-          filterString = filters.join(' ');
-        }
-        container.style.filter = filterString || 'none';
+        // ★★★ 使用统一的 helper 函数构建 CSS filter ★★★
+        const rafBeautyFilter = buildFilterStyle(activeClipForTransform);
+        container.style.filter = rafBeautyFilter || 'none';
       }
 
       // 动态设置音量和静音状态
@@ -2850,72 +3561,9 @@ export function VideoCanvasNew() {
   // 进度百分比
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
-  // ★★★ 初始加载状态管理（智能判断）★★★
-  // 追踪是否是首次加载（组件挂载后第一个视频）
-  const isFirstLoadRef = useRef(true);
-  const loadingAssetIdRef = useRef<string | null>(null);
-  
-  useEffect(() => {
-    const clipId = currentVideoClip?.id;
-    const assetId = currentVideoClip?.assetId;
-    
-    if (!clipId) {
-      setIsInitialLoading(false);
-      return;
-    }
-    
-    // 同一个 clip，不需要重新处理
-    if (loadingAssetIdRef.current === clipId) {
-      return;
-    }
-    loadingAssetIdRef.current = clipId;
-    
-    // ★ 关键：检查当前 clip 是否已预热或已挂载（以 clip.id 为 key）
-    const isPreheated = assetId ? isVideoPreheated(assetId) : false;
-    const isMounted = mountedVideosRef.current.has(clipId);
-    
-    if (isFirstLoadRef.current && !isPreheated && !isMounted) {
-      // 首次加载且没有预热
-      bufferLog('🎬 首次加载视频，显示加载弹窗');
-      setIsInitialLoading(true);
-      setLoadingStage('loading');
-      isFirstLoadRef.current = false;
-    } else if (!isPreheated && !isMounted) {
-      // 切换到未预热且未挂载的视频
-      bufferLog('🔄 切换到未预热视频，显示加载弹窗');
-      setIsInitialLoading(true);
-      setLoadingStage('loading');
-    } else {
-      // 已预热或已挂载，无需显示加载
-      bufferLog('✨ 视频已预热/已挂载，跳过加载弹窗');
-      setIsInitialLoading(false);
-      isFirstLoadRef.current = false;
-    }
-  }, [currentVideoClip?.id, currentVideoClip?.assetId]);
-
-  // ★★★ 当视频准备好时，结束初始加载 ★★★
-  useEffect(() => {
-    if (isVideoReady && isInitialLoading) {
-      // ★ HLS 模式：不需要等待大量缓冲，可以边播边缓冲
-      if (videoSourceType === 'hls') {
-        bufferLog('✅ HLS 模式，视频准备就绪，关闭加载弹窗');
-        setIsInitialLoading(false);
-        return;
-      }
-      
-      // MP4 模式：如果缓冲进度还低，先显示缓冲状态
-      if (bufferProgress < 30) {
-        setLoadingStage('buffering');
-        // 等待缓冲达到 30% 或 2 秒后结束
-        const timeout = setTimeout(() => {
-          setIsInitialLoading(false);
-        }, 2000);
-        return () => clearTimeout(timeout);
-      } else {
-        setIsInitialLoading(false);
-      }
-    }
-  }, [isVideoReady, isInitialLoading, bufferProgress, videoSourceType]);
+  // ★★★ 注意：isInitialLoading 只在预热阶段统一管理 ★★★
+  // 预热开始时设为 true，预热完成后设为 false
+  // 不再有分散的 setIsInitialLoading 调用
 
   // ★★★ 关键：videoClips 变化时清理不再需要的视频元素 ★★★
   // 场景：删除视频 clip、切换项目、替换素材等
@@ -2960,8 +3608,12 @@ export function VideoCanvasNew() {
   }, [videoClips]);
 
   // ★★★ 多视频播放控制：同步所有可见视频的播放状态和时间 ★★★
+  // ★ 注意：此 effect 主要处理暂停时的视频同步，播放由 RAF 控制
   useEffect(() => {
     if (!mountedVideosRef.current.size) return;
+    
+    // ★★★ 治本：isSeeking 时不处理播放，避免竞争 ★★★
+    if (isSeeking) return;
     
     // 获取当前可见的视频 clips（以 clip.id 为 key）
     const visibleVideoClips = videoClips.filter(clip => {
@@ -2984,28 +3636,24 @@ export function VideoCanvasNew() {
         return;
       }
       
-      // 同步时间
-      const clipMediaTime = calcMediaTime(currentTime, clip);
-      const drift = Math.abs(info.element.currentTime - clipMediaTime);
-      if (drift > 0.3 && info.element.readyState >= 2) {
-        info.element.currentTime = clipMediaTime;
+      // ★★★ 暂停状态：只同步时间，不启动播放 ★★★
+      if (!isPlaying) {
+        const clipMediaTime = calcMediaTime(currentTime, clip);
+        const drift = Math.abs(info.element.currentTime - clipMediaTime);
+        if (drift > 0.3 && info.element.readyState >= 2) {
+          info.element.currentTime = clipMediaTime;
+        }
+        if (!info.element.paused) {
+          info.element.pause();
+        }
+        return;
       }
       
-      // 同步播放状态
-      if (isPlaying && info.element.paused && info.element.readyState >= 2) {
-        info.element.play().catch((err) => {
-          // ★★★ 错误处理：自动静音重试 ★★★
-          if (err.name === 'NotAllowedError') {
-            bufferLog('⚠️ 播放被阻止，尝试静音播放');
-            info.element.muted = true;
-            info.element.play().catch(() => {});
-          }
-        });
-      } else if (!isPlaying && !info.element.paused) {
-        info.element.pause();
-      }
+      // ★★★ 播放状态：由 RAF 控制，这里只处理暂停的视频 ★★★
+      // 不在这里启动播放，避免与 RAF 竞争
+      
     });
-  }, [currentTime, isPlaying, videoClips]);
+  }, [currentTime, isPlaying, isSeeking, videoClips]);
 
   // ★★★ RAF 播放循环：实时更新播放头位置 + 关键帧动画 ★★★
   useEffect(() => {
@@ -3051,37 +3699,50 @@ export function VideoCanvasNew() {
       const mainClip = visibleClips[0];
       const videoInfo = mountedVideosRef.current.get(mainClip.id); // ★★★ 用 clip.id 而不是 assetId ★★★
       
-      // ★★★ 关键修复：视频未加载时使用时间增量模式继续播放 ★★★
-      if (!videoInfo || videoInfo.element.readyState < 2 || videoInfo.element.paused) {
-        // 视频还未准备好，使用时间增量模式
-        const newTime = storeTime + delta; // delta 已经是毫秒
-        const clipEnd = mainClip.start + mainClip.duration;
-        
-        if (newTime >= clipEnd) {
-          // 到达 clip 边界，切换到下一个 clip
-          const nextClip = storeVideoClips
-            .filter(c => c.start >= clipEnd && (c.mediaUrl || c.assetId))
-            .sort((a, b) => a.start - b.start)[0];
-          
-          if (nextClip) {
-            console.log('[RAF] 🔄 Clip 切换:', mainClip.id.slice(-8), '->', nextClip.id.slice(-8));
-            storeState.setCurrentTime(nextClip.start);
-          } else {
-            storeState.setIsPlaying(false);
-            storeState.setCurrentTime(clipEnd);
-            return;
+      // ★★★ 治本：视频未加载时，停止 RAF 等待视频准备好 ★★★
+      if (!videoInfo || videoInfo.element.readyState < 2) {
+        // 视频还未准备好，停止 RAF 循环，等待 canplay 事件再恢复
+        if (videoInfo) {
+          // 只在首次检测到未就绪时打印日志（避免刷屏）
+          if (!videoInfo.element.dataset.waitingForReady) {
+            videoInfo.element.dataset.waitingForReady = 'true';
+            bufferLog('⏳ 视频未就绪，暂停 RAF 等待:', mainClip.id.slice(-8), 
+              'readyState:', videoInfo.element.readyState);
           }
+          
+          // 等待 canplay 后恢复 RAF
+          const onReady = () => {
+            videoInfo.element.removeEventListener('canplay', onReady);
+            delete videoInfo.element.dataset.waitingForReady;
+            bufferLog('✅ 视频就绪，恢复播放:', mainClip.id.slice(-8));
+            
+            if (useEditorStore.getState().isPlaying) {
+              const mediaTime = calcMediaTime(useEditorStore.getState().currentTime, mainClip);
+              videoInfo.element.currentTime = mediaTime;
+              videoInfo.element.play().catch(() => {});
+              // 恢复 RAF 循环
+              rafId = requestAnimationFrame(updatePlayhead);
+            }
+          };
+          videoInfo.element.addEventListener('canplay', onReady, { once: true });
+          // ★★★ 关键：不再继续 RAF，等待 canplay 事件触发后恢复 ★★★
+          return;
         } else {
-          storeState.setCurrentTime(newTime);
+          // 视频还没挂载，短暂等待后重试
+          setTimeout(() => {
+            if (useEditorStore.getState().isPlaying) {
+              rafId = requestAnimationFrame(updatePlayhead);
+            }
+          }, 100);
+          return;
         }
-        
-        // 尝试启动视频播放
-        if (videoInfo && videoInfo.element.readyState >= 2 && videoInfo.element.paused) {
-          const clipMediaTime = calcMediaTime(storeTime, mainClip);
-          videoInfo.element.currentTime = clipMediaTime;
-          videoInfo.element.play().catch(() => {});
-        }
-        
+      }
+      
+      // 视频已就绪但暂停中，启动播放
+      if (videoInfo.element.paused) {
+        const clipMediaTime = calcMediaTime(storeTime, mainClip);
+        videoInfo.element.currentTime = clipMediaTime;
+        videoInfo.element.play().catch(() => {});
         rafId = requestAnimationFrame(updatePlayhead);
         return;
       }
@@ -3100,8 +3761,71 @@ export function VideoCanvasNew() {
           .sort((a, b) => a.start - b.start)[0];
         
         if (nextClip) {
+          // ★★★ 治本：检查下一个 clip 是否准备好 ★★★
+          const nextVideoInfo = mountedVideosRef.current.get(nextClip.id);
+          
+          if (!nextVideoInfo || nextVideoInfo.element.readyState < 2) {
+            // 下一个 clip 未准备好，暂停当前视频并等待
+            console.log('[RAF] ⏳ 等待下一个 clip 准备:', nextClip.id.slice(-8));
+            videoInfo.element.pause();
+            
+            // 设置位置到边界，等待下一个 clip
+            storeState.setCurrentTime(clipEnd);
+            
+            // 如果已挂载但未就绪，等待 canplay
+            if (nextVideoInfo) {
+              const onReady = () => {
+                nextVideoInfo.element.removeEventListener('canplay', onReady);
+                nextVideoInfo.element.removeEventListener('loadeddata', onReady);
+                // 准备好后，设置时间并播放
+                if (useEditorStore.getState().isPlaying) {
+                  const mediaTime = calcMediaTime(nextClip.start, nextClip);
+                  nextVideoInfo.element.currentTime = mediaTime;
+                  nextVideoInfo.element.play().catch(() => {});
+                  console.log('[RAF] ✅ 下一个 clip 就绪，继续播放:', nextClip.id.slice(-8));
+                }
+              };
+              nextVideoInfo.element.addEventListener('canplay', onReady, { once: true });
+              nextVideoInfo.element.addEventListener('loadeddata', onReady, { once: true });
+            }
+            
+            rafId = requestAnimationFrame(updatePlayhead);
+            return;
+          }
+          
+          // 下一个 clip 已准备好，切换
           console.log('[RAF] 🔄 Clip 边界切换:', mainClip.id.slice(-8), '->', nextClip.id.slice(-8));
+          
+          // 暂停当前视频
+          videoInfo.element.pause();
+          
+          // 设置下一个视频的时间并播放
+          const nextMediaTime = calcMediaTime(nextClip.start, nextClip);
+          
+          // ★★★ 关键修复：等待 seek 完成后再继续 RAF ★★★
+          nextVideoInfo.element.currentTime = nextMediaTime;
           storeState.setCurrentTime(nextClip.start);
+          
+          // 等待 seeked 事件后再播放，避免时间计算错误
+          const onSeeked = () => {
+            nextVideoInfo.element.removeEventListener('seeked', onSeeked);
+            if (useEditorStore.getState().isPlaying) {
+              nextVideoInfo.element.play().catch(() => {});
+              rafId = requestAnimationFrame(updatePlayhead);
+            }
+          };
+          nextVideoInfo.element.addEventListener('seeked', onSeeked, { once: true });
+          
+          // 超时保护：如果 seeked 事件没触发，100ms 后强制继续
+          setTimeout(() => {
+            if (useEditorStore.getState().isPlaying && nextVideoInfo.element.paused) {
+              nextVideoInfo.element.removeEventListener('seeked', onSeeked);
+              nextVideoInfo.element.play().catch(() => {});
+              rafId = requestAnimationFrame(updatePlayhead);
+            }
+          }, 100);
+          
+          return; // 不在这里继续 RAF，等 seeked 或超时
         } else {
           // 没有更多 clip，停止播放
           storeState.setIsPlaying(false);
@@ -3122,35 +3846,33 @@ export function VideoCanvasNew() {
     };
   }, [isPlaying]); // ★★★ 只依赖 isPlaying，避免闭包陈旧 ★★★
 
-  // ★★★ 动态预取：播放时预热后续 2 个视频 ★★★
+  // ★★★ 滑动窗口预热：根据当前位置动态管理预热池 ★★★
   useEffect(() => {
-    if (!isPlaying || videoClips.length <= 1) return;
+    if (videoClips.length === 0) return;
     
-    const currentClip = videoClips.find(c => 
+    // 按时间排序
+    const sortedClips = [...videoClips].sort((a, b) => a.start - b.start);
+    
+    // 找到当前 clip 的索引
+    const currentIndex = sortedClips.findIndex(c => 
       currentTime >= c.start && currentTime < c.start + c.duration
     );
     
-    if (!currentClip) return;
+    // 如果找不到当前 clip，使用最近的一个
+    const effectiveIndex = currentIndex === -1 
+      ? sortedClips.findIndex(c => c.start > currentTime) - 1
+      : currentIndex;
     
-    const currentIndex = videoClips.findIndex(c => c.id === currentClip.id);
-    if (currentIndex === -1) return;
-    
-    // 预热后续 2 个视频
-    const nextClips = videoClips.slice(currentIndex + 1, currentIndex + 3);
-    const nextAssetIds = Array.from(new Set(
-      nextClips
-        .map(c => c.assetId)
-        .filter((id): id is string => !!id && !videoPreloadPool.has(id))
-    ));
-    
-    if (nextAssetIds.length > 0) {
-      bufferLog('⏩ 预取后续视频:', nextAssetIds.map(id => id.slice(-8)));
-      nextAssetIds.forEach(id => preheatVideo(id));
+    if (effectiveIndex >= 0) {
+      // 使用滑动窗口更新预热池
+      updatePreloadWindow(sortedClips, effectiveIndex);
     }
-  }, [isPlaying, currentTime, videoClips]);
+  }, [currentTime, videoClips]);
 
-  // ★★★ 短项目预热时显示加载弹窗 ★★★
-  const isShortProjectPreheating = preheatStrategy === 'short' && !isPreheatComplete;
+  // ★★★ 预热进度文案 ★★★
+  const preheatProgressText = preheatProgress.total > 0 
+    ? `正在加载视频 (${preheatProgress.done}/${preheatProgress.total})` 
+    : '正在准备视频...';
 
   return (
     <div 
@@ -3171,14 +3893,14 @@ export function VideoCanvasNew() {
         />
       )}
 
-      {/* ★★★ 短项目预热加载提示 - 只在预热期间显示，预热完成后不再显示任何加载 ★★★ */}
-      {!isTranscoding && isShortProjectPreheating && !!videoUrl && (
+      {/* ★★★ 视频预热加载提示 - 预热完成前阻塞用户操作 ★★★ */}
+      {!isTranscoding && isInitialLoading && videoClips.length > 0 && (
         <BlockingLoader
           isLoading={true}
           type="video"
           title="视频准备中..."
-          subtitle={`正在预加载视频确保流畅播放 (${projectTotalDuration.toFixed(0)}秒视频)`}
-          stage="预热视频..."
+          subtitle={preheatProgressText}
+          stage={preheatProgress.done > 0 ? `已完成 ${preheatProgress.done} 个` : '开始加载...'}
         />
       )}
 
@@ -3261,6 +3983,9 @@ export function VideoCanvasNew() {
                     clipKeyframes
                   );
                   
+                  // ★★★ 构建美颜 + 滤镜 CSS filter ★★★
+                  const beautyFilter = buildFilterStyle(clip);
+                  
                   // ★★★ 检查预热池获取 HLS 源 URL（如果有的话）★★★
                   const preheatedVideo = clip.assetId ? getPreheatedVideo(clip.assetId) : null;
                   const effectiveUrl = preheatedVideo?.sourceInfo?.url || mediaUrl;
@@ -3296,14 +4021,16 @@ export function VideoCanvasNew() {
                             videoEl.style.height = '100%';
                             videoEl.style.transform = transformStyle.transform;
                             videoEl.style.opacity = String(transformStyle.opacity);
+                            videoEl.style.filter = beautyFilter || 'none'; // ★ 应用美颜滤镜
                             videoEl.muted = clip.isMuted ?? false;
                             
                             // 移动到渲染容器
                             containerEl.appendChild(videoEl);
                           } else {
-                            // 已经在容器里，只更新 transform
+                            // 已经在容器里，只更新 transform 和 filter
                             videoEl.style.transform = transformStyle.transform;
                             videoEl.style.opacity = String(transformStyle.opacity);
+                            videoEl.style.filter = beautyFilter || 'none'; // ★ 应用美颜滤镜
                           }
                           
                           // 同步时间
@@ -3329,54 +4056,24 @@ export function VideoCanvasNew() {
                           return;
                         }
                         
-                        // ★★★ 没有预热好的元素，创建新的 ★★★
-                        // 检查容器是否已有视频元素
-                        let videoEl = containerEl.querySelector('video');
-                        if (!videoEl) {
-                          videoEl = document.createElement('video');
-                          videoEl.className = 'w-full h-full object-contain';
-                          videoEl.playsInline = true;
-                          videoEl.preload = 'auto';
-                          videoEl.crossOrigin = 'anonymous';
-                          videoEl.muted = clip.isMuted ?? false;
-                          videoEl.src = effectiveUrl;
-                          videoEl.style.transform = transformStyle.transform;
-                          videoEl.style.opacity = String(transformStyle.opacity);
+                        // ★★★ 治本：如果预热完成但没有可用的视频元素，显示加载提示 ★★★
+                        // 不再在此处创建新视频，避免重复请求和状态混乱
+                        if (isPreheatComplete) {
+                          // 预热已完成但没有这个 clip 的视频，说明预热失败
+                          bufferLog('⚠️ 预热完成但无可用视频:', clipKey.slice(-8));
                           
-                          // 注册事件
-                          videoEl.onloadeddata = () => {
-                            const info = mountedVideosRef.current.get(clipKey);
-                            if (info) info.isReady = true;
-                            setIsVideoReady(true);
-                            setIsInitialLoading(false);
-                            
-                            const state = useEditorStore.getState();
-                            videoEl!.currentTime = calcMediaTime(state.currentTime, clip);
-                            
-                            if (state.isPlaying && videoEl!.paused) {
-                              videoEl!.play().catch(() => {});
-                            }
-                          };
-                          
-                          videoEl.onerror = () => {
-                            if (clip.assetId && !videoEl!.src.includes('/api/assets/stream/')) {
-                              videoEl!.src = getAssetProxyUrl(clip.assetId);
-                            }
-                          };
-                          
-                          containerEl.appendChild(videoEl);
-                          
-                          // 注册到挂载池
-                          mountedVideosRef.current.set(clipKey, {
-                            element: videoEl,
-                            hlsInstance: null,
-                            isReady: videoEl.readyState >= 2,
-                          });
-                        } else {
-                          // 已有视频元素，更新样式
-                          videoEl.style.transform = transformStyle.transform;
-                          videoEl.style.opacity = String(transformStyle.opacity);
+                          // 显示一个占位提示
+                          if (!containerEl.querySelector('.video-loading-placeholder')) {
+                            const placeholder = document.createElement('div');
+                            placeholder.className = 'video-loading-placeholder absolute inset-0 flex items-center justify-center bg-gray-100';
+                            placeholder.innerHTML = '<span class="text-gray-500 text-sm">视频加载中...</span>';
+                            containerEl.appendChild(placeholder);
+                          }
+                          return;
                         }
+                        
+                        // ★★★ 预热未完成，等待预热 ★★★
+                        bufferLog('⏳ 等待预热完成:', clipKey.slice(-8));
                       }}
                     />
                   );

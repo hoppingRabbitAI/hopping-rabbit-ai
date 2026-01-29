@@ -12,6 +12,8 @@ import {
   Eye,
   ChevronDown,
   ChevronRight,
+  PictureInPicture2,
+  Square,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { CompoundKeyframeControls, KeyframeAddDeleteButtons } from './keyframes/PropertyKeyframeButton';
@@ -539,6 +541,56 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
           </div>
           <p className="text-[10px] text-gray-500 mt-2">
             导出视频将使用此比例
+          </p>
+        </div>
+
+        {/* 显示模式 - B-roll 画中画/全屏切换 */}
+        <div className="p-4 border-b border-gray-100">
+          <h4 className="text-xs font-medium text-gray-600 mb-3">显示模式</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => {
+                if (!targetClipId) return;
+                saveToHistory('更新显示模式');
+                updateClip(targetClipId, {
+                  metadata: {
+                    ...targetClip?.metadata,
+                    displayMode: 'fullscreen',
+                  },
+                });
+              }}
+              className={`flex items-center justify-center gap-2 py-2 px-3 text-xs rounded-md border transition-all ${
+                (targetClip?.metadata?.displayMode || 'fullscreen') === 'fullscreen'
+                  ? 'bg-gray-200 text-gray-700 border-gray-400 font-medium'
+                  : 'text-gray-700 bg-gray-100 hover:bg-gray-200 border-gray-200'
+              }`}
+            >
+              <Square size={14} />
+              <span>全屏</span>
+            </button>
+            <button
+              onClick={() => {
+                if (!targetClipId) return;
+                saveToHistory('更新显示模式');
+                updateClip(targetClipId, {
+                  metadata: {
+                    ...targetClip?.metadata,
+                    displayMode: 'pip',
+                  },
+                });
+              }}
+              className={`flex items-center justify-center gap-2 py-2 px-3 text-xs rounded-md border transition-all ${
+                targetClip?.metadata?.displayMode === 'pip'
+                  ? 'bg-gray-200 text-gray-700 border-gray-400 font-medium'
+                  : 'text-gray-700 bg-gray-100 hover:bg-gray-200 border-gray-200'
+              }`}
+            >
+              <PictureInPicture2 size={14} />
+              <span>画中画</span>
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-500 mt-2">
+            画中画模式时，视频将作为小窗口显示在画面角落
           </p>
         </div>
       </div>

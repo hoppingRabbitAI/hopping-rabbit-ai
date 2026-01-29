@@ -49,9 +49,11 @@ async def transcribe_audio(
     language: str = "zh",
     model_name: str = DEFAULT_MODEL,
     model: str = None,  # 兼容旧参数名
+    audio_format: str = None,  # 显式指定音频格式，优先于 URL 推断
     enable_word_timestamps: bool = True,
     word_timestamps: bool = True,  # 兼容旧参数名
     enable_diarization: bool = False,
+    enable_ddc: bool = True,  # ★ 语义顺滑（去除语气词）- 口癖检测时应关闭
     hotwords: list[str] = None,
     on_progress: Optional[Callable[[int, str], None]] = None,
     task_id: str = None,  # 用于检查任务是否被取消
@@ -62,8 +64,11 @@ async def transcribe_audio(
     Args:
         audio_url: 音频文件 URL（必须是公网可访问的）
         language: 语言代码（豆包支持自动检测）
+        audio_format: 显式指定音频格式（mp3, wav, mp4 等），优先于 URL 推断
         enable_word_timestamps: 是否启用逐词时间戳
         enable_diarization: 是否启用说话人分离
+        enable_ddc: 是否启用语义顺滑（DDC）- 会删除"嗯"、"啊"等语气词
+                    ★ 口癖检测时应设为 False 以保留原始语气词
         hotwords: 热词列表
         on_progress: 进度回调函数 (progress: int, step: str)
         task_id: 任务 ID，用于检查任务是否被取消
@@ -78,9 +83,13 @@ async def transcribe_audio(
     if on_progress:
         on_progress(5, "准备提交转写任务")
     
-    # 1. 推断音频格式
-    audio_format = _get_audio_format(audio_url)
-    logger.info(f"[ASR] 音频格式: {audio_format}")
+    # 1. 推断音频格式（优先使用显式指定的格式）
+    if audio_format:
+        final_format = audio_format.lower().lstrip('.')
+        logger.info(f"[ASR] 使用显式指定格式: {final_format}")
+    else:
+        final_format = _get_audio_format(audio_url)
+        logger.info(f"[ASR] 从 URL 推断格式: {final_format}")
     
     # 2. 提交转写任务
     if on_progress:
@@ -91,9 +100,10 @@ async def transcribe_audio(
     
     submit_result = await _submit_asr_task(
         audio_url=audio_url,
-        audio_format=audio_format,
+        audio_format=final_format,
         request_id=request_id,
         enable_diarization=enable_diarization,
+        enable_ddc=enable_ddc,  # ★ 传递语义顺滑开关
         hotwords=hotwords
     )
     
@@ -144,6 +154,7 @@ async def _submit_asr_task(
     audio_format: str,
     request_id: str,
     enable_diarization: bool = False,
+    enable_ddc: bool = True,  # ★ 语义顺滑开关
     hotwords: list[str] = None
 ) -> dict:
     """
@@ -172,7 +183,7 @@ async def _submit_asr_task(
             "enable_itn": True,           # 文本规范化（数字、日期等）
             "enable_punc": True,          # 启用标点
             "show_utterances": True,      # 输出分句信息（带时间戳）
-            "enable_ddc": True,           # 语义顺滑（去除语气词）
+            "enable_ddc": enable_ddc,     # ★ 语义顺滑（去除语气词）- 可配置
         }
     }
     
@@ -387,8 +398,8 @@ def _insert_silence_segments(speech_segments: list[dict]) -> list[dict]:
     # 阈值定义 (毫秒)
     MICRO_PAUSE_THRESHOLD = 200      # < 200ms: 忽略
     HESITATION_THRESHOLD = 500       # > 500ms 句中停顿: 卡顿
-    BREATH_MAX_THRESHOLD = 2000      # < 2000ms 句末停顿: 气口
-    DEAD_AIR_THRESHOLD = 3000        # > 3000ms: 无论如何都是死寂
+    BREATH_MAX_THRESHOLD = 3500      # < 3500ms 句末停顿: 气口（包含较长换气）
+    DEAD_AIR_THRESHOLD = 4000        # > 4000ms: 无论如何都是死寂
     
     for i in range(len(speech_segments)):
         current_seg = speech_segments[i]
@@ -414,18 +425,27 @@ def _insert_silence_segments(speech_segments: list[dict]) -> list[dict]:
         ends_with_punctuation = prev_text and prev_text[-1] in SENTENCE_END_PUNCTUATION
         
         # 分级判定
+        # ★ 调整策略：较长的停顿（1.5-3.5秒）更可能是换气而不是卡顿
+        LONG_BREATH_THRESHOLD = 1500  # 超过 1.5 秒的停顿，倾向于是换气
+        
         if gap_duration >= DEAD_AIR_THRESHOLD:
-            # Level 2: 死寂 (> 3s)
+            # Level 2: 死寂 (> 4s)
             classification = "dead_air"
             is_deleted = True
-            reason = "超长静音 (>3秒)"
+            reason = "超长静音 (>4秒)"
+        elif gap_duration >= LONG_BREATH_THRESHOLD and gap_duration <= BREATH_MAX_THRESHOLD:
+            # ★ 中长停顿 (1.5s ~ 3.5s): 优先识别为换气
+            # 无论是否有标点，这个时长的停顿更可能是自然换气
+            classification = "breath"
+            is_deleted = False
+            reason = "换气停顿"
         elif not ends_with_punctuation and gap_duration >= HESITATION_THRESHOLD:
-            # Level 2: 句中卡顿 (无标点 + > 500ms)
+            # Level 2: 句中卡顿 (无标点 + 500ms~1.5s)
             classification = "hesitation"
             is_deleted = True
             reason = "句中卡顿"
         elif ends_with_punctuation and gap_duration <= BREATH_MAX_THRESHOLD:
-            # Level 3: 气口 (有标点 + < 2s)
+            # Level 3: 气口 (有标点 + < 3.5s)
             classification = "breath"
             is_deleted = False
             reason = "句末换气"
@@ -433,7 +453,7 @@ def _insert_silence_segments(speech_segments: list[dict]) -> list[dict]:
             # 句末但是太长了
             classification = "long_pause"
             is_deleted = True
-            reason = "句末长停顿 (>2秒)"
+            reason = "句末长停顿 (>3.5秒)"
         else:
             # 其他情况：保守处理，保留让用户决定
             classification = "uncertain"

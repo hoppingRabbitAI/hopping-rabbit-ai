@@ -12,6 +12,7 @@ import type {
 import { ApiClient } from './client';
 import { getAssetStreamUrl } from './media-proxy';
 import * as tus from 'tus-js-client';
+import { uploadToCloudflare, type UploadProgressCallback as CFProgressCallback } from './cloudflare-stream';
 
 // ==================== 调试开关 ====================
 const DEBUG_UPLOAD = false;  // 上传日志开关
@@ -285,8 +286,8 @@ async function uploadWithPresignedUrl(
 
 /**
  * 便捷函数：上传视频文件
- * - 小文件 (<50MB)：使用预签名 URL 直接上传
- * - 大文件 (>=50MB)：使用 TUS 协议分片上传，支持断点续传
+ * 
+ * ★★★ 直接使用 Cloudflare Stream（治本方案）★★★
  * 
  * @param file 视频文件
  * @param projectId 项目ID
@@ -304,11 +305,10 @@ export async function uploadVideo(
 }> {
   const api = new AssetApi();
   const pid = projectId || 'temp-project';
-  const useChunkUpload = file.size >= CHUNK_UPLOAD_THRESHOLD;
   
-  uploadLog(`[Upload] 文件: ${file.name}, 大小: ${(file.size / 1024 / 1024).toFixed(2)}MB, 使用${useChunkUpload ? '分片' : '直接'}上传`);
-
-  // 1. 获取预签名 URL 和存储路径
+  uploadLog('[Upload] 🌩️ 使用 Cloudflare Stream 上传');
+  
+  // 1. 先创建 asset 记录获取 asset_id
   const presignResult = await api.presignUpload({
     project_id: pid,
     file_name: file.name,
@@ -317,36 +317,38 @@ export async function uploadVideo(
   });
 
   if (presignResult.error || !presignResult.data) {
-    throw new Error(presignResult.error?.message || '获取上传URL失败');
+    throw new Error(presignResult.error?.message || '创建 asset 失败');
   }
 
-  const { asset_id, upload_url, storage_path } = presignResult.data;
+  const { asset_id } = presignResult.data;
 
-  // 2. 上传文件
-  if (useChunkUpload) {
-    // 大文件：使用 TUS 分片上传
-    await uploadWithTus(file, storage_path, onProgress);
-  } else {
-    // 小文件：使用预签名 URL 直接上传
-    await uploadWithPresignedUrl(file, upload_url, onProgress);
-  }
+  // 2. 上传到 Cloudflare Stream（等待转码完成）
+  const cfProgress: CFProgressCallback = (p) => {
+    onProgress?.({
+      bytesUploaded: p.bytesUploaded,
+      bytesTotal: p.bytesTotal,
+      percentage: p.percentage,
+    });
+  };
 
-  // 3. 确认上传完成
+  // ★ waitForReady=true：等待 Cloudflare 转码完成，进度条会显示"转码中"
+  const result = await uploadToCloudflare(file, asset_id, cfProgress, true);
+
+  // 3. 确认上传完成（更新 asset 记录）
   const confirmResult = await api.confirmUpload({
     asset_id,
     project_id: pid,
     file_name: file.name,
     file_size: file.size,
     content_type: file.type,
-    storage_path,
-    duration,  // 传递视频时长（毫秒）
+    storage_path: `cloudflare:${result.cloudflare_uid}`,
+    duration,
   });
 
   if (confirmResult.error || !confirmResult.data) {
     throw new Error(confirmResult.error?.message || '确认上传失败');
   }
 
-  // 使用代理 URL 解决 CORS 问题
   return {
     asset_id: confirmResult.data.id,
     url: getAssetStreamUrl(confirmResult.data.id),

@@ -334,6 +334,100 @@ def escape_ffmpeg_text(text: str) -> str:
 
 
 # ============================================
+# 滤镜预设支持（全局色彩调整）
+# ============================================
+# 注意：真正的美颜（磨皮、瘦脸、大眼等）必须通过 AI 处理（MediaPipe + 面部检测）
+# FFmpeg 的 blur/eq 只能做全局处理，无法针对面部区域
+# 这里只保留"滤镜预设"功能（全局色彩风格化）
+
+def build_beauty_filter(clip: dict) -> str:
+    """
+    构建视频滤镜链
+    
+    注意：此函数只处理全局色彩滤镜预设，不处理面部美颜。
+    真正的面部美颜需要 AI 人脸检测 + 网格变形，FFmpeg 无法实现。
+    
+    根据 clip.effectParams.filter 构建滤镜预设（全局色彩调整）
+    
+    Args:
+        clip: clip 数据
+        
+    Returns:
+        FFmpeg 滤镜字符串，如果没有滤镜效果则返回空字符串
+    """
+    effect_params = clip.get("effect_params") or clip.get("effectParams") or {}
+    filter_settings = effect_params.get("filter") or {}
+    
+    filters = []
+    
+    # ============ 滤镜预设（全局色彩调整） ============
+    filter_id = filter_settings.get("id") or filter_settings.get("filterId")
+    filter_intensity = filter_settings.get("intensity", 100) / 100
+    
+    if filter_id and filter_id != "none" and filter_intensity > 0:
+        filter_expr = get_filter_preset(filter_id, filter_intensity)
+        if filter_expr:
+            filters.append(filter_expr)
+    
+    # 注意：面部美颜（磨皮、美白、瘦脸、大眼等）需要前端 AI 处理后导出
+    # 或使用专门的 AI 视频处理管道，不在此处实现
+    
+    return ",".join(filters) if filters else ""
+
+
+def get_filter_preset(filter_id: str, intensity: float = 1.0) -> str:
+    """
+    获取滤镜预设的 FFmpeg 表达式
+    
+    Args:
+        filter_id: 滤镜 ID
+        intensity: 强度 0.0-1.0
+        
+    Returns:
+        FFmpeg 滤镜表达式
+    """
+    # 滤镜预设映射
+    FILTER_PRESETS = {
+        # 自然风格
+        "natural": f"eq=saturation={1.0 + 0.1 * intensity}:contrast={1.0 + 0.05 * intensity}",
+        "warm": f"colortemperature={5000 + 1500 * intensity}",  # 暖色调
+        "cool": f"colortemperature={6500 - 1000 * intensity}",  # 冷色调
+        "fresh": f"eq=saturation={1.0 + 0.15 * intensity}:brightness={0.02 * intensity}",
+        
+        # 人像风格
+        "soft": f"gblur=sigma={0.5 * intensity},eq=brightness={0.03 * intensity}",
+        "rosy": f"colorbalance=rs={0.1 * intensity}:gs={-0.05 * intensity}:bs={-0.05 * intensity}",
+        "cream": f"eq=saturation={1.0 - 0.2 * intensity}:brightness={0.05 * intensity}:gamma={1.0 + 0.1 * intensity}",
+        
+        # 风格化
+        "film": f"curves=preset=vintage,eq=saturation={0.9 - 0.1 * intensity}",
+        "bw": f"colorchannelmixer=.3:.4:.3:0:.3:.4:.3:0:.3:.4:.3",  # 黑白
+        "drama": f"eq=contrast={1.0 + 0.3 * intensity}:saturation={1.0 + 0.2 * intensity}",
+        
+        # 复古风格
+        "vintage": f"curves=preset=vintage",
+        "fade": f"colorlevels=rimax={1.0 - 0.1 * intensity}:gimax={1.0 - 0.1 * intensity}:bimax={1.0 - 0.1 * intensity}",
+    }
+    
+    # 简单滤镜（不需要复杂处理）
+    if filter_id in FILTER_PRESETS:
+        return FILTER_PRESETS[filter_id]
+    
+    # 暖色/冷色调需要特殊处理（colortemperature 可能不可用）
+    if filter_id == "warm":
+        # 使用 colorbalance 模拟暖色调
+        r_shift = 0.1 * intensity
+        return f"colorbalance=rs={r_shift}:gs={r_shift * 0.3}:bs={-r_shift * 0.5}"
+    
+    if filter_id == "cool":
+        # 使用 colorbalance 模拟冷色调
+        b_shift = 0.1 * intensity
+        return f"colorbalance=rs={-b_shift * 0.5}:gs={b_shift * 0.3}:bs={b_shift}"
+    
+    return ""
+
+
+# ============================================
 # 关键帧动画支持
 # ============================================
 
@@ -715,6 +809,11 @@ def build_filter_graph(
                 # 缩放适配目标分辨率
                 v_filter += f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
                 v_filter += f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                
+                # ============ 美颜滤镜处理 ============
+                beauty_filter = build_beauty_filter(clip)
+                if beauty_filter:
+                    v_filter += beauty_filter + ","
                 
                 # 5. 透明度 - 支持关键帧动画
                 opacity_kf = kf_by_prop.get("opacity", [])

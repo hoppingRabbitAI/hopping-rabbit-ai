@@ -10,6 +10,11 @@ HoppingRabbit AI - 可灵AI API 集成服务
 5. 表情/动作迁移 - 批量生成不同版本
 
 API 文档: https://platform.klingai.com/docs/api
+
+注意: 
+- 底层 HTTP 客户端已迁移到 kling_client.py (单例模式，连接复用)
+- Pydantic 模型定义在 schemas/kling.py
+- 本文件保留业务服务层逻辑
 """
 
 import os
@@ -20,6 +25,9 @@ import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
+
+# 导入新的客户端（推荐使用）
+from .kling_client import get_kling_client, KlingClient, close_kling_client
 
 logger = logging.getLogger(__name__)
 

@@ -226,27 +226,36 @@ async def delete_asset(
     asset_id: str,
     user_id: str = Depends(get_current_user_id)
 ):
-    """删除资源"""
+    """删除资源（同步清理 Cloudflare Stream）"""
     try:
-        asset = supabase.table("assets").select("storage_path, thumbnail_path").eq("id", asset_id).eq("user_id", user_id).single().execute()
+        asset = supabase.table("assets").select("storage_path, thumbnail_path, cloudflare_uid").eq("id", asset_id).eq("user_id", user_id).single().execute()
         
         if not asset.data:
             raise HTTPException(status_code=404, detail="资源不存在")
         
-        # 删除存储文件
-        paths_to_delete = []
-        if asset.data.get("storage_path"):
-            paths_to_delete.append(asset.data["storage_path"])
-        if asset.data.get("thumbnail_path"):
-            paths_to_delete.append(asset.data["thumbnail_path"])
+        # ★★★ 删除 Cloudflare Stream 视频 ★★★
+        cloudflare_uid = asset.data.get("cloudflare_uid")
+        if cloudflare_uid:
+            try:
+                from ..services.cloudflare_stream import delete_video
+                deleted = await delete_video(cloudflare_uid)
+                if deleted:
+                    logger.info(f"🌩️ 已删除 Cloudflare 视频: {cloudflare_uid[:8]}...")
+                else:
+                    logger.warning(f"🌩️ Cloudflare 视频删除失败: {cloudflare_uid[:8]}...")
+            except Exception as e:
+                logger.warning(f"Cloudflare 删除失败: {e}")
         
-        if paths_to_delete:
+        # 删除 Supabase 存储文件（如果有）
+        storage_path = asset.data.get("storage_path", "")
+        if storage_path and not storage_path.startswith("cloudflare:"):
+            paths_to_delete = [storage_path]
+            if asset.data.get("thumbnail_path"):
+                paths_to_delete.append(asset.data["thumbnail_path"])
             try:
                 supabase.storage.from_("clips").remove(paths_to_delete)
             except Exception as e:
-                # 存储删除失败不阻断流程，仅记录日志
-                import logging
-                logging.warning(f"删除存储文件失败: {e}")
+                logger.warning(f"删除存储文件失败: {e}")
         
         # 删除数据库记录
         supabase.table("assets").delete().eq("id", asset_id).execute()
@@ -261,6 +270,8 @@ async def delete_asset(
 async def process_asset(asset_id: str) -> None:
     """后台处理资源：提取元数据 + 生成缩略图 + 生成 HLS 流
     
+    如果使用 Cloudflare Stream，则跳过本地 HLS 生成
+    
     Args:
         asset_id: 资源 ID
     """
@@ -274,7 +285,21 @@ async def process_asset(asset_id: str) -> None:
         
         file_type = asset.data.get("file_type")
         storage_path = asset.data.get("storage_path")
-        logger.debug(f"资源信息: file_type={file_type}, storage_path={storage_path}")
+        cloudflare_uid = asset.data.get("cloudflare_uid")  # ★ 检查是否使用 Cloudflare
+        cloudflare_status = asset.data.get("cloudflare_status")
+        logger.debug(f"资源信息: file_type={file_type}, storage_path={storage_path}, cloudflare={cloudflare_uid is not None}")
+        
+        # ★★★ Cloudflare Stream 路径：跳过本地处理 ★★★
+        if cloudflare_uid:
+            logger.info(f"🌩️ 使用 Cloudflare Stream，跳过本地 HLS 生成: asset_id={asset_id}")
+            # Cloudflare 会自动处理转码，这里只需要等待就绪
+            # 后端 cloudflare.py 的 notify_upload_complete 会处理状态更新
+            update_data = {
+                "status": "ready" if cloudflare_status == "ready" else "processing",
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            supabase.table("assets").update(update_data).eq("id", asset_id).execute()
+            return
         
         if not storage_path:
             logger.warning(f"缺少 storage_path: asset_id={asset_id}")
@@ -292,7 +317,7 @@ async def process_asset(asset_id: str) -> None:
         
         if file_type in ["video", "audio"]:
             try:
-                from ..tasks.asset_processing import extract_media_metadata, generate_thumbnail_from_url, generate_hls_from_url
+                from ..tasks.asset_processing import extract_media_metadata, generate_thumbnail_from_url
                 logger.debug("正在提取元数据...")
                 metadata = await extract_media_metadata(file_url)
                 logger.debug(f"提取到的元数据: {metadata}")
@@ -307,8 +332,9 @@ async def process_asset(asset_id: str) -> None:
                     "channels": metadata.get("channels"),
                 })
                 
-                # ★ 为视频生成缩略图和 HLS 流
-                if file_type == "video":
+                # ★ 为视频生成缩略图
+                # ★ Cloudflare 视频：跳过本地处理（Cloudflare 自动生成缩略图）
+                if file_type == "video" and not storage_path.startswith("cloudflare:"):
                     # 生成缩略图
                     logger.debug("正在生成缩略图...")
                     try:
@@ -323,38 +349,16 @@ async def process_asset(asset_id: str) -> None:
                     except Exception as e:
                         logger.warning(f"缩略图生成失败: {e}")
                     
-                    # ★ 检测视频编码，判断是否需要转码
-                    # 浏览器原生支持的编码格式
-                    BROWSER_SUPPORTED_CODECS = {"h264", "avc1", "vp8", "vp9", "av1", "hevc", "h265"}
+                    # ★ 记录编码信息（用于前端判断）
                     video_codec = metadata.get("codec", "")
+                    BROWSER_SUPPORTED_CODECS = {"h264", "avc1", "vp8", "vp9", "av1", "hevc", "h265"}
                     needs_transcode = video_codec and video_codec.lower() not in BROWSER_SUPPORTED_CODECS
+                    update_data["needs_transcode"] = needs_transcode
                     
-                    if needs_transcode:
-                        logger.warning(f"⚠️ 视频编码 {video_codec} 需要转码为 H.264")
-                        update_data["needs_transcode"] = True
-                        update_data["hls_status"] = "pending"
-                        
-                        # ★ 必须生成 HLS，否则无法播放
-                        logger.info(f"正在生成 HLS 流（codec={video_codec}）...")
-                        try:
-                            hls_path = await generate_hls_from_url(
-                                asset_id=asset_id,
-                                video_url=file_url
-                            )
-                            if hls_path:
-                                update_data["hls_path"] = hls_path
-                                update_data["hls_status"] = "ready"
-                                logger.info(f"✅ HLS 生成成功: {hls_path}")
-                            else:
-                                update_data["hls_status"] = "failed"
-                                logger.error(f"❌ HLS 生成失败（返回空）")
-                        except Exception as e:
-                            update_data["hls_status"] = "failed"
-                            logger.error(f"❌ HLS 生成失败: {e}")
-                    else:
-                        # 浏览器支持的编码，无需转码
-                        update_data["needs_transcode"] = False
-                        logger.info(f"跳过 HLS 生成（浏览器支持编码: {video_codec or 'h264'}）")
+                    logger.info(f"☁️ Supabase 视频处理完成 (codec={video_codec or 'h264'})")
+                elif file_type == "video":
+                    # Cloudflare 视频：无需本地处理
+                    logger.info(f"☁️ Cloudflare 视频：跳过本地处理")
                 
                 logger.debug(f"将更新: {update_data}")
             except Exception as e:
@@ -621,6 +625,10 @@ async def get_hls_status(asset_id: str):
     检查 HLS 是否可用
     前端可以用此接口判断是否使用 HLS 播放
     
+    ★ 支持 Cloudflare Stream：
+    - 如果有 cloudflare_uid 且状态为 ready，直接返回 Cloudflare HLS URL
+    - 否则回退到本地 HLS
+    
     返回:
     - available: HLS 是否已就绪
     - needs_transcode: 是否需要转码才能播放（ProRes 等）
@@ -628,9 +636,10 @@ async def get_hls_status(asset_id: str):
     - hls_progress: HLS 处理进度 (0-100)
     - hls_message: HLS 处理状态消息（如：正在下载远程视频...）
     - can_play_mp4: 是否可以直接播放 MP4（不需要等待 HLS）
+    - cloudflare: 是否使用 Cloudflare Stream
     
     前端逻辑:
-    1. if available → 使用 HLS
+    1. if available → 使用 HLS（playlist_url 可能是 Cloudflare 或本地）
     2. elif needs_transcode and hls_status != 'ready' → 显示"转码中" + hls_message
     3. else → 使用 MP4 代理
     """
@@ -641,10 +650,9 @@ async def get_hls_status(asset_id: str):
     for attempt in range(max_retries + 1):
         try:
             # 使用 asyncio.to_thread 避免阻塞事件循环
+            # ★ 使用 SELECT * 避免查询不存在的字段报错
             result = await asyncio.to_thread(
-                lambda: supabase.table("assets").select(
-                    "hls_path, status, needs_transcode, hls_status, hls_progress, hls_message"
-                ).eq("id", asset_id).maybe_single().execute()
+                lambda: supabase.table("assets").select("*").eq("id", asset_id).maybe_single().execute()
             )
             
             # ★ 修复：result 或 result.data 可能为 None
@@ -658,22 +666,49 @@ async def get_hls_status(asset_id: str):
             hls_progress = result.data.get("hls_progress", 0)  # 0-100
             hls_message = result.data.get("hls_message")  # 进度消息
             
+            # ★★★ Cloudflare Stream 支持 ★★★
+            cloudflare_uid = result.data.get("cloudflare_uid")
+            cloudflare_status = result.data.get("cloudflare_status")
+            
+            use_cloudflare = False
+            playlist_url = None
+            
+            if cloudflare_uid and cloudflare_status == "ready":
+                # Cloudflare Stream 就绪，直接使用 Cloudflare HLS URL
+                use_cloudflare = True
+                # hls_path 应该已经被设置为 Cloudflare HLS URL
+                playlist_url = hls_path  # 例如: https://customer-xxx.cloudflarestream.com/{uid}/manifest/video.m3u8
+                hls_status = "ready"
+                logger.debug(f"🌩️ 使用 Cloudflare Stream HLS: {playlist_url}")
+            elif cloudflare_uid and cloudflare_status in ("uploading", "processing"):
+                # Cloudflare 正在处理中
+                use_cloudflare = True
+                hls_status = "processing"
+                hls_message = f"Cloudflare 转码中 ({cloudflare_status})"
+            elif hls_path:
+                # 使用本地 HLS
+                playlist_url = f"/api/assets/hls/{asset_id}/playlist.m3u8"
+            
             # ★ 判断是否可以直接播放 MP4
-            # 如果需要转码，必须等 HLS 实际可用（hls_path 存在）才能播放
-            # 修复 bug: 之前只检查 hls_status == "ready"，但 hls_path 可能为空
-            hls_available = hls_path is not None
+            hls_available = playlist_url is not None and (hls_status == "ready" or use_cloudflare and cloudflare_status == "ready")
             can_play_mp4 = not needs_transcode or hls_available
             
+            # ★ 获取 storage_path 供前端判断
+            storage_path = result.data.get("storage_path", "")
+
             return {
                 "available": hls_available,
                 "hls_path": hls_path,
                 "asset_status": status,
-                "playlist_url": f"/api/assets/hls/{asset_id}/playlist.m3u8" if hls_path else None,
+                "playlist_url": playlist_url,
                 "needs_transcode": needs_transcode,
                 "hls_status": hls_status,
                 "hls_progress": hls_progress,
                 "hls_message": hls_message,
                 "can_play_mp4": can_play_mp4,
+                "cloudflare": use_cloudflare,
+                "cloudflare_status": cloudflare_status,
+                "storage_path": storage_path,  # ★ 供前端识别 cloudflare: 前缀
             }
             
         except HTTPException:
@@ -693,6 +728,19 @@ async def get_hls_status(asset_id: str):
     logger.error(f"HLS status error for asset {asset_id}: {last_error}")
     logger.error(f"Traceback: {traceback.format_exc()}")
     raise HTTPException(status_code=500, detail=str(last_error))
+
+
+@router.post("/hls/{asset_id}/regenerate")
+async def regenerate_hls(asset_id: str, background_tasks: BackgroundTasks):
+    """
+    ★ 已废弃：Cloudflare 自动处理 HLS
+    保留接口以兼容，返回提示信息
+    """
+    return {
+        "message": "HLS is now handled by Cloudflare Stream automatically",
+        "asset_id": asset_id,
+        "deprecated": True
+    }
 
 
 @router.get("/hls/{asset_id}/{segment}")
@@ -747,6 +795,7 @@ async def stream_asset(asset_id: str, request: Request):
     支持 Range 请求，用于视频播放
     注意：使用 admin client 绕过 RLS，因为视频播放需要公开访问
     """
+    from fastapi.responses import RedirectResponse
     max_retries = 3
     last_error = None
     
@@ -768,7 +817,16 @@ async def stream_asset(asset_id: str, request: Request):
             if not storage_path:
                 raise HTTPException(status_code=404, detail="Asset has no storage path")
             
+            # ★ Cloudflare 视频：直接重定向到 HLS URL
+            if storage_path.startswith("cloudflare:"):
+                video_uid = storage_path.replace("cloudflare:", "")
+                hls_url = f"https://videodelivery.net/{video_uid}/manifest/video.m3u8"
+                return RedirectResponse(url=hls_url, status_code=302)
+            
             signed_url = get_file_url("clips", storage_path)
+            if not signed_url:
+                raise HTTPException(status_code=404, detail="Could not generate signed URL")
+            
             mime_type = _get_mime_type(asset)
             range_header = request.headers.get("range")
             
@@ -796,67 +854,33 @@ async def stream_asset(asset_id: str, request: Request):
 @router.get("/proxy/{asset_id}")
 async def stream_proxy_video(asset_id: str, request: Request):
     """
-    流式代理视频（720p 低码率版本），用于编辑器预览
-    
-    优先返回代理视频，如果不存在则返回原始视频
-    支持 Range 请求
-    注意：使用 admin client 绕过 RLS，因为视频播放需要公开访问
+    ★ 已废弃：重定向到 Cloudflare Stream
+    保留接口以兼容旧代码调用，直接重定向到 Cloudflare HLS
     """
-    max_retries = 3
-    last_error = None
-    
-    # 使用 admin client 绕过 RLS 限制
+    from fastapi.responses import RedirectResponse
     from ..services.supabase_client import get_supabase_admin_client
+    
     admin_supabase = get_supabase_admin_client()
+    result = await asyncio.to_thread(
+        lambda: admin_supabase.table("assets").select("storage_path, cloudflare_uid").eq("id", asset_id).single().execute()
+    )
     
-    for attempt in range(max_retries):
-        try:
-            # 使用 asyncio.to_thread 避免阻塞事件循环
-            result = await asyncio.to_thread(
-                lambda: admin_supabase.table("assets").select("*").eq("id", asset_id).single().execute()
-            )
-            if not result.data:
-                raise HTTPException(status_code=404, detail="Asset not found")
-            
-            asset = result.data
-            proxy_path = asset.get("proxy_path")
-            storage_path = asset.get("storage_path")
-            
-            if proxy_path:
-                actual_path = proxy_path
-                video_type = "proxy"
-                logger.debug(f"使用代理视频: {proxy_path}")
-            elif storage_path:
-                actual_path = storage_path
-                video_type = "original"
-                logger.debug(f"代理视频不存在，使用原始视频: {storage_path}")
-            else:
-                raise HTTPException(status_code=404, detail="Asset has no video path")
-            
-            signed_url = get_file_url("clips", actual_path)
-            range_header = request.headers.get("range")
-            extra_headers = {
-                "X-Video-Type": video_type,
-                "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges, X-Video-Type",
-            }
-            
-            return await _create_streaming_response(signed_url, "video/mp4", range_header, extra_headers)
-            
-        except HTTPException:
-            raise
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout) as e:
-            last_error = e
-            logger.warning(f"Proxy stream retry {attempt + 1}/{max_retries} for asset {asset_id}: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            break
-        except Exception as e:
-            last_error = e
-            break
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Asset not found")
     
-    logger.error(f"Proxy stream error for asset {asset_id} after {max_retries} attempts: {last_error}")
-    raise HTTPException(status_code=500, detail=str(last_error))
+    storage_path = result.data.get("storage_path", "")
+    cloudflare_uid = result.data.get("cloudflare_uid")
+    
+    # Cloudflare 视频：返回 HLS URL
+    if storage_path.startswith("cloudflare:") or cloudflare_uid:
+        uid = cloudflare_uid or storage_path.replace("cloudflare:", "")
+        hls_url = f"https://videodelivery.net/{uid}/manifest/video.m3u8"
+        return RedirectResponse(url=hls_url, status_code=302)
+    
+    # 旧视频：返回原始流
+    signed_url = get_file_url("clips", storage_path)
+    range_header = request.headers.get("range")
+    return await _create_streaming_response(signed_url, "video/mp4", range_header, {})
 
 
 # ============================================

@@ -17,6 +17,7 @@ import {
   Sticker,
   ImagePlus,
   Smile,
+  PaintBucket,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { CLIP_TYPE_COLORS, createDefaultClip } from '../types/clip';
@@ -41,6 +42,7 @@ const LIBRARY_TOOLS: LibraryTool[] = [
   { id: 'audio', name: 'Audio', icon: <Music size={22} />, description: '音频调节' },
   { id: 'speed', name: 'Speed', icon: <Gauge size={22} />, description: '视频变速' },
   { id: 'b-roll', name: 'B-roll', icon: <Film size={22} />, description: 'B-roll 素材库' },
+  { id: 'background', name: 'Background', icon: <PaintBucket size={22} />, description: '背景设置' },
   { id: 'template', name: 'Template', icon: <LayoutTemplate size={22} />, description: '模板库', disabled: true },
   { id: 'upload', name: 'Upload', icon: <Upload size={22} />, description: '上传素材' },
   { id: 'transition', name: 'Transition', icon: <ArrowRightLeft size={22} />, description: '转场效果', disabled: true },
@@ -210,6 +212,12 @@ export function LibrarySidebar({ onUploadClick }: LibrarySidebarProps) {
       setActiveSidebarPanel(activeSidebarPanel === 'speed' ? null : 'speed');
       return;
     }
+
+    // Background 背景设置
+    if (tool.id === 'background') {
+      setActiveSidebarPanel(activeSidebarPanel === 'background' ? null : 'background');
+      return;
+    }
   };
 
   // 判断按钮是否处于激活状态
@@ -222,6 +230,7 @@ export function LibrarySidebar({ onUploadClick }: LibrarySidebarProps) {
     if (toolId === 'text') return activeSidebarPanel === 'text';
     if (toolId === 'audio') return activeSidebarPanel === 'audio';
     if (toolId === 'speed') return activeSidebarPanel === 'speed';
+    if (toolId === 'background') return activeSidebarPanel === 'background';
     return false;
   };
 

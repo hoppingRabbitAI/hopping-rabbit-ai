@@ -1138,9 +1138,13 @@ async def save_project_state(project_id: str, request: dict):
     前端通过此接口实时保存编辑状态
     
     ★ 优化：使用批量操作减少数据库请求次数
+    ★ 新增：自动重试 HTTP/2 断连错误
     """
     import asyncio
     import time
+    import httpx
+    
+    MAX_RETRIES = 3  # 最大重试次数
     
     start_time = time.time()
     
@@ -1158,7 +1162,7 @@ async def save_project_state(project_id: str, request: dict):
         
         t1 = time.time()
         
-        # ★ 优化：一次性查询所有需要的数据
+        # ★ 优化：一次性查询所有需要的数据（带重试）
         def _fetch_all():
             # 查项目（必须）
             project = supabase.table("projects").select("id").eq("id", project_id).single().execute()
@@ -1182,7 +1186,17 @@ async def save_project_state(project_id: str, request: dict):
             
             return project.data, track_ids, clip_ids, kf_ids
         
-        project, existing_track_ids, existing_clip_ids, existing_kf_ids = await asyncio.to_thread(_fetch_all)
+        # ★ 带重试的查询
+        for attempt in range(MAX_RETRIES):
+            try:
+                project, existing_track_ids, existing_clip_ids, existing_kf_ids = await asyncio.to_thread(_fetch_all)
+                break
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    logger.warning(f"[Projects] 查询断连，重试 {attempt + 1}/{MAX_RETRIES}: {e}")
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    raise
         
         t2 = time.time()
         logger.debug(f"[Projects] 查询耗时: {(t2-t1)*1000:.0f}ms")
@@ -1305,8 +1319,6 @@ async def save_project_state(project_id: str, request: dict):
         
         t3 = time.time()
         
-        t3 = time.time()
-        
         # ★ 执行批量操作（使用 upsert 一次性处理）
         def _batch_save():
             # Tracks: 使用 upsert
@@ -1341,7 +1353,17 @@ async def save_project_state(project_id: str, request: dict):
             # 更新项目时间戳
             supabase.table("projects").update({"updated_at": now}).eq("id", project_id).execute()
         
-        await asyncio.to_thread(_batch_save)
+        # ★ 带重试的保存
+        for attempt in range(MAX_RETRIES):
+            try:
+                await asyncio.to_thread(_batch_save)
+                break
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    logger.warning(f"[Projects] 保存断连，重试 {attempt + 1}/{MAX_RETRIES}: {e}")
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    raise
         
         t4 = time.time()
         total_ms = (t4 - start_time) * 1000

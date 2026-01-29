@@ -29,3 +29,13 @@ export { taskApi, TaskApi, transcribeVideo } from './tasks';
 export { exportApi, ExportApi, exportVideo } from './export';
 export { smartApi, SmartApi } from './smart';
 export { brollApi, BRollApi } from './broll';
+export { materialsApi, MaterialsApi } from './materials';
+export type { 
+  UserMaterial, 
+  AvatarItem, 
+  VoiceSampleItem, 
+  MaterialType, 
+  AssetCategory,
+  MaterialPreferences 
+} from './materials';
+

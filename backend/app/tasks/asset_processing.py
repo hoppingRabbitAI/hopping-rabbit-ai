@@ -5,13 +5,15 @@ HoppingRabbit AI - 资源处理任务
 - 提取波形数据
 - 生成缩略图
 - 提取元数据
+- ★ faststart 优化（移动 moov atom 到文件开头，支持流式播放）
 """
 import os
 import tempfile
 import logging
 import json
 import subprocess
-from typing import Optional
+import asyncio
+from typing import Optional, Tuple
 from uuid import uuid4
 from datetime import datetime
 import httpx
@@ -210,6 +212,201 @@ def extract_metadata(file_path: str) -> dict:
 
 
 # ============================================
+# ★★★ 以下函数已废弃 - Cloudflare Stream 自动处理 ★★★
+# ============================================
+# 保留代码以兼容旧的导入，但不再使用
+
+async def apply_faststart(asset_id: str, video_url: str) -> Tuple[bool, str]:
+    """
+    ★ 已废弃：Cloudflare Stream 自动优化
+    保留函数签名以兼容旧代码
+    """
+    logger.warning(f"[Faststart] ⚠️ 已废弃，Cloudflare 自动处理: {asset_id[:8]}...")
+    return (True, "Deprecated: Cloudflare handles optimization")
+
+
+async def _apply_faststart_legacy(asset_id: str, video_url: str) -> Tuple[bool, str]:
+    """
+    ★ 原 apply_faststart 实现，保留备用
+    对 MP4 视频应用 faststart 优化，将 moov atom 移到文件开头
+    
+    ★ 原理：
+    - MP4 文件有一个 "moov" 原子包含视频索引信息
+    - 如果 moov 在文件末尾，浏览器需要下载整个文件才能播放
+    - faststart 将 moov 移到开头，浏览器可以立即开始播放
+    
+    ★ 性能：
+    - 不重新编码，只是移动字节
+    - 200MB 视频只需 5-15 秒
+    - CPU 占用 < 5%
+    
+    Args:
+        asset_id: 资源 ID
+        video_url: Supabase 视频签名 URL
+    
+    Returns:
+        (success, message)
+    """
+    logger.info(f"[Faststart] 🚀 开始优化: {asset_id[:8]}...")
+    
+    temp_input = None
+    temp_output = None
+    
+    try:
+        from ..services.supabase_client import supabase
+        
+        # 1. 创建临时文件
+        temp_input = tempfile.mktemp(suffix=".mp4", prefix=f"fs_in_{asset_id[:8]}_")
+        temp_output = tempfile.mktemp(suffix=".mp4", prefix=f"fs_out_{asset_id[:8]}_")
+        
+        # 2. 下载视频（流式下载，节省内存）
+        logger.info(f"[Faststart] 📥 下载视频...")
+        start_time = datetime.now()
+        
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            async with client.stream("GET", video_url) as response:
+                if response.status_code != 200:
+                    return False, f"下载失败: HTTP {response.status_code}"
+                
+                total_size = int(response.headers.get("content-length", 0))
+                downloaded = 0
+                
+                with open(temp_input, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):  # 1MB chunks
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:  # 每 10MB 打印一次
+                            progress = downloaded / total_size * 100
+                            logger.info(f"[Faststart] 📥 下载进度: {progress:.1f}%")
+        
+        download_time = (datetime.now() - start_time).total_seconds()
+        file_size_mb = os.path.getsize(temp_input) / 1024 / 1024
+        logger.info(f"[Faststart] 📥 下载完成: {file_size_mb:.1f}MB, 耗时: {download_time:.1f}s")
+        
+        # 3. 检查是否已经是 faststart（moov 在前面）
+        is_already_faststart = await check_moov_position(temp_input)
+        if is_already_faststart:
+            logger.info(f"[Faststart] ✅ 视频已是 faststart，跳过处理")
+            return True, "already_optimized"
+        
+        # 4. 应用 faststart（不重新编码，只移动 moov）
+        logger.info(f"[Faststart] 🔧 应用 faststart 优化...")
+        start_time = datetime.now()
+        
+        cmd = [
+            "ffmpeg",
+            "-i", temp_input,
+            "-c", "copy",  # 不重新编码，只复制流
+            "-movflags", "+faststart",  # 将 moov 移到开头
+            "-y",  # 覆盖输出
+            temp_output
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            error_msg = stderr.decode()[-500:] if stderr else "Unknown error"
+            logger.error(f"[Faststart] ❌ FFmpeg 失败: {error_msg}")
+            return False, f"FFmpeg error: {error_msg}"
+        
+        process_time = (datetime.now() - start_time).total_seconds()
+        output_size_mb = os.path.getsize(temp_output) / 1024 / 1024
+        logger.info(f"[Faststart] 🔧 处理完成: {output_size_mb:.1f}MB, 耗时: {process_time:.1f}s")
+        
+        # 5. 获取原始存储路径
+        asset_result = supabase.table("assets").select("storage_path").eq("id", asset_id).single().execute()
+        if not asset_result.data or not asset_result.data.get("storage_path"):
+            return False, "Asset storage_path not found"
+        
+        storage_path = asset_result.data["storage_path"]
+        logger.info(f"[Faststart] 📤 上传到: {storage_path}")
+        
+        # 6. 上传优化后的文件（覆盖原文件）
+        start_time = datetime.now()
+        
+        with open(temp_output, "rb") as f:
+            file_content = f.read()
+        
+        # 使用 upsert 覆盖原文件
+        result = supabase.storage.from_("clips").upload(
+            storage_path,
+            file_content,
+            {"content-type": "video/mp4", "upsert": "true"}
+        )
+        
+        if hasattr(result, 'error') and result.error:
+            return False, f"Upload failed: {result.error}"
+        
+        upload_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"[Faststart] 📤 上传完成, 耗时: {upload_time:.1f}s")
+        
+        # 7. 更新 asset 状态
+        supabase.table("assets").update({
+            "faststart_applied": True,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", asset_id).execute()
+        
+        total_time = download_time + process_time + upload_time
+        logger.info(f"[Faststart] ✅ 优化完成! 总耗时: {total_time:.1f}s (下载:{download_time:.1f}s + 处理:{process_time:.1f}s + 上传:{upload_time:.1f}s)")
+        
+        return True, "success"
+        
+    except Exception as e:
+        logger.error(f"[Faststart] ❌ 失败: {e}")
+        import traceback
+        logger.error(f"[Faststart] 堆栈: {traceback.format_exc()}")
+        return False, str(e)
+        
+    finally:
+        # 清理临时文件
+        for temp_file in [temp_input, temp_output]:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+
+
+async def check_moov_position(file_path: str) -> bool:
+    """
+    检查 MP4 文件的 moov atom 是否在文件开头（已是 faststart）
+    
+    Returns:
+        True 如果 moov 在 mdat 之前（已优化）
+        False 如果 moov 在 mdat 之后（需要优化）
+    """
+    try:
+        with open(file_path, "rb") as f:
+            # 读取前 64KB 检查 atom 结构
+            header = f.read(64 * 1024)
+            
+            # 查找 moov 和 mdat 的位置
+            moov_pos = header.find(b"moov")
+            mdat_pos = header.find(b"mdat")
+            
+            if moov_pos == -1:
+                # moov 不在前 64KB，说明在文件后面
+                return False
+            
+            if mdat_pos == -1:
+                # mdat 不在前 64KB，可能 moov 在前面
+                return True
+            
+            # 比较位置
+            return moov_pos < mdat_pos
+            
+    except Exception as e:
+        logger.warning(f"[Faststart] 检查 moov 位置失败: {e}")
+        return False  # 假设需要优化
+
+
+# ============================================
 # HLS 流式播放生成
 # ============================================
 
@@ -372,7 +569,18 @@ async def generate_hls_stream(asset_id: str, input_path: str) -> Optional[str]:
 
 
 async def generate_hls_from_url(asset_id: str, video_url: str, extract_audio: bool = True) -> Optional[str]:
-    """从远程视频 URL 直接生成 HLS 流（FFmpeg 直读 URL，无需完整下载）
+    """
+    ★ 已废弃：Cloudflare Stream 自动生成 HLS
+    保留函数签名以兼容旧代码
+    """
+    logger.warning(f"[HLS] ⚠️ 已废弃，Cloudflare 自动处理: {asset_id[:8]}...")
+    return None
+
+
+async def _generate_hls_from_url_legacy(asset_id: str, video_url: str, extract_audio: bool = True) -> Optional[str]:
+    """
+    ★ 原 generate_hls_from_url 实现，保留备用
+    从远程视频 URL 直接生成 HLS 流（FFmpeg 直读 URL，无需完整下载）
     
     ★★★ 优化版本：边生成边上传 + 同时提取音频 ★★★
     - FFmpeg 生成分片时，后台协程立即上传已完成的分片
@@ -799,11 +1007,22 @@ async def generate_hls_from_url(asset_id: str, video_url: str, extract_audio: bo
 
 
 # ============================================
-# 代理视频生成（保留用于兼容，未来可移除）
+# ★ 已废弃：代理视频生成（Cloudflare 自动处理）
 # ============================================
 
 async def generate_proxy_video(asset_id: str, input_path: str) -> str:
-    """生成 720p 代理视频用于编辑预览
+    """
+    ★ 已废弃：Cloudflare Stream 自动提供自适应码率
+    保留函数签名以兼容旧代码
+    """
+    logger.warning(f"[代理视频] ⚠️ 已废弃，Cloudflare 自动处理: {asset_id[:8]}...")
+    return None
+
+
+async def _generate_proxy_video_legacy(asset_id: str, input_path: str) -> str:
+    """
+    ★ 原 generate_proxy_video 实现，保留备用
+    生成 720p 代理视频用于编辑预览
     
     输出规格:
     - 分辨率: 1280x720 (720p)

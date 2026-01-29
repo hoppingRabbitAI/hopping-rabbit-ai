@@ -9,6 +9,7 @@ import { AIToolsPanel } from './AIToolsPanel';
 import { SpeedPanel } from './SpeedPanel';
 import { ImageAdjustPanel } from './ImageAdjustPanel';
 import { BeautyPanel } from './BeautyPanel';
+import { BackgroundPanel } from './BackgroundPanel';
 
 export function PropertyPanels() {
   const activeSidebarPanel = useEditorStore((s) => s.activeSidebarPanel);
@@ -80,6 +81,11 @@ export function PropertyPanels() {
       {/* 美颜美体面板 */}
       {activeSidebarPanel === 'beauty' && (
         <BeautyPanel onClose={closePanel} />
+      )}
+
+      {/* 背景设置面板 */}
+      {activeSidebarPanel === 'background' && (
+        <BackgroundPanel onClose={closePanel} />
       )}
     </div>
   );

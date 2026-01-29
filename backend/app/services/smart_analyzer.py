@@ -16,7 +16,7 @@ from uuid import uuid4
 from datetime import datetime
 from pydantic import BaseModel, Field
 
-from .llm_service import call_doubao_llm, is_llm_configured
+from .llm import llm_service
 from .supabase_client import supabase
 
 logger = logging.getLogger(__name__)
@@ -423,11 +423,15 @@ class SmartAnalyzer:
         
         logger.info(f"📝 Prompt 长度: {len(prompt)} 字符")
         
+        # 检查 LLM 是否配置
+        if not llm_service.is_configured():
+            logger.warning("⚠️ LLM 未配置，返回默认结果")
+            return self._generate_fallback_result(transcript_segments)
+        
         # 一次 LLM 调用
-        response = await call_doubao_llm(
-            prompt,
+        response = await llm_service.call(
+            prompt=prompt,
             system_prompt="你是专业的口播视频内容分析师，擅长识别废话、重复片段和分析视频风格。请严格按照 JSON 格式输出。",
-            max_tokens=4000
         )
         
         if not response:

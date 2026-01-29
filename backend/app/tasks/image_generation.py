@@ -26,7 +26,8 @@ from uuid import uuid4
 
 from ..celery_config import celery_app
 from ..services.kling_ai_service import kling_client
-from ..services.llm_service import enhance_image_prompt, is_llm_configured
+from ..services.llm import llm_service
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -297,10 +298,10 @@ async def _process_image_generation_async(
         is_image_to_image = bool(image)
         enhanced_prompt = prompt
         
-        if is_llm_configured():
+        if llm_service.is_configured():
             update_ai_task_progress(ai_task_id, 8, "优化提示词...")
             try:
-                enhanced_prompt = await enhance_image_prompt(prompt, is_image_to_image)
+                enhanced_prompt = await llm_service.enhance_image_prompt(prompt, is_image_to_image)
                 logger.info(f"[ImageGen] Prompt 增强: {prompt[:30]}... -> {enhanced_prompt[:50]}...")
             except Exception as e:
                 logger.warning(f"[ImageGen] Prompt 增强失败，使用原始 prompt: {e}")

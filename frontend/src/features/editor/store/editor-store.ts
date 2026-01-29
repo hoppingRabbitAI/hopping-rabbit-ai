@@ -13,7 +13,7 @@ import { KEYFRAME_TOLERANCE } from '../types';
 import { SyncManager, SyncStatus } from '../lib/sync-manager';
 import { projectApi, assetApi, taskApi, smartApi, exportApi, clipsApi } from '@/lib/api';
 import { getAssetStreamUrl } from '@/lib/api/media-proxy';
-import { clearHlsCache } from '../components/canvas/VideoCanvasStore';
+import { clearHlsCache, preheatNewAsset } from '../components/canvas/VideoCanvasStore';
 import { generateId } from '@/lib/utils';
 
 // ==================== 调试开关 ====================
@@ -179,6 +179,10 @@ interface EditorState {
   splitAllAtTime: (splitTime: number) => void;
   duplicateClip: (clipId: string) => void;
   deleteSelectedClip: () => void;
+  /** 合并相邻片段 - 将两个相邻的同类型片段合并为一个 */
+  mergeClips: (clipId1: string, clipId2: string) => void;
+  /** 合并选中的所有相邻片段 */
+  mergeSelectedClips: () => void;
 
   // ========== 历史记录 (撤销/重做) ==========
   history: HistoryState[];
@@ -274,8 +278,8 @@ interface EditorState {
   setCanvasEditMode: (mode: 'transform' | 'text' | 'subtitle' | null) => void;
   
   /** 侧边栏激活的面板 */
-  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | null;
-  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | null) => void;
+  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | 'background' | null;
+  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | 'background' | null) => void;
   
   /** 左侧栏激活的面板 */
   activeLeftPanel: 'subtitles' | 'assets' | 'b-roll' | null;
@@ -284,6 +288,14 @@ interface EditorState {
   /** 画布/导出比例（青色框的比例），默认 9:16 抖音竖屏 */
   canvasAspectRatio: '16:9' | '9:16' | '1:1';
   setCanvasAspectRatio: (ratio: '16:9' | '9:16' | '1:1') => void;
+  
+  /** 导演模式 - 控制视频合成策略 */
+  directorMode: 'pure-avatar' | 'intercut' | 'pure-broll';
+  setDirectorMode: (mode: 'pure-avatar' | 'intercut' | 'pure-broll') => void;
+  
+  /** 智能 B-roll 增强开关 - 是否自动建议 B-roll 素材 */
+  globalBrollEnabled: boolean;
+  setGlobalBrollEnabled: (enabled: boolean) => void;
   
   // 关键帧操作 V2（使用 offset 而非 time）
   /** 添加关键帧 @param offset 归一化时间 0-1 @param value 简单值或复合值{x,y} */
@@ -913,8 +925,17 @@ export const useEditorStore = create<EditorState>()(
         content_text: clip.contentText,
         text_style: clip.textStyle,
       });
-      // ★ 视频预加载由 VideoCanvasStore 的预热机制统一处理
-      // 当 videoClips.length 变化时会自动触发预热
+      
+      // ★★★ 新素材自动预热：视频/图片类型立即触发预热 ★★★
+      if (clip.assetId && (clip.clipType === 'video' || clip.clipType === 'image')) {
+        preheatNewAsset(clip.assetId).then(success => {
+          if (success) {
+            console.log('[EditorStore] ✅ 新素材预热成功:', clip.assetId?.slice(-8));
+          }
+        }).catch(() => {
+          // 预热失败不影响添加
+        });
+      }
     },
     
     removeClip: (id) => {
@@ -1704,6 +1725,107 @@ export const useEditorStore = create<EditorState>()(
       idsToDelete.forEach(id => {
         _addOperation('REMOVE_CLIP', { clip_id: id });
       });
+    },
+
+    // ========== 合并片段 ==========
+    mergeClips: (clipId1, clipId2) => {
+      const { clips, saveToHistory, _addOperation } = get();
+      const clip1 = clips.find(c => c.id === clipId1);
+      const clip2 = clips.find(c => c.id === clipId2);
+      
+      if (!clip1 || !clip2) return;
+      
+      // 检查是否在同一轨道
+      if (clip1.trackId !== clip2.trackId) {
+        console.warn('[mergeClips] 片段不在同一轨道，无法合并');
+        return;
+      }
+      
+      // 检查是否是同一类型
+      if (clip1.clipType !== clip2.clipType) {
+        console.warn('[mergeClips] 片段类型不同，无法合并');
+        return;
+      }
+      
+      // 确定哪个在前（按 start 排序）
+      const [firstClip, secondClip] = clip1.start < clip2.start 
+        ? [clip1, clip2] 
+        : [clip2, clip1];
+      
+      // 检查是否相邻（允许 50ms 的容差）
+      const gap = secondClip.start - (firstClip.start + firstClip.duration);
+      if (Math.abs(gap) > 50) {
+        console.warn('[mergeClips] 片段不相邻，无法合并，间隔:', gap, 'ms');
+        return;
+      }
+      
+      saveToHistory();
+      
+      // 合并后的新 clip：保留第一个 clip 的 ID，扩展时长
+      const mergedClip: Clip = {
+        ...firstClip,
+        duration: (secondClip.start - firstClip.start) + secondClip.duration,
+        // 合并文本内容（如果有）
+        contentText: firstClip.contentText && secondClip.contentText
+          ? `${firstClip.contentText} ${secondClip.contentText}`.trim()
+          : firstClip.contentText || secondClip.contentText,
+      };
+      
+      set(state => ({
+        clips: state.clips
+          .filter(c => c.id !== secondClip.id)  // 删除第二个
+          .map(c => c.id === firstClip.id ? mergedClip : c),  // 更新第一个
+        selectedClipId: firstClip.id,
+        selectedClipIds: new Set([firstClip.id]),
+      }));
+      
+      // 记录操作
+      _addOperation('UPDATE_CLIP', {
+        id: firstClip.id,
+        end_time: firstClip.start + mergedClip.duration,
+        content_text: mergedClip.contentText,
+      });
+      _addOperation('REMOVE_CLIP', { clip_id: secondClip.id });
+      
+      console.log('[mergeClips] ✅ 合并成功:', firstClip.id.slice(-8), '+', secondClip.id.slice(-8));
+    },
+    
+    mergeSelectedClips: () => {
+      const { selectedClipIds, clips, mergeClips } = get();
+      
+      if (selectedClipIds.size < 2) {
+        console.warn('[mergeSelectedClips] 需要选中至少两个片段才能合并');
+        return;
+      }
+      
+      // 获取选中的 clips 并按 start 排序
+      const selectedClips = Array.from(selectedClipIds)
+        .map(id => clips.find(c => c.id === id))
+        .filter((c): c is Clip => c !== undefined)
+        .sort((a, b) => a.start - b.start);
+      
+      if (selectedClips.length < 2) return;
+      
+      // 检查是否在同一轨道且连续
+      const trackId = selectedClips[0].trackId;
+      const clipType = selectedClips[0].clipType;
+      
+      for (let i = 1; i < selectedClips.length; i++) {
+        if (selectedClips[i].trackId !== trackId) {
+          console.warn('[mergeSelectedClips] 选中的片段不在同一轨道');
+          return;
+        }
+        if (selectedClips[i].clipType !== clipType) {
+          console.warn('[mergeSelectedClips] 选中的片段类型不同');
+          return;
+        }
+      }
+      
+      // 依次合并相邻的片段
+      // 从后往前合并，这样索引不会变化
+      for (let i = selectedClips.length - 1; i > 0; i--) {
+        mergeClips(selectedClips[i - 1].id, selectedClips[i].id);
+      }
     },
 
     // ========== 历史记录 (撤销/重做) ==========
@@ -2715,6 +2837,18 @@ export const useEditorStore = create<EditorState>()(
     canvasAspectRatio: '9:16',  // 默认抖音竖屏比例
     setCanvasAspectRatio: (ratio) => {
       set({ canvasAspectRatio: ratio });
+    },
+    
+    // ========== 导演模式 ==========
+    directorMode: 'intercut',  // 默认混剪模式
+    setDirectorMode: (mode) => {
+      set({ directorMode: mode });
+    },
+    
+    // ========== 智能 B-roll 增强开关 ==========
+    globalBrollEnabled: true,  // 默认启用
+    setGlobalBrollEnabled: (enabled) => {
+      set({ globalBrollEnabled: enabled });
     },
     
     // ========== 关键帧操作 V2（使用 offset） ==========

@@ -135,9 +135,15 @@ function ProjectThumbnail({ thumbnailUrl, thumbnailAssetId, projectName, classNa
 interface AssetsViewProps {
   onCreateProject: () => void;
   activeTab?: 'home' | 'videos';  // 区分首页和视频 tab
+  onResumeWorkflow?: (data: {
+    sessionId: string;
+    projectId: string;
+    step: string;
+    mode: string;
+  }) => void;
 }
 
-export function AssetsView({ onCreateProject, activeTab = 'home' }: AssetsViewProps) {
+export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkflow }: AssetsViewProps) {
   const router = useRouter();
   const { projects, fetchProjects, loading, removeProject, removeProjects } = useProjectStore();
   const { isAuthenticated, accessToken, user } = useAuthStore();
@@ -214,11 +220,39 @@ export function AssetsView({ onCreateProject, activeTab = 'home' }: AssetsViewPr
     }
   };
 
-  const handleOpenProject = (projectId: string) => {
+  const handleOpenProject = async (projectId: string) => {
     if (selectMode) {
       toggleSelect(projectId);
       return;
     }
+    
+    // ★ 检查项目是否有未完成的工作流
+    try {
+      const { authFetch } = await import('@/lib/supabase/session');
+      const response = await authFetch(`/api/workspace/sessions/by-project/${projectId}/workflow-step`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        // 如果有未完成的工作流步骤，且不是已完成状态
+        if (data.workflow_step && data.status !== 'completed' && data.workflow_step !== 'completed') {
+          // 调用恢复工作流回调
+          if (onResumeWorkflow) {
+            onResumeWorkflow({
+              sessionId: data.session_id,
+              projectId: data.project_id || projectId,
+              step: data.workflow_step,
+              mode: data.entry_mode || 'refine',
+            });
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      debugLog('检查工作流状态失败，直接进入编辑器:', err);
+    }
+    
+    // 没有未完成的工作流，直接进入编辑器
     router.push(`/editor?project=${projectId}`);
   };
 

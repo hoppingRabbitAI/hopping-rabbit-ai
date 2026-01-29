@@ -22,6 +22,9 @@ from .credits import router as credits_router  # 积分系统
 from .subscriptions import router as subscriptions_router  # 订阅系统
 from .broll import router as broll_router  # B-roll 素材库
 from .upload import router as upload_router  # 文件上传
+from .cloudflare import router as cloudflare_router  # Cloudflare Stream
+from .video_gen import router as video_gen_router  # 统一视频生成（多模型）
+from .materials import router as materials_router  # 用户素材库
 
 # 创建主路由器
 api_router = APIRouter()
@@ -38,12 +41,15 @@ api_router.include_router(tasks_router)
 api_router.include_router(smart_router)
 api_router.include_router(export_router)
 api_router.include_router(kling_router)  # 可灵AI 口播能力
+api_router.include_router(video_gen_router)  # 统一视频生成（Kling/Veo/Runway）
 api_router.include_router(callback_router)  # AI回调接收
 api_router.include_router(users_router)  # 用户配额
 api_router.include_router(credits_router)  # 积分系统
 api_router.include_router(subscriptions_router)  # 订阅系统
 api_router.include_router(broll_router)  # B-roll 素材库
 api_router.include_router(upload_router)  # 文件上传
+api_router.include_router(cloudflare_router)  # Cloudflare Stream
+api_router.include_router(materials_router)  # 用户素材库
 
 # 导出
 __all__ = [

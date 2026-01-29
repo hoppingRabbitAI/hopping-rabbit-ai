@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   X,
   Eye,
@@ -259,16 +259,64 @@ export function BeautyPanel({ onClose }: BeautyPanelProps) {
     return clip?.clipType === 'video' ? clip : null;
   }, [selectedClipId, clips]);
 
+  // 从 clip.effectParams 加载初始设置
+  useEffect(() => {
+    if (!selectedVideoClip) return;
+    
+    const effectParams = selectedVideoClip.effectParams as Record<string, unknown> | undefined;
+    if (effectParams?.beauty) {
+      setBeautySettings(prev => ({ ...prev, ...(effectParams.beauty as BeautySettings) }));
+    }
+    if (effectParams?.body) {
+      setBodySettings(prev => ({ ...prev, ...(effectParams.body as BodySettings) }));
+    }
+    if (effectParams?.filter) {
+      const filterData = effectParams.filter as { id?: string; intensity?: number };
+      if (filterData.id) setSelectedFilter(filterData.id);
+      if (filterData.intensity !== undefined) setFilterIntensity(filterData.intensity);
+    }
+  }, [selectedVideoClip?.id]); // 只在 clip ID 变化时加载
+
+  // 保存设置到 clip（防抖）
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const saveSettingsToClip = useCallback(() => {
+    if (!selectedVideoClip) return;
+    
+    // 清除之前的定时器
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    
+    // 防抖保存
+    saveTimeoutRef.current = setTimeout(() => {
+      updateClip(selectedVideoClip.id, {
+        effectParams: {
+          ...((selectedVideoClip.effectParams as Record<string, unknown>) || {}),
+          beauty: beautySettings,
+          body: bodySettings,
+          filter: {
+            id: selectedFilter,
+            intensity: filterIntensity,
+          },
+        },
+      });
+    }, 100); // 100ms 防抖
+  }, [selectedVideoClip, beautySettings, bodySettings, selectedFilter, filterIntensity, updateClip]);
+
+  // 设置变化时自动保存
+  useEffect(() => {
+    saveSettingsToClip();
+  }, [beautySettings, bodySettings, selectedFilter, filterIntensity, saveSettingsToClip]);
+
   // 更新美颜参数
   const updateBeauty = useCallback((key: keyof BeautySettings, value: number) => {
     setBeautySettings(prev => ({ ...prev, [key]: value }));
-    // TODO: 实际应用到视频处理
   }, []);
 
   // 更新美体参数
   const updateBody = useCallback((key: keyof BodySettings, value: number) => {
     setBodySettings(prev => ({ ...prev, [key]: value }));
-    // TODO: 实际应用到视频处理
   }, []);
 
   // 应用预设
