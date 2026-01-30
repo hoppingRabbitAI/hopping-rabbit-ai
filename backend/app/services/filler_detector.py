@@ -56,7 +56,8 @@ class FillerDetection:
     
     @property
     def duration_ms(self) -> int:
-        return int((self.end - self.start) * 1000)
+        # start/end 已经是毫秒单位（来自 ASR 转写）
+        return int(self.end - self.start)
 
 
 @dataclass

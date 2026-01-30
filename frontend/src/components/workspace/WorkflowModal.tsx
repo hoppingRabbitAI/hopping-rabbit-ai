@@ -563,7 +563,11 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
 
     const formatDuration = (ms: number) => {
         if (ms < 1000) return `${Math.round(ms)}ms`;
-        return `${(ms / 1000).toFixed(1)}s`;
+        const totalSec = ms / 1000;
+        if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+        const min = Math.floor(totalSec / 60);
+        const sec = Math.round(totalSec % 60);
+        return `${min}分${sec}秒`;
     };
 
     const formatTime = (ms: number) => {

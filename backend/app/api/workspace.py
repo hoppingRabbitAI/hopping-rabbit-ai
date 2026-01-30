@@ -1781,6 +1781,14 @@ class ClipSuggestion(BaseModel):
     time_range: dict  # {start: int, end: int}
     suggested_assets: List[BRollAsset]
     selected_asset_id: Optional[str] = None
+    
+    # B-Roll Agent 分析结果
+    need_broll: Optional[bool] = None          # 是否需要 B-Roll
+    broll_type: Optional[str] = None           # video/image/none
+    broll_reason: Optional[str] = None         # 决策原因
+    keywords_en: Optional[List[str]] = None    # 英文搜索关键词
+    keywords_cn: Optional[List[str]] = None    # 中文关键词
+    suggested_duration_ms: Optional[int] = None  # 建议 B-Roll 时长
 
 
 class GetClipSuggestionsResponse(BaseModel):
@@ -1790,6 +1798,10 @@ class GetClipSuggestionsResponse(BaseModel):
     project_id: str
     clips: List[ClipSuggestion]
     total_duration_ms: int
+    
+    # 统计信息
+    broll_segments_count: Optional[int] = None      # 需要 B-Roll 的片段数
+    total_broll_duration_ms: Optional[int] = None   # B-Roll 总时长
 
 
 @router.post("/sessions/{session_id}/clip-suggestions", response_model=GetClipSuggestionsResponse)
@@ -1837,8 +1849,8 @@ async def get_clip_suggestions(
         if not clips:
             raise HTTPException(status_code=400, detail="项目没有片段")
         
-        # 3. 为每个片段生成建议
-        suggestions = []
+        # 3. 收集片段信息用于 B-Roll 分析
+        segments_for_analysis = []
         total_duration = 0
         
         for i, clip in enumerate(clips):
@@ -1854,40 +1866,70 @@ async def get_clip_suggestions(
                 metadata = clip.get("metadata", {}) or {}
                 text = metadata.get("transcript_text", f"片段 {i + 1}")
             
-            # TODO: 使用 LLM 提取关键词并搜索 Pexels
-            # 目前返回模拟数据
-            suggested_assets = [
-                BRollAsset(
-                    id=f"pexels-{clip_id[:8]}-1",
-                    thumbnail_url="https://images.pexels.com/videos/3571264/free-video-3571264.jpg?auto=compress&cs=tinysrgb&dpr=1&w=500",
-                    video_url="",
-                    source="pexels",
-                    duration=5000,
-                    width=1920,
-                    height=1080,
-                    relevance_score=0.95,
-                ),
-                BRollAsset(
-                    id=f"pexels-{clip_id[:8]}-2",
-                    thumbnail_url="https://images.pexels.com/videos/3571264/free-video-3571264.jpg?auto=compress&cs=tinysrgb&dpr=1&w=500",
-                    video_url="",
-                    source="pexels",
-                    duration=6000,
-                    width=1920,
-                    height=1080,
-                    relevance_score=0.87,
-                ),
-            ]
+            segments_for_analysis.append({
+                "id": clip_id,
+                "text": text,
+                "start": start_time,
+                "end": end_time,
+            })
+        
+        # ★ 使用 B-Roll Agent 进行智能分析
+        from app.services.broll_agent import BRollAgent
+        
+        agent = BRollAgent()
+        broll_result = await agent.analyze(
+            session_id=session_id,
+            segments=segments_for_analysis,
+            video_style="口播",
+            total_duration_ms=total_duration,
+            search_assets=True,  # 自动搜索素材
+        )
+        
+        # 转换为 API 响应格式
+        suggestions = []
+        for i, decision in enumerate(broll_result.decisions):
+            clip = next((c for c in clips if c["id"] == decision.segment_id), None)
+            if not clip:
+                continue
+            
+            text = clip.get("content_text", "")
+            if not text:
+                metadata = clip.get("metadata", {}) or {}
+                text = metadata.get("transcript_text", f"片段 {i + 1}")
+            
+            # 将匹配的素材转换为 BRollAsset
+            suggested_assets = []
+            for asset in decision.matched_assets:
+                suggested_assets.append(BRollAsset(
+                    id=asset.get("id", ""),
+                    thumbnail_url=asset.get("thumbnail_url", ""),
+                    video_url=asset.get("video_url", "") or asset.get("image_url", ""),
+                    source=asset.get("source", "pexels"),
+                    duration=asset.get("duration_ms", 5000),
+                    width=asset.get("width", 1920),
+                    height=asset.get("height", 1080),
+                    relevance_score=asset.get("relevance_score", 0.8),
+                ))
             
             suggestions.append(ClipSuggestion(
-                clip_id=clip_id,
+                clip_id=decision.segment_id,
                 clip_number=i + 1,
                 text=text[:100] if text else f"片段 {i + 1}",
-                time_range={"start": start_time, "end": end_time},
+                time_range={
+                    "start": clip.get("start_time", 0), 
+                    "end": clip.get("end_time", 0)
+                },
                 suggested_assets=suggested_assets,
+                # 扩展字段
+                need_broll=decision.need_broll,
+                broll_type=decision.broll_type.value if decision.need_broll else "none",
+                broll_reason=decision.reason,
+                keywords_en=decision.keywords_en,
+                keywords_cn=decision.keywords_cn,
+                suggested_duration_ms=decision.suggested_duration_ms,
             ))
         
-        logger.info(f"[ClipSuggestions] ✅ 生成 {len(suggestions)} 个片段建议")
+        logger.info(f"[ClipSuggestions] ✅ 智能分析完成: {broll_result.broll_segments}/{broll_result.total_segments} 片段需要 B-Roll")
         
         return GetClipSuggestionsResponse(
             status="completed",
@@ -1895,6 +1937,9 @@ async def get_clip_suggestions(
             project_id=project_id,
             clips=suggestions,
             total_duration_ms=total_duration,
+            # 扩展统计
+            broll_segments_count=broll_result.broll_segments,
+            total_broll_duration_ms=broll_result.total_broll_duration_ms,
         )
         
     except HTTPException:
