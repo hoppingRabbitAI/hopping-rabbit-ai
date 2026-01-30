@@ -134,11 +134,27 @@ BROLL_ANALYSIS_SYSTEM = """你是一个专业的视频剪辑助手，专门为�
 2. 中等片段 (5-10秒)：详细展示、场景建立
 3. 长片段 (10-15秒)：复杂概念、多步骤演示
 
-## 关键词生成规则
-1. **优先具象词**：物体 > 动作 > 抽象概念
-2. **英文搜索词**：用于 Pexels/Pixabay API
-3. **避免过于具体**：用通用词增加匹配率
-4. **2-4个关键词**：主关键词 + 补充词
+## 关键词生成规则（非常重要！）
+1. **必须是具体的视觉元素**：能在视频中看到的东西
+2. **优先名词**：物体 > 场景 > 动作
+3. **使用 Pexels 常见搜索词**：
+   - 科技类: technology, smartphone, laptop, coding, office
+   - 自然类: nature, sunset, ocean, forest, mountain
+   - 商务类: business, meeting, teamwork, presentation
+   - 生活类: lifestyle, cooking, fitness, travel
+   - 城市类: city, urban, traffic, building, skyline
+4. **避免抽象词**：不要用 success, growth, important 等
+5. **2-3个关键词**：主关键词 + 场景词
+6. **英文搜索词格式**：全小写，空格分隔的短语也可以
+
+### 关键词示例
+| 原文 | ✅ 好的关键词 | ❌ 差的关键词 |
+|------|-------------|--------------|
+| "手机摄像头很强大" | smartphone camera, phone photography | technology, powerful |
+| "数据增长了300%" | business chart, graph animation | growth, success |
+| "北京的故宫" | beijing palace, chinese architecture | china, travel |
+| "第一步打开设置" | phone settings, app interface | tutorial, step |
+| "美食太好吃了" | delicious food, restaurant meal | tasty, yummy |
 
 ## 输出格式
 严格按 JSON 格式输出，不要有其他解释。"""
@@ -411,51 +427,95 @@ class BRollAgent:
         """
         搜索 B-Roll 素材
         
-        优先使用 Pexels，fallback 到 Pixabay
+        搜索策略:
+        1. 先用第一个关键词搜索（最精准）
+        2. 如果结果不足，用组合关键词搜索
+        3. 如果还不足，用第二个关键词单独搜索
+        4. 按相关度排序返回
         """
         assets = []
+        seen_ids = set()  # 去重
         
-        # 构建搜索查询
-        query = " ".join(keywords[:3])  # 最多3个关键词
+        if not keywords:
+            return assets
         
-        # 尝试 Pexels
-        if self.pexels_api_key and broll_type == BRollType.VIDEO:
-            try:
-                pexels_results = await self._search_pexels(query, limit)
-                assets.extend(pexels_results)
-            except Exception as e:
-                logger.warning(f"[BRollAgent] Pexels 搜索失败: {e}")
+        # 搜索策略：多轮搜索
+        search_queries = []
         
-        # 如果结果不足，尝试 Pixabay
-        if len(assets) < limit and self.pixabay_api_key:
-            try:
-                pixabay_results = await self._search_pixabay(
-                    query, 
-                    media_type="video" if broll_type == BRollType.VIDEO else "photo",
-                    limit=limit - len(assets)
-                )
-                assets.extend(pixabay_results)
-            except Exception as e:
-                logger.warning(f"[BRollAgent] Pixabay 搜索失败: {e}")
+        # 第一轮：第一个关键词（最精准）
+        if keywords:
+            search_queries.append(keywords[0])
+        
+        # 第二轮：前两个关键词组合
+        if len(keywords) >= 2:
+            search_queries.append(f"{keywords[0]} {keywords[1]}")
+        
+        # 第三轮：第二个关键词单独
+        if len(keywords) >= 2:
+            search_queries.append(keywords[1])
+        
+        for query in search_queries:
+            if len(assets) >= limit:
+                break
+                
+            # 尝试 Pexels
+            if self.pexels_api_key and broll_type == BRollType.VIDEO:
+                try:
+                    pexels_results = await self._search_pexels(
+                        query, 
+                        limit=limit - len(assets),
+                        min_duration_sec=max(2, duration_hint_ms // 1000 - 1),  # 至少比建议时长少1秒
+                    )
+                    for r in pexels_results:
+                        if r["id"] not in seen_ids:
+                            seen_ids.add(r["id"])
+                            assets.append(r)
+                except Exception as e:
+                    logger.warning(f"[BRollAgent] Pexels 搜索 '{query}' 失败: {e}")
+            
+            # 如果结果不足，尝试 Pixabay
+            if len(assets) < limit and self.pixabay_api_key:
+                try:
+                    pixabay_results = await self._search_pixabay(
+                        query, 
+                        media_type="video" if broll_type == BRollType.VIDEO else "photo",
+                        limit=limit - len(assets)
+                    )
+                    for r in pixabay_results:
+                        if r["id"] not in seen_ids:
+                            seen_ids.add(r["id"])
+                            assets.append(r)
+                except Exception as e:
+                    logger.warning(f"[BRollAgent] Pixabay 搜索 '{query}' 失败: {e}")
         
         # 按相关度排序
         assets.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
         
+        logger.info(f"[BRollAgent] 搜索完成: keywords={keywords}, 找到 {len(assets)} 个素材")
         return assets[:limit]
     
     async def _search_pexels(
         self,
         query: str,
         limit: int = 5,
+        min_duration_sec: int = 2,
     ) -> List[Dict[str, Any]]:
-        """搜索 Pexels 视频"""
+        """
+        搜索 Pexels 视频
+        
+        Args:
+            query: 搜索关键词
+            limit: 返回数量
+            min_duration_sec: 最小时长(秒)
+        """
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://api.pexels.com/videos/search",
                 params={
                     "query": query,
-                    "per_page": limit,
+                    "per_page": min(limit * 2, 20),  # 多拉一些用于过滤
                     "orientation": "landscape",
+                    "size": "medium",  # medium = Full HD
                 },
                 headers={"Authorization": self.pexels_api_key},
                 timeout=10.0,
@@ -465,27 +525,49 @@ class BRollAgent:
             
             results = []
             for video in data.get("videos", []):
-                # 选择最佳质量的视频文件
+                duration_sec = video.get("duration", 0)
+                
+                # 过滤太短的视频
+                if duration_sec < min_duration_sec:
+                    continue
+                
+                # 选择最佳质量的视频文件 (优先 HD 1280+)
                 video_files = video.get("video_files", [])
                 best_file = None
-                for f in video_files:
+                for f in sorted(video_files, key=lambda x: x.get("width", 0), reverse=True):
                     if f.get("quality") == "hd" and f.get("width", 0) >= 1280:
                         best_file = f
                         break
                 if not best_file and video_files:
-                    best_file = video_files[0]
+                    best_file = max(video_files, key=lambda x: x.get("width", 0))
+                
+                if not best_file:
+                    continue
+                
+                # 计算相关度评分
+                relevance = 0.9  # Pexels 基础分
+                # 时长适中的加分
+                if 3 <= duration_sec <= 10:
+                    relevance += 0.05
+                # 高清加分
+                if best_file.get("width", 0) >= 1920:
+                    relevance += 0.03
                 
                 results.append({
                     "id": f"pexels-{video['id']}",
                     "source": "pexels",
                     "thumbnail_url": video.get("image", ""),
-                    "video_url": best_file.get("link", "") if best_file else "",
-                    "width": video.get("width", 1920),
-                    "height": video.get("height", 1080),
-                    "duration_ms": (video.get("duration", 0) * 1000),
+                    "video_url": best_file.get("link", ""),
+                    "width": best_file.get("width", 1920),
+                    "height": best_file.get("height", 1080),
+                    "duration_ms": duration_sec * 1000,
                     "author": video.get("user", {}).get("name", ""),
-                    "relevance_score": 0.9,  # Pexels 优先
+                    "relevance_score": round(relevance, 2),
+                    "query": query,  # 记录搜索词，便于调试
                 })
+                
+                if len(results) >= limit:
+                    break
             
             return results
     
