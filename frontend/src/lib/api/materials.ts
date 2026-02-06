@@ -279,6 +279,29 @@ export class MaterialsApi extends ApiClient {
   }
 
   /**
+   * 从 URL 导入素材到素材库
+   * 适用于将 AI 生成的结果保存到素材库
+   */
+  async importFromUrl(data: {
+    source_url: string;
+    display_name?: string;
+    material_type?: MaterialType;
+    tags?: string[];
+    source_task_id?: string;
+  }): Promise<ApiResponse<{ success: boolean; asset: UserMaterial }>> {
+    return this.request('/materials/import-from-url', {
+      method: 'POST',
+      body: JSON.stringify({
+        source_url: data.source_url,
+        display_name: data.display_name,
+        material_type: data.material_type || 'general',
+        tags: data.tags || [],
+        source_task_id: data.source_task_id,
+      }),
+    });
+  }
+
+  /**
    * 一站式上传素材
    * 包含：presign -> upload -> confirm 完整流程
    */

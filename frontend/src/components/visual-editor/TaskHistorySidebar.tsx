@@ -20,6 +20,8 @@ import {
   Replace,
   Play,
   Film,
+  Plus,
+  Check,
 } from 'lucide-react';
 import { 
   useTaskHistoryStore, 
@@ -28,6 +30,7 @@ import {
   TASK_STATUS_CONFIG,
 } from '@/stores/taskHistoryStore';
 import { useVisualEditorStore } from '@/stores/visualEditorStore';
+import { MaterialsApi } from '@/lib/api/materials';
 
 interface TaskHistorySidebarProps {
   projectId?: string;
@@ -123,6 +126,9 @@ function TaskItem({
   onPreview?: (url: string) => void;
   onReplace?: (clipId: string, videoUrl: string, taskId: string) => void;
 }) {
+  const [isSavingToLibrary, setIsSavingToLibrary] = useState(false);
+  const [savedToLibrary, setSavedToLibrary] = useState(false);
+  
   const typeLabel = TASK_TYPE_LABELS[task.task_type] || task.task_type;
   const statusConfig = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG['pending'];
   
@@ -164,6 +170,36 @@ function TaskItem({
     e.stopPropagation();
     if (hasResult && clipId && onReplace) {
       onReplace(clipId, resultUrl, task.id);
+    }
+  };
+  
+  // ★ 保存到素材库
+  const handleSaveToLibrary = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!hasResult || isSavingToLibrary || savedToLibrary) return;
+    
+    setIsSavingToLibrary(true);
+    try {
+      const materialsApi = new MaterialsApi();
+      const result = await materialsApi.importFromUrl({
+        source_url: resultUrl,
+        display_name: `${typeLabel} - ${formatTime(task.created_at)}`,
+        material_type: 'general',
+        tags: ['ai-generated', task.task_type],
+        source_task_id: task.id,
+      });
+      
+      if (result.data?.success) {
+        setSavedToLibrary(true);
+        // 3秒后重置状态，允许再次保存
+        setTimeout(() => setSavedToLibrary(false), 3000);
+      } else {
+        console.error('保存到素材库失败:', result.error);
+      }
+    } catch (error) {
+      console.error('保存到素材库失败:', error);
+    } finally {
+      setIsSavingToLibrary(false);
     }
   };
   
@@ -241,6 +277,27 @@ function TaskItem({
             <Play size={12} />
             预览
           </button>
+          
+          {/* ★ 保存到素材库按钮 */}
+          <button
+            onClick={handleSaveToLibrary}
+            disabled={isSavingToLibrary || savedToLibrary}
+            className={`flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-medium rounded-md transition-colors ${
+              savedToLibrary 
+                ? 'text-green-600 bg-green-50' 
+                : 'text-purple-600 bg-purple-50 hover:bg-purple-100'
+            }`}
+            title="保存到素材库"
+          >
+            {isSavingToLibrary ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : savedToLibrary ? (
+              <Check size={12} />
+            ) : (
+              <Plus size={12} />
+            )}
+          </button>
+          
           {clipId && onReplace && (
             <button
               onClick={handleReplaceClick}

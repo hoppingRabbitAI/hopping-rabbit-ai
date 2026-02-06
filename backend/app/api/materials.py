@@ -73,6 +73,15 @@ class SetDefaultMaterialRequest(BaseModel):
     voice_type: Optional[Literal["preset", "cloned"]] = Field(None, description="声音类型")
 
 
+class ImportFromUrlRequest(BaseModel):
+    """从 URL 导入素材请求"""
+    source_url: str = Field(..., description="源文件 URL")
+    display_name: Optional[str] = Field(None, description="显示名称")
+    material_type: Literal["avatar", "voice_sample", "general"] = Field(default="general", description="素材类型")
+    tags: Optional[List[str]] = Field(default_factory=list, description="标签")
+    source_task_id: Optional[str] = Field(None, description="来源任务 ID")
+
+
 # ============================================
 # 用户素材列表
 # ============================================
@@ -648,4 +657,132 @@ async def set_default_material(
         return {"success": True, "data": result.data[0] if result.data else update_data}
     except Exception as e:
         logger.error(f"设置默认素材失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 从 URL 导入素材
+# ============================================
+
+@router.post("/import-from-url")
+async def import_material_from_url(
+    request: ImportFromUrlRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    从 URL 导入素材到用户素材库
+    适用于将 AI 生成的结果保存到素材库
+    """
+    try:
+        source_url = request.source_url
+        
+        # 从 URL 推断文件信息
+        # 解析 URL 获取文件名
+        from urllib.parse import urlparse, unquote
+        parsed = urlparse(source_url)
+        path_parts = parsed.path.split('/')
+        original_filename = unquote(path_parts[-1]) if path_parts else "imported_file"
+        
+        # 去掉查询参数
+        if '?' in original_filename:
+            original_filename = original_filename.split('?')[0]
+        
+        # 推断文件类型
+        file_ext = original_filename.split('.')[-1].lower() if '.' in original_filename else 'mp4'
+        
+        # 确定 MIME 类型和文件类型
+        mime_map = {
+            'mp4': ('video/mp4', 'video'),
+            'webm': ('video/webm', 'video'),
+            'mov': ('video/quicktime', 'video'),
+            'png': ('image/png', 'image'),
+            'jpg': ('image/jpeg', 'image'),
+            'jpeg': ('image/jpeg', 'image'),
+            'gif': ('image/gif', 'image'),
+            'webp': ('image/webp', 'image'),
+            'mp3': ('audio/mpeg', 'audio'),
+            'wav': ('audio/wav', 'audio'),
+            'm4a': ('audio/m4a', 'audio'),
+        }
+        
+        mime_type, file_type = mime_map.get(file_ext, ('application/octet-stream', 'video'))
+        
+        asset_id = str(uuid4())
+        now = datetime.utcnow().isoformat()
+        
+        # 存储路径
+        storage_path = f"materials/{user_id}/{request.material_type}/{asset_id}.{file_ext}"
+        
+        # 下载源文件
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(source_url)
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"无法下载源文件: HTTP {response.status_code}"
+                )
+            file_content = response.content
+            file_size = len(file_content)
+        
+        # 上传到存储
+        upload_result = supabase.storage.from_("clips").upload(
+            storage_path,
+            file_content,
+            {"content-type": mime_type, "upsert": "true"}
+        )
+        
+        if hasattr(upload_result, 'error') and upload_result.error:
+            raise HTTPException(status_code=500, detail=f"上传失败: {upload_result.error}")
+        
+        # 准备元数据
+        material_metadata = {
+            "source_url": source_url,
+            "imported_at": now,
+        }
+        if request.source_task_id:
+            material_metadata["source_task_id"] = request.source_task_id
+        
+        # 创建素材记录
+        display_name = request.display_name or original_filename
+        
+        asset_data = {
+            "id": asset_id,
+            "project_id": None,
+            "user_id": user_id,
+            "name": display_name,
+            "original_filename": original_filename,
+            "display_name": display_name,
+            "file_type": file_type,
+            "mime_type": mime_type,
+            "file_size": file_size,
+            "storage_path": storage_path,
+            "asset_category": "user_material",
+            "material_type": request.material_type,
+            "tags": request.tags or [],
+            "material_metadata": material_metadata,
+            "status": "ready",
+            "created_at": now,
+            "updated_at": now
+        }
+        
+        result = supabase.table("assets").insert(asset_data).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=500, detail="创建素材记录失败")
+        
+        # 返回带 URL 的数据
+        response_data = result.data[0]
+        response_data["url"] = get_file_url("clips", storage_path)
+        
+        logger.info(f"素材导入成功: {asset_id}, 来源: {source_url[:50]}...")
+        
+        return {
+            "success": True,
+            "asset": response_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"从 URL 导入素材失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
