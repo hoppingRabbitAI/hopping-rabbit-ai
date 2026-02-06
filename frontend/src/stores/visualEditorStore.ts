@@ -184,8 +184,10 @@ export const useVisualEditorStore = create<VisualEditorStore>()((set, get) => ({
     // 2. 调用后端接口持久化
     try {
       const { authFetch } = await import('@/lib/supabase/session');
-      await authFetch(`/api/clips/${shotId}?video_url=${encodeURIComponent(newVideoUrl)}`, {
+      await authFetch(`/api/clips/${shotId}`, {
         method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_url: newVideoUrl }),
       });
       console.log('[VisualEditorStore] 替换成功');
     } catch (error) {

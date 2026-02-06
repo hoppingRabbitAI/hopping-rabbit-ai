@@ -538,41 +538,40 @@ async def get_session_clips(
     )
 
 
+class ClipUpdateRequest(BaseModel):
+    """更新 Clip 请求"""
+    source_start: Optional[int] = None
+    source_end: Optional[int] = None
+    name: Optional[str] = None
+    video_url: Optional[str] = None
+
+
 @router.patch("/clips/{clip_id}")
-async def update_clip(
-    clip_id: str,
-    source_start: Optional[int] = Query(None, description="新的源素材起始位置（毫秒）"),
-    source_end: Optional[int] = Query(None, description="新的源素材结束位置（毫秒）"),
-    name: Optional[str] = Query(None, description="分镜名称"),
-    video_url: Optional[str] = Query(None, description="替换的视频 URL"),
-):
+async def update_clip(clip_id: str, request: ClipUpdateRequest):
     """
-    手动调整分镜（包括替换视频）
+    更新分镜（包括替换视频）
     """
-    
     supabase = get_supabase()
     
     # 获取当前 Clip
     clip_result = supabase.table("clips").select("*").eq("id", clip_id).single().execute()
-    
     if not clip_result.data:
         raise HTTPException(status_code=404, detail="Clip not found")
     
     # 构建更新数据
     update_data = {}
-    if source_start is not None:
-        update_data["source_start"] = source_start
-    if source_end is not None:
-        update_data["source_end"] = source_end
-    if name is not None:
-        update_data["name"] = name
-    if video_url is not None:
-        update_data["video_url"] = video_url
+    if request.source_start is not None:
+        update_data["source_start"] = request.source_start
+    if request.source_end is not None:
+        update_data["source_end"] = request.source_end
+    if request.name is not None:
+        update_data["name"] = request.name
+    if request.video_url is not None:
+        update_data["video_url"] = request.video_url
     
     if not update_data:
         return {"success": True, "clip_id": clip_id, "message": "No changes"}
     
-    # 保存
     supabase.table("clips").update(update_data).eq("id", clip_id).execute()
     
     return {"success": True, "clip_id": clip_id, "updated": update_data}
