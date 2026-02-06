@@ -1,410 +1,369 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Plus, Check, ChevronRight, Zap, Layout, Palette, 
-  Smile, Youtube, Monitor, Clapperboard, UserSquare, Maximize,
-  RefreshCw, Upload, PenTool, Image as ImageIcon, Info,
-  Settings, User, Layers, Video, ArrowLeft, CheckCircle2,
-  FileVideo, FileAudio, FileImage, Sparkles, X, ChevronDown,
-  Volume2, EyeOff, Wand2, Scissors, Trash2, AlignLeft,
-  Loader2, Split, Merge
-} from 'lucide-react';
+# 多模态视频编辑接口深度解析
 
-const App = () => {
-  // view: 'home' (入口), 'parsing' (AI解析态), 'editor' (核心工作区)
-  const [view, setView] = useState('home');
-  const [entryMode, setEntryMode] = useState('ai-talk');
+## 一、系统架构与设计哲学
+
+### 1.1 核心设计理念
+本接口体系采用**会话式编辑模式**，通过`session_id`贯穿整个编辑流程，确保状态一致性。系统将视频编辑分解为**选区定义**和**编辑执行**两个独立阶段，支持精细化的交互控制。
+
+### 1.2 技术架构特点
+- **多阶段异步处理**：初始化→标记选区→预览→任务提交→结果查询
+- **RLE编码优化**：使用RLE格式高效传输图像掩码，减少数据量
+- **24小时会话保持**：支持用户中断后继续编辑
+
+## 二、视频输入规范详解
+
+### 2.1 视频技术要求
+| 参数 | 要求 | 技术意义 |
+|------|------|----------|
+| **格式** | MP4/MOV | 支持主流视频容器格式 |
+| **时长限制** | 2-5秒 或 7-10秒 | 基于AI模型训练数据分布优化 |
+| **分辨率** | 720p-2160p | 确保目标检测与分割精度 |
+| **帧率** | 24/30/60fps | 与主流拍摄设备兼容 |
+| **宽高比** | 0.42-2.38 | 符合移动端和PC端主流比例 |
+
+### 2.2 输入源选择策略
+```yaml
+视频源选择逻辑:
+  1. video_id: 
+    - 来源: 平台30天内生成的视频
+    - 优势: 无需重复上传，减少网络传输
+    - 限制: 时间窗口限制
   
-  // AI 解析状态控制
-  const [parsingProgress, setParsingProgress] = useState(0);
-  const [parsingStatus, setParsingStatus] = useState('正在提取文本内容...');
+  2. video_url:
+    - 来源: 外部可访问URL
+    - 要求: HTTPS协议，支持断点续传
+    - 限制: 文件大小未明确，但推荐≤200MB
+```
 
-  // 智能修剪状态 (Defiller)
-  const [showDefiller, setShowDefiller] = useState(false);
-  const [fillerWords, setFillerWords] = useState([
-    { word: '嗯...', count: 12, checked: true },
-    { word: '啊...', count: 8, checked: true },
-    { word: '那个', count: 5, checked: false },
-  ]);
+## 三、选区标记系统深度解析
 
-  // 核心设置
-  const [visualMode, setVisualMode] = useState('intercut'); 
-  const [showPip, setShowPip] = useState(true);
-  const [selectedBg, setSelectedBg] = useState('https://images.unsplash.com/photo-1497366216548-37526070297c?w=1200&q=80');
-  const [showSettingsSidebar, setShowSettingsSidebar] = useState(false);
-  const [globalBrollEnabled, setGlobalBrollEnabled] = useState(true);
+### 3.1 标记点选择策略
+```javascript
+// 标记点规范化处理流程
+标记点处理流程:
+  1. 坐标归一化: 原始像素坐标 → [0,1]百分比坐标
+  2. 多帧传播: 单个标记点的特征在时间轴上传播
+  3. 语义聚合: 多点标记自动合并为同一语义对象
+  4. 时序跟踪: 跨帧目标追踪，生成连续mask
+```
 
-  // 模拟生成的槽位数据 (初始为空，解析后填充)
-  const [slots, setSlots] = useState([]);
-  const [activeSlot, setActiveSlot] = useState(0);
+### 3.2 掩码格式对比分析
+| 格式 | 优点 | 缺点 | 适用场景 |
+|------|------|------|----------|
+| **RLE** | 压缩率高，传输快 | 需要解码，客户端处理复杂 | 后台处理、存储 |
+| **PNG Base64** | 直接渲染，易于预览 | 数据量大，传输慢 | 实时预览、调试 |
+| **二进制数组** | 处理最快 | 传输成本最高 | 内部计算 |
 
-  // 模拟 AI 解析过程
-  const startParsing = (mode) => {
-    setEntryMode(mode);
-    setView('parsing');
-    setParsingProgress(0);
+### 3.3 解码算法关键点
+```typescript
+// RLE解码核心优化点
+RLE解码特点:
+  1. 横排扫描: p = y * width + x (与传统竖排不同)
+  2. 行程编码: 连续相同值的压缩存储
+  3. 边界处理: 特殊字符处理(c & 0x10)
+  4. 内存优化: Uint8Array预分配，避免动态扩容
+```
+
+## 四、编辑操作模式详述
+
+### 4.1 三种编辑模式对比
+| 模式 | 参考图数量 | Prompt格式 | 技术复杂度 |
+|------|-----------|------------|-----------|
+| **addition** | 1-2张 | "将<<<image_1>>>融入<<<video_1>>>" | ⭐⭐⭐⭐⭐ |
+| **swap** | 1张 | "替换<<<video_1>>>中的元素" | ⭐⭐⭐⭐ |
+| **removal** | 0张 | "删除<<<video_1>>>中的元素" | ⭐⭐⭐ |
+
+### 4.2 Prompt工程规范
+```yaml
+Prompt设计原则:
+  1. 显式引用: 必须使用<<<video_1>>>和<<<image_1>>>标签
+  2. 位置描述: 明确编辑对象的位置关系
+  3. 风格匹配: 描述光照、质感、运动一致性
+  4. 动作衔接: 确保新增/替换元素运动自然
+  
+推荐结构:
+  中文模板: 
+    基础部分: 基于<<<video_1>>>中的原始内容
+    操作描述: 以自然生动的方式
+    目标指定: 将<<<image_1>>>中的[对象]
+    位置约束: 融入<<<video_1>>>的[位置]
+  
+最佳实践示例:
+  "基于<<<video_1>>>中的街道场景，以自然生动的方式，
+   将<<<image_1>>>中的红色跑车，融入<<<video_1>>>的
+   马路中央，保持与周围车辆的运动一致和光照匹配。"
+```
+
+## 五、图像输入规范详述
+
+### 5.1 图像预处理要求
+```yaml
+图像技术要求:
+  格式支持: 
+    - 静态格式: JPG, JPEG, PNG
+    - 色彩空间: sRGB
+    - 位深度: 8位/通道
+  
+  尺寸限制:
+    - 最小尺寸: 300×300像素
+    - 宽高比: 1:2.5 ~ 2.5:1 (即0.4-2.5)
+    - 文件大小: ≤10MB
+  
+  质量要求:
+    - 主体清晰: API无裁剪逻辑，需预裁剪
+    - 背景干净: 建议纯色或简单背景
+    - 光照一致: 与视频场景光照匹配
+```
+
+### 5.2 Base64编码规范
+```javascript
+// 正确与错误示例对比
+正确做法:
+  const base64Data = canvas.toDataURL('image/png').split(',')[1];
+  // 仅传输纯Base64字符串
+
+错误做法:
+  // 包含data:前缀 ❌
+  const wrongData = 'data:image/png;base64,iVBORw0KG...';
+  
+  // 包含换行符 ❌
+  const multiLineData = `iVBORw0KG...
+                        ...`;
+```
+
+## 六、任务生命周期管理
+
+### 6.1 任务状态机
+```mermaid
+graph LR
+    A[初始化视频] --> B[标记选区]
+    B --> C[预览选区]
+    C --> D[提交任务]
+    D --> E[submitted]
+    E --> F[processing]
+    F --> G{succeed/failed}
+    G --> H[结果查询]
     
-    const steps = [
-      { p: 20, s: '正在提取语义核心...' },
-      { p: 50, s: 'AI 正在拆分知识槽位 (Slotting)...' },
-      { p: 80, s: '正在匹配最佳 B-roll 模版...' },
-      { p: 100, s: '解析完成' }
-    ];
+    D --> I[回调通知]
+    F --> I
+    G --> I
+```
 
-    steps.forEach((step, index) => {
-      setTimeout(() => {
-        setParsingProgress(step.p);
-        setParsingStatus(step.s);
-        if (step.p === 100) {
-          // 填充模拟数据
-          setSlots([
-            {
-              id: 0,
-              text: "大家好，欢迎来到知识频道。今天我们要深入探讨 AI 的底层逻辑。",
-              keyword: "AI 底层逻辑",
-              enableBRoll: true,
-              templates: [
-                { id: 1, url: 'https://images.unsplash.com/photo-1677442136019-21780ecad995?w=400', title: '数字大脑' },
-                { id: 2, url: 'https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=400', title: '算法流动' }
-              ],
-              selectedIdx: 0
-            },
-            {
-              id: 1,
-              text: "首先，什么是神经网络？它模仿了人脑处理信息的方式。",
-              keyword: "神经网络",
-              enableBRoll: true,
-              templates: [
-                { id: 5, url: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?w=400', title: '神经元' }
-              ],
-              selectedIdx: 0
-            }
-          ]);
-          
-          if (mode === 'refine') {
-            setShowDefiller(true);
-          }
-          setView('editor');
-        }
-      }, (index + 1) * 1000);
-    });
-  };
+### 6.2 状态码详解
+| 状态码 | 含义 | 用户操作建议 |
+|--------|------|------------|
+| **status: 0** | 操作成功 | 继续下一步 |
+| **status: 非0** | 拒识/失败 | 检查输入，重试或调整参数 |
+| **code: 0** | 接口调用成功 | - |
+| **code: 非0** | 接口错误 | 参考错误码文档 |
 
-  const toggleBRoll = (index) => {
-    const newSlots = [...slots];
-    newSlots[index].enableBRoll = !newSlots[index].enableBRoll;
-    setSlots(newSlots);
-  };
+### 6.3 超时与重试策略
+```yaml
+时间限制:
+  1. session有效期: 24小时
+  2. 生成视频保留: 30天
+  3. 建议操作间隔: ≤5分钟
+  
+重试策略:
+  1. 网络错误: 立即重试，最多3次
+  2. 内容拒识: 修改参数后重试
+  3. 系统繁忙: 指数退避重试
+```
 
-  // --- 视图一：门户页 ---
-  if (view === 'home') {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white flex flex-col items-center justify-center p-6 font-sans">
-        <div className="max-w-5xl w-full space-y-12 animate-in fade-in duration-700">
-          <div className="text-center space-y-4">
-            <div className="w-20 h-20 bg-indigo-600 rounded-[2.5rem] flex items-center justify-center mx-auto shadow-2xl">
-              <Zap size={40} fill="currentColor" />
-            </div>
-            <h1 className="text-5xl font-black tracking-tighter italic uppercase">HoppingRabbit</h1>
-            <p className="text-neutral-500 text-lg font-medium">智能解析文案，自动生成知识槽位</p>
-          </div>
+## 七、性能优化建议
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            <div 
-              onClick={() => startParsing('ai-talk')}
-              className="bg-neutral-900 border border-neutral-800 p-10 rounded-[3rem] hover:border-indigo-600 transition-all cursor-pointer group flex flex-col items-center text-center"
-            >
-              <Sparkles size={32} className="mb-6 text-indigo-500" />
-              <h3 className="text-2xl font-black mb-2">AI 智能播报</h3>
-              <p className="text-sm text-neutral-500 leading-relaxed">喂入文案，AI 将自动切分 Slot 并匹配 B-roll。</p>
-            </div>
-            <div 
-              onClick={() => startParsing('refine')}
-              className="bg-neutral-900 border border-neutral-800 p-10 rounded-[3rem] hover:border-emerald-600 transition-all cursor-pointer group flex flex-col items-center text-center"
-            >
-              <FileVideo size={32} className="mb-6 text-emerald-500" />
-              <h3 className="text-2xl font-black mb-2">口播视频精修</h3>
-              <p className="text-sm text-neutral-500 leading-relaxed">上传视频，AI 将识别口癖并按语义生成槽位。</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+### 7.1 客户端优化
+```javascript
+// 推荐的前端实现模式
+class VideoEditor {
+  // 1. 批量操作
+  async batchAddPoints(sessionId, frames) {
+    // 合并多个标记点请求
   }
-
-  // --- 视图二：AI 解析态 (Parsing Phase) ---
-  if (view === 'parsing') {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white flex flex-col items-center justify-center p-6 font-sans">
-        <div className="max-w-md w-full space-y-8 text-center">
-          <div className="relative inline-block">
-             <div className="w-24 h-24 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin"></div>
-             <div className="absolute inset-0 flex items-center justify-center">
-                <Sparkles className="text-indigo-400 animate-pulse" />
-             </div>
-          </div>
-          <div className="space-y-4">
-            <h2 className="text-2xl font-black uppercase italic tracking-widest">{parsingStatus}</h2>
-            <div className="w-full h-2 bg-neutral-900 rounded-full overflow-hidden">
-               <div 
-                className="h-full bg-indigo-600 transition-all duration-500" 
-                style={{ width: `${parsingProgress}%` }}
-               ></div>
-            </div>
-            <p className="text-neutral-500 text-xs font-bold uppercase tracking-widest">HoppingRabbit Agent 正在处理中...</p>
-          </div>
-        </div>
-      </div>
-    );
+  
+  // 2. 本地缓存
+  cacheSessionData(sessionId, data) {
+    // 本地存储session相关数据
   }
+  
+  // 3. 渐进式加载
+  progressiveMaskRendering(maskData) {
+    // 先显示低分辨率，后高清
+  }
+  
+  // 4. 错误恢复
+  async restoreSession(sessionId) {
+    // 会话异常恢复机制
+  }
+}
+```
 
-  // --- 视图三：主编辑器渲染逻辑 ---
-  const renderPreviewContent = () => {
-    const slot = slots[activeSlot] || slots[0];
-    if (!slot) return null;
-    const broll = slot.templates[slot.selectedIdx]?.url;
+### 7.2 服务器端优化
+- **CDN加速**: 视频上传下载使用CDN
+- **断点续传**: 大文件上传支持
+- **队列管理**: 任务优先级调度
+- **结果缓存**: 相同参数任务缓存
 
-    const shouldShowBRoll = entryMode === 'ai-talk' 
-      ? (globalBrollEnabled && slot.enableBRoll && visualMode !== 'pure-avatar')
-      : (slot.enableBRoll && visualMode !== 'pure-avatar');
+## 八、错误处理与监控
 
-    if (!shouldShowBRoll) {
-        return (
-          <div className="relative w-full h-full flex items-center justify-center bg-neutral-900 transition-all">
-            <img src={selectedBg} className="absolute inset-0 w-full h-full object-cover brightness-50" alt="" />
-            <Smile size={100} className="relative z-10 text-white" />
-          </div>
-        );
-    }
+### 8.1 常见错误分类
+```yaml
+输入错误:
+  - 视频格式不支持
+  - 视频时长不合规
+  - 分辨率超出范围
+  - 帧率不匹配
+  
+处理错误:
+  - 选区标记失败
+  - 目标跟踪丢失
+  - AI生成超时
+  - 内容风控拦截
+  
+系统错误:
+  - 认证失败
+  - 额度不足
+  - 服务不可用
+  - 存储空间不足
+```
 
-    return (
-      <div className="relative w-full h-full">
-        {visualMode === 'pure-avatar' ? (
-          <div className="relative w-full h-full flex items-center justify-center">
-            <img src={selectedBg} className="absolute inset-0 w-full h-full object-cover brightness-50 blur-sm scale-110" alt="" />
-            <div className="w-72 h-72 bg-indigo-500 rounded-full flex items-center justify-center shadow-2xl border-4 border-white/20"><Smile size={120} className="text-white"/></div>
-          </div>
-        ) : (
-          <div className="relative w-full h-full">
-            <img src={broll} className="w-full h-full object-cover" alt="" />
-            {showPip && (
-              <div className="absolute bottom-6 right-6 w-40 h-40 bg-neutral-800 rounded-full border-4 border-white/20 shadow-2xl flex items-center justify-center overflow-hidden z-20">
-                <Smile size={50} className="text-indigo-400" />
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
+### 8.2 监控指标建议
+```javascript
+// 关键性能指标监控
+监控指标:
+  1. 成功率: (成功任务数/总任务数)×100%
+  2. 平均处理时间: 从提交到完成的时间
+  3. 选区精度: 用户满意度评分
+  4. 资源使用: 积分消耗/任务
+  
+  5. 错误分布:
+     - 输入错误占比
+     - 处理错误占比
+     - 系统错误占比
+```
 
-  return (
-    <div className="flex h-screen bg-neutral-950 text-white font-sans overflow-hidden">
-      <aside className="w-16 flex flex-col items-center py-6 border-r border-neutral-800 bg-neutral-900">
-        <div onClick={() => setView('home')} className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center mb-10 cursor-pointer hover:scale-105 transition">
-          <Zap size={24} fill="currentColor" />
-        </div>
-        <div className="flex flex-col gap-8">
-          <button className="text-indigo-400 bg-indigo-400/10 p-2 rounded-lg shadow-inner"><Layout size={24} /></button>
-          <button onClick={() => setShowDefiller(true)} className={`p-2 rounded-lg transition ${showDefiller ? 'text-emerald-400 bg-emerald-400/10' : 'text-neutral-500 hover:text-white'}`}><Scissors size={24} /></button>
-          <button onClick={() => setShowSettingsSidebar(true)} className="text-neutral-500 hover:text-white p-2 transition"><Palette size={24} /></button>
-        </div>
-        <button className="mt-auto text-neutral-500 hover:text-white p-2 transition"><Settings size={24} /></button>
-      </aside>
+## 九、安全与合规考虑
 
-      <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 flex items-center justify-between px-8 border-b border-neutral-800 bg-neutral-900/50 backdrop-blur-md">
-          <div className="flex items-center gap-4">
-            <button onClick={() => setView('home')} className="p-2 hover:bg-neutral-800 rounded-full transition"><ArrowLeft size={18} /></button>
-            <div className="h-4 w-px bg-neutral-800"></div>
-            <span className="font-black italic uppercase tracking-tighter text-lg">{entryMode === 'ai-talk' ? 'AI Talk Editor' : 'Video Refiner'}</span>
-          </div>
-          <div className="flex items-center gap-3">
-             <div className="flex bg-black/40 p-1.5 rounded-full border border-neutral-800">
-                {['pure-avatar', 'intercut', 'pure-broll'].map(m => (
-                  <button key={m} onClick={() => setVisualMode(m)} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${visualMode === m ? 'bg-indigo-600 text-white shadow-lg' : 'text-neutral-500 hover:text-white'}`}>
-                    {m.replace('-',' ')}
-                  </button>
-                ))}
-             </div>
-             <button className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full text-sm font-black transition active:scale-95">导出</button>
-          </div>
-        </header>
+### 9.1 内容安全
+- **自动审核**: 生成内容自动风控
+- **人工审核**: 可疑内容人工复审
+- **水印选项**: 支持版权保护
+- **使用日志**: 完整操作审计
 
-        <div className="flex-1 flex overflow-hidden">
-          <section className="flex-[1.4] flex flex-col p-6 bg-black/20 overflow-y-auto custom-scrollbar relative">
-            <div className="relative aspect-video bg-neutral-900 rounded-[3rem] overflow-hidden border border-neutral-800 shadow-2xl transition-all duration-500">
-              {renderPreviewContent()}
-              {slots[activeSlot]?.highlight && (
-                <div className="absolute top-10 left-10 scale-110 animate-in fade-in slide-in-from-left-4">
-                   <span className="bg-indigo-600 text-white px-5 py-2 text-xl font-black rounded-xl shadow-xl italic uppercase tracking-tighter">
-                     {slots[activeSlot].keyword}
-                   </span>
-                </div>
-              )}
-            </div>
+### 9.2 数据隐私
+- **临时存储**: 30天后自动清理
+- **传输加密**: HTTPS全程加密
+- **访问控制**: 基于token的认证
+- **数据隔离**: 用户数据隔离存储
 
-            <div className="mt-8 grid grid-cols-2 gap-6">
-              <div className="p-6 bg-neutral-900 rounded-[2.5rem] border border-neutral-800 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                   <div className="w-12 h-12 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center"><Maximize size={24}/></div>
-                   <div>
-                     <p className="text-[10px] font-black text-neutral-500 uppercase tracking-widest mb-1">B-roll 挂角人像</p>
-                     <p className="text-xs font-bold text-neutral-400">{showPip ? '已开启 PiP' : '已隐藏'}</p>
-                   </div>
-                </div>
-                <button onClick={() => setShowPip(!showPip)} className={`w-12 h-6 rounded-full relative transition ${showPip ? 'bg-indigo-600' : 'bg-neutral-800'}`}>
-                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${showPip ? 'left-7' : 'left-1'}`}></div>
-                </button>
-              </div>
-              <div onClick={() => setShowSettingsSidebar(true)} className="p-6 bg-neutral-900 rounded-[2.5rem] border border-neutral-800 flex items-center gap-4 cursor-pointer hover:border-neutral-700 transition">
-                <div className="w-12 h-12 bg-emerald-500/10 text-emerald-400 rounded-2xl flex items-center justify-center"><Palette size={24}/></div>
-                <div>
-                   <p className="text-[10px] font-black text-neutral-500 uppercase tracking-widest mb-1">背景场景定制</p>
-                   <p className="text-xs font-bold text-neutral-400 underline decoration-emerald-500/30">配置画布背景</p>
-                </div>
-              </div>
-            </div>
-            
-            {entryMode === 'ai-talk' && (
-              <div className="mt-6 space-y-4">
-                 <div className="p-8 bg-neutral-900 rounded-[2.5rem] border border-neutral-800 flex items-center justify-between">
-                    <div className="flex items-center gap-4 text-amber-500">
-                       <Wand2 size={24}/>
-                       <div>
-                          <h3 className="text-sm font-black text-white uppercase tracking-wider mb-1">智能 B-roll 增强</h3>
-                          <p className="text-[11px] text-neutral-500">AI 自动匹配场景素材</p>
-                       </div>
-                    </div>
-                    <button onClick={() => setGlobalBrollEnabled(!globalBrollEnabled)} className={`w-14 h-7 rounded-full relative transition-all ${globalBrollEnabled ? 'bg-amber-600' : 'bg-neutral-800'}`}>
-                      <div className={`absolute top-1 w-5 h-5 bg-white rounded-full transition-all ${globalBrollEnabled ? 'left-8' : 'left-1'}`}></div>
-                    </button>
-                 </div>
-              </div>
-            )}
-          </section>
+## 十、最佳实践指南
 
-          <section className="flex-1 bg-neutral-900/30 border-l border-neutral-800 flex flex-col overflow-hidden">
-            <div className="p-6 border-b border-neutral-800 bg-neutral-900/50 flex justify-between items-center">
-               <h2 className="font-black text-[10px] uppercase tracking-[0.2em] flex items-center gap-2">
-                 <Layers size={16} className="text-indigo-400" /> AI 槽位建议 (Slotting)
-               </h2>
-               <button className="p-1.5 hover:bg-neutral-800 rounded transition text-neutral-500" title="合并槽位"><Merge size={14}/></button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-5 space-y-5 custom-scrollbar pb-20">
-              {slots.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center opacity-30 text-center space-y-4">
-                   <Loader2 className="animate-spin" size={32} />
-                   <p className="text-xs font-black uppercase tracking-[0.2em]">正在等待 AI 分词生成...</p>
-                </div>
-              ) : slots.map((slot, index) => (
-                <div 
-                  key={slot.id}
-                  onClick={() => setActiveSlot(index)}
-                  className={`p-6 rounded-[2.5rem] border transition-all duration-500 cursor-pointer relative ${
-                    activeSlot === index ? 'bg-neutral-800 border-indigo-500 shadow-2xl scale-[1.02]' : 'bg-neutral-900/40 border-neutral-800 opacity-40 hover:opacity-70'
-                  }`}
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="text-[10px] font-black tracking-widest text-indigo-400 uppercase tracking-[0.2em]">SLOT {index + 1}</span>
-                    <div className="flex items-center gap-2">
-                        <button onClick={(e) => { e.stopPropagation(); toggleBRoll(index); }} className={`p-1.5 rounded-lg transition-colors ${!slot.enableBRoll ? 'text-orange-500 bg-orange-500/10' : 'text-neutral-600 hover:bg-neutral-700'}`}>
-                           {slot.enableBRoll ? <Video size={14} /> : <EyeOff size={14} />}
-                        </button>
-                        <button className="p-1.5 text-neutral-600 hover:text-white transition" title="拆分此处"><Split size={14}/></button>
-                    </div>
-                  </div>
-                  <p className="text-xs leading-relaxed mb-6 font-medium text-neutral-300 italic line-clamp-2 italic">"{slot.text}"</p>
-                  
-                  {slot.enableBRoll && (
-                    <div className="grid grid-cols-4 gap-2">
-                        {slot.templates.map((temp, tidx) => (
-                          <div 
-                            key={temp.id}
-                            className={`aspect-square rounded-xl overflow-hidden border-2 transition-all ${
-                              slot.selectedIdx === tidx ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-transparent opacity-50'
-                            }`}
-                          >
-                            <img src={temp.url} className="w-full h-full object-cover" alt="" />
-                          </div>
-                        ))}
-                        <div className="aspect-square rounded-xl border-2 border-dashed border-neutral-800 flex items-center justify-center text-neutral-700"><Plus size={14} /></div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
+### 10.1 视频选择建议
+```yaml
+优质视频特征:
+  1. 主体明确: 编辑目标清晰可见
+  2. 背景简单: 减少干扰元素
+  3. 运动平缓: 避免快速镜头切换
+  4. 光照稳定: 无明显闪烁
+  5. 分辨率适中: 1080p为最佳平衡点
+```
 
-        {/* --- Defiller View --- */}
-        {showDefiller && (
-          <div className="fixed inset-0 bg-neutral-950/90 backdrop-blur-xl z-[100] flex items-center justify-center p-6 animate-in fade-in zoom-in duration-300">
-            <div className="bg-neutral-900 w-full max-w-4xl rounded-[3.5rem] border border-neutral-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-              <div className="p-10 border-b border-neutral-800 flex justify-between items-center bg-black/20">
-                 <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-emerald-500/10 text-emerald-400 rounded-2xl flex items-center justify-center"><Scissors size={24}/></div>
-                    <div>
-                      <h3 className="text-2xl font-black italic uppercase tracking-tighter tracking-widest">语义修剪 (AI Trimmer)</h3>
-                      <p className="text-neutral-500 text-xs mt-1 font-bold">这是基于解析生成的槽位进行的首次精修</p>
-                    </div>
-                 </div>
-                 <button onClick={() => setShowDefiller(false)} className="p-3 bg-neutral-800 rounded-full hover:bg-neutral-700 transition"><X size={20}/></button>
-              </div>
+### 10.2 选区标记技巧
+1. **关键帧选择**: 选择目标最清晰、最完整的帧
+2. **多点覆盖**: 从不同角度标记同一物体
+3. **边缘精修**: 复杂边界使用多个密集点
+4. **运动预测**: 考虑物体的运动轨迹
 
-              <div className="flex-1 flex overflow-hidden bg-black/10">
-                 <div className="w-80 border-r border-neutral-800 p-8 space-y-6">
-                    <label className="text-[10px] font-black text-neutral-500 uppercase tracking-widest block">检测到的口癖</label>
-                    <div className="space-y-3">
-                      {fillerWords.map((f, i) => (
-                        <div key={i} className="flex items-center justify-between p-3 bg-neutral-800/50 rounded-2xl border border-white/5">
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" checked={f.checked} readOnly className="w-4 h-4 accent-emerald-500" />
-                            <span className="text-sm font-bold">{f.word}</span>
-                          </div>
-                          <span className="text-[10px] text-neutral-500 font-bold">{f.count}次</span>
-                        </div>
-                      ))}
-                    </div>
-                 </div>
+### 10.3 Prompt编写技巧
+```yaml
+高质量Prompt特征:
+  1. 具体明确: 避免模糊描述
+  2. 物理合理: 符合现实物理规律
+  3. 上下文一致: 与视频原有元素协调
+  4. 风格统一: 保持视觉风格一致
+  
+进阶技巧:
+  - 使用专业术语: "景深"、"运动模糊"
+  - 指定材质: "金属反光"、"毛绒质感"
+  - 描述互动: "与背景元素发生遮挡关系"
+```
 
-                 <div className="flex-1 p-8 overflow-y-auto custom-scrollbar">
-                    <div className="text-xl leading-[2.5rem] font-medium text-neutral-300">
-                      大家好，<span className="bg-emerald-500/20 text-emerald-400 line-through px-1 rounded">嗯...</span> 欢迎来到知识频道。<br/>
-                      今天我们要深入探讨 AI 的 <span className="bg-emerald-500/20 text-emerald-400 line-through px-1 rounded">那个</span> 底层逻辑。<br/>
-                      首先，什么是神经网络？它模仿了人脑处理信息的方式。<br/>
-                      <span className="bg-orange-500/10 text-orange-400 border-b border-orange-500/30 px-1 italic">[Slot 2 建议修剪：语义重复]</span>
-                    </div>
-                 </div>
-              </div>
+## 十一、高级特性与应用场景
 
-              <div className="p-8 border-t border-neutral-800 bg-black/20 flex justify-end">
-                 <button onClick={() => setShowDefiller(false)} className="px-12 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-[2rem] font-black text-lg transition-all shadow-xl shadow-emerald-600/20 flex items-center gap-3">
-                   确认修剪并生成正式 Slot <Check size={20}/>
-                 </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 场景定制面板 */}
-        {showSettingsSidebar && (
-          <div className="fixed inset-y-0 right-0 w-[420px] bg-neutral-900 border-l border-neutral-800 shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-500">
-            <div className="p-8 flex items-center justify-between border-b border-neutral-800">
-               <h3 className="text-2xl font-black italic uppercase italic tracking-tighter">场景场景定制</h3>
-               <button onClick={() => setShowSettingsSidebar(false)} className="w-10 h-10 flex items-center justify-center bg-neutral-800 rounded-full text-neutral-500 hover:text-white transition"><X size={20}/></button>
-            </div>
-          </div>
-        )}
-      </main>
-
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #262626; border-radius: 10px; }
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-      `}</style>
-    </div>
-  );
+### 11.1 批量处理模式
+```javascript
+// 批量编辑建议架构
+const batchConfig = {
+  templateVideo: 'base_video.mp4',
+  elements: [
+    { image: 'logo.png', position: 'top-right' },
+    { image: 'product.png', position: 'center' }
+  ],
+  variations: [
+    { prompt: '添加夏季主题元素', season: 'summer' },
+    { prompt: '添加冬季主题元素', season: 'winter' }
+  ]
 };
+```
 
-export default App;
+### 11.2 A/B测试集成
+```yaml
+测试策略:
+  1. 变量控制:
+     - 同一视频，不同参考图
+     - 同一选区，不同Prompt
+     - 同一参数，不同生成模式(std/pro)
+  
+  2. 评估指标:
+     - 视觉质量评分
+     - 用户偏好选择
+     - 转化率影响
+```
+
+## 十二、技术限制与未来展望
+
+### 12.1 当前限制
+1. **语义理解局限**: 复杂指令理解能力有限
+2. **长视频处理**: 10秒限制影响叙事完整性
+3. **多人场景**: 多人交互编辑支持有限
+4. **动态光影**: 复杂光影变化处理困难
+
+### 12.2 发展趋势
+- **实时预览**: 编辑效果实时渲染
+- **3D元素集成**: 支持3D模型插入
+- **语音驱动**: 语音指令控制编辑
+- **协作编辑**: 多用户协同创作
+
+---
+
+## 附录：快速参考检查表
+
+### 准备阶段
+- [ ] 视频格式为MP4/MOV
+- [ ] 视频时长符合要求(2-5s或7-10s)
+- [ ] 分辨率在720p-2160p之间
+- [ ] 帧率为24/30/60fps
+- [ ] 准备裁剪好的参考图(如有)
+
+### 编辑阶段
+- [ ] 保存返回的session_id
+- [ ] 在关键帧上精确标记
+- [ ] 使用多角度标记复杂物体
+- [ ] 预览确认选区准确性
+- [ ] 按模板格式编写Prompt
+
+### 提交阶段
+- [ ] 选择正确的edit_mode
+- [ ] 匹配生成时长与输入视频
+- [ ] 设置callback_url接收通知
+- [ ] 记录task_id用于查询
+
+### 后续处理
+- [ ] 30天内下载生成结果
+- [ ] 监控积分消耗
+- [ ] 收集用户反馈优化参数
+- [ ] 建立错误处理机制
+
+---
+
+这个深度解析涵盖了接口的各个方面，从技术实现到最佳实践，为开发者提供了完整的理解和应用指导。

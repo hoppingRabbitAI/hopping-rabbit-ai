@@ -69,6 +69,11 @@ CREATE TABLE assets (
     proxy_path TEXT,
     -- HLS 流文件目录路径（存储 playlist.m3u8 和 .ts 分片）
     hls_path TEXT,
+    -- ★ Cloudflare Stream 集成
+    cloudflare_uid VARCHAR(64),           -- Cloudflare Stream 视频 UID
+    cloudflare_status VARCHAR(32) DEFAULT 'none',  -- none/uploading/processing/ready/error
+    -- ★ MP4 快速启动优化
+    faststart_applied BOOLEAN DEFAULT FALSE,  -- 是否已应用 faststart 优化
     -- 素材在会话中的排序索引，用于多素材上传场景
     order_index INTEGER DEFAULT 0,
     -- 上传进度信息: {bytes_uploaded, total_bytes, percentage, completed}
@@ -76,6 +81,18 @@ CREATE TABLE assets (
     -- AI 生成相关
     ai_task_id UUID,  -- 关联的 AI 任务 ID (延迟引用)
     ai_generated BOOLEAN DEFAULT FALSE,  -- 是否为 AI 生成的素材
+    metadata JSONB DEFAULT '{}',  -- 扩展元数据（如 transcript_segments）
+    -- ★ 用户素材系统扩展
+    asset_category TEXT DEFAULT 'ai_generated' CHECK (asset_category IN ('ai_generated', 'user_material')),
+    material_type TEXT DEFAULT 'general' CHECK (material_type IN ('avatar', 'voice_sample', 'general')),
+    material_metadata JSONB DEFAULT '{}',
+    display_name TEXT,
+    is_favorite BOOLEAN DEFAULT FALSE,
+    tags TEXT[] DEFAULT '{}',
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TIMESTAMPTZ,
+    -- ★ B-Roll 元数据
+    broll_metadata JSONB,  -- {source, external_id, author, author_url, original_url, license, keywords, quality, orientation}
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -87,6 +104,13 @@ CREATE INDEX idx_assets_status ON assets(status);
 CREATE INDEX idx_assets_hls_path ON assets(hls_path) WHERE hls_path IS NOT NULL;
 CREATE INDEX idx_assets_ai_task_id ON assets(ai_task_id);
 CREATE INDEX idx_assets_ai_generated ON assets(ai_generated);
+CREATE INDEX idx_assets_cloudflare_uid ON assets(cloudflare_uid);
+CREATE INDEX idx_assets_cloudflare_status ON assets(cloudflare_status);
+CREATE INDEX idx_assets_asset_category ON assets(asset_category);
+CREATE INDEX idx_assets_material_type ON assets(material_type);
+CREATE INDEX idx_assets_is_favorite ON assets(is_favorite);
+CREATE INDEX idx_assets_last_used_at ON assets(last_used_at DESC);
+CREATE INDEX idx_assets_broll_source ON assets((broll_metadata->>'source'));
 
 -- ============================================================================
 -- 3. 任务表 (tasks)
@@ -191,9 +215,10 @@ CREATE INDEX idx_tracks_order ON tracks(project_id, order_index);
 -- 7. 片段表 (clips)
 -- ============================================================================
 -- 片段类型说明:
---   video: 视频片段
+--   video: 视频片段 (主视频，必须连续排列，不允许有间隙)
+--   broll: B-Roll 视频片段 (video 的子类型，覆盖层，可以有间隙)
 --   audio: 音频片段
---   subtitle: 字幕片段 (关联到时间轴的文字)
+--   subtitle: 字幕片段 (text 的子类型，可以有间隙)
 --   text: 文案片段 (独立的文案内容，可被AI处理切分)
 --   voice: 配音片段 (TTS生成或录制的旁白)
 --   effect: 特效片段 (视觉效果，如粒子、动画)
@@ -206,7 +231,7 @@ CREATE TABLE clips (
     asset_id UUID,
     
     -- 片段类型 (核心字段：区分不同类型的clip)
-    clip_type TEXT NOT NULL DEFAULT 'video' CHECK (clip_type IN ('video', 'image', 'audio', 'subtitle', 'text', 'voice', 'effect', 'filter', 'sticker', 'transition')),
+    clip_type TEXT NOT NULL DEFAULT 'video' CHECK (clip_type IN ('video', 'broll', 'image', 'audio', 'subtitle', 'text', 'voice', 'effect', 'filter', 'sticker', 'transition')),
     
     -- 时间信息 (毫秒)
     start_time INTEGER NOT NULL,
@@ -307,6 +332,9 @@ CREATE TABLE workspace_sessions (
     user_id UUID NOT NULL,
     project_id UUID,
     status TEXT DEFAULT 'uploading' CHECK (status IN ('uploading', 'processing', 'completed', 'failed', 'cancelled')),
+    -- ★ 工作流步骤跟踪
+    workflow_step TEXT DEFAULT 'upload',  -- upload, config, analyze, defiller, broll_config, completed
+    entry_mode TEXT DEFAULT 'refine',     -- refine(口播精修), quick(快速剪辑)
     uploaded_asset_id UUID,
     -- 关联的多个素材ID数组，用于多素材上传场景
     uploaded_asset_ids UUID[] DEFAULT '{}',
@@ -330,6 +358,7 @@ CREATE TABLE workspace_sessions (
 CREATE INDEX idx_workspace_sessions_user_id ON workspace_sessions(user_id);
 CREATE INDEX idx_workspace_sessions_project_id ON workspace_sessions(project_id);
 CREATE INDEX idx_workspace_sessions_status ON workspace_sessions(status);
+CREATE INDEX idx_workspace_sessions_workflow_step ON workspace_sessions(workflow_step);
 
 -- ============================================================================
 -- 10. 项目脚本表 (project_scripts)

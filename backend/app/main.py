@@ -14,7 +14,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,35 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # 注册模块化路由
 app.include_router(api_router, prefix="/api")
+
+# ★ 缓存文件路由（带 CORS 支持，用于分镜缩略图等）
+@app.options("/cache/{file_path:path}")
+async def cache_options(file_path: str):
+    """处理 CORS 预检请求"""
+    from starlette.responses import Response
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+@app.get("/cache/{file_path:path}")
+async def serve_cache_file(file_path: str):
+    """提供缓存文件访问，支持 CORS"""
+    cache_dir = settings.cache_dir or "/tmp/hoppingrabbit_cache"
+    full_path = os.path.join(cache_dir, file_path)
+    
+    if not os.path.exists(full_path):
+        return JSONResponse(status_code=404, content={"detail": "File not found"})
+    
+    # 明确添加 CORS 头
+    response = FileResponse(full_path)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    return response
 
 # 开发模式：挂载静态文件目录（用于访问本地存储的视频）
 if settings.dev_mode:

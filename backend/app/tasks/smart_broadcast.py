@@ -243,10 +243,12 @@ async def _process_smart_broadcast_async(
         i2v_result = await kling_client.create_image_to_video_task(
             image=image_url,
             prompt=options.get("image_prompt", "portrait, looking at camera, natural movement, subtle facial expressions"),
-            negative_prompt="blur, distortion, deformation",
-            duration=options.get("duration", "5"),
-            cfg_scale=options.get("cfg_scale", 0.5),
-            model_name=options.get("model_name", "kling-v2-1-master"),
+            options={
+                "negative_prompt": "blur, distortion, deformation",
+                "duration": options.get("duration", "5"),
+                "cfg_scale": options.get("cfg_scale", 0.5),
+                "model_name": options.get("model_name", "kling-v2-1-master"),
+            }
         )
         
         i2v_task_id = i2v_result.get("task_id")

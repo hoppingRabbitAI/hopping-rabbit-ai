@@ -140,6 +140,9 @@ interface AssetsViewProps {
     projectId: string;
     step: string;
     mode: string;
+    // ★★★ 功能开关状态（用于动态步骤恢复）★★★
+    enableSmartClip?: boolean;
+    enableBroll?: boolean;
   }) => void;
 }
 
@@ -234,8 +237,9 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
       if (response.ok) {
         const data = await response.json();
         
-        // 如果有未完成的工作流步骤，且不是已完成状态
-        if (data.workflow_step && data.status !== 'completed' && data.workflow_step !== 'completed') {
+        // ★ 修复：以 workflow_step 为准，只要不是 "completed" 就显示弹窗
+        // status="completed" 只表示上传完成，不是工作流完成
+        if (data.workflow_step && data.workflow_step !== 'completed') {
           // 调用恢复工作流回调
           if (onResumeWorkflow) {
             onResumeWorkflow({
@@ -243,6 +247,9 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
               projectId: data.project_id || projectId,
               step: data.workflow_step,
               mode: data.entry_mode || 'refine',
+              // ★★★ 传递开关状态用于动态步骤恢复 ★★★
+              enableSmartClip: data.enable_smart_clip,
+              enableBroll: data.enable_broll,
             });
             return;
           }

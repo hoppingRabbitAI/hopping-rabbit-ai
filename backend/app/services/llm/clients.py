@@ -38,7 +38,7 @@ class DoubaoChat(BaseChatModel):
     api_base: str = "https://ark.cn-beijing.volces.com/api/v3"
     temperature: float = 0.3
     max_tokens: int = 2000
-    timeout: float = 60.0
+    timeout: float = 180.0  # 增加到 3 分钟，B-Roll 分析需要更多时间
     
     class Config:
         arbitrary_types_allowed = True
@@ -130,7 +130,9 @@ class DoubaoChat(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        """异步生成"""
+        """异步生成（带重试机制）"""
+        import asyncio
+        
         ark_messages = self._convert_messages(messages)
         
         payload = {
@@ -142,39 +144,89 @@ class DoubaoChat(BaseChatModel):
         if stop:
             payload["stop"] = stop
         
+        # 添加详细日志
+        logger.info(f"[Doubao] 异步请求开始 - model: {self.model_endpoint}")
+        logger.info(f"[Doubao] messages: {len(ark_messages)}, max_tokens: {self.max_tokens}, temperature: {self.temperature}")
+        
+        # ★ 打印消息内容（调试时）
+        if os.getenv("LANGCHAIN_DEBUG", "").lower() in ("true", "1", "yes"):
+            for i, msg in enumerate(ark_messages):
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")[:500]  # 只打印前500字符
+                logger.debug(f"[Doubao] Message[{i}] role={role}, content={content}...")
+        
+        max_retries = 3
+        retry_delay = 10  # 秒
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                response = await client.post(
-                    f"{self.api_base}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                content = data["choices"][0]["message"]["content"]
-                usage = data.get("usage", {})
-                
-                message = AIMessage(
-                    content=content,
-                    additional_kwargs={
-                        "usage": usage,
-                        "model": data.get("model"),
-                    }
-                )
-                
-                generation = ChatGeneration(message=message)
-                return ChatResult(generations=[generation])
-                
-            except httpx.HTTPStatusError as e:
-                logger.error(f"[Doubao] API 错误: {e.response.status_code} - {e.response.text}")
-                raise
-            except Exception as e:
-                logger.error(f"[Doubao] 请求异常: {e}")
-                raise
+            for attempt in range(max_retries):
+                try:
+                    response = await client.post(
+                        f"{self.api_base}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    
+                    # 处理 429 限流
+                    if response.status_code == 429:
+                        retry_after = int(response.headers.get("Retry-After", retry_delay))
+                        logger.warning(f"[Doubao] 429 限流，第 {attempt + 1}/{max_retries} 次重试，等待 {retry_after} 秒...")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(retry_after)
+                            continue
+                        else:
+                            response.raise_for_status()
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # 详细日志
+                    logger.info(f"[Doubao] API 响应: status={response.status_code}, choices={len(data.get('choices', []))}")
+                    
+                    if not data.get("choices"):
+                        logger.error(f"[Doubao] API 返回无 choices! 完整响应: {data}")
+                        raise ValueError("API 返回无有效内容")
+                    
+                    content = data["choices"][0]["message"]["content"]
+                    usage = data.get("usage", {})
+                    
+                    logger.info(f"[Doubao] 响应内容长度: {len(content) if content else 0}, usage: {usage}")
+                    
+                    message = AIMessage(
+                        content=content,
+                        additional_kwargs={
+                            "usage": usage,
+                            "model": data.get("model"),
+                        }
+                    )
+                    
+                    generation = ChatGeneration(message=message)
+                    return ChatResult(generations=[generation])
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429 and attempt < max_retries - 1:
+                        # 已在上面处理
+                        continue
+                    logger.error(f"[Doubao] API 错误: {e.response.status_code} - {e.response.text}")
+                    raise
+                except httpx.TimeoutException as e:
+                    logger.error(f"[Doubao] 请求超时 (timeout={self.timeout}s): {type(e).__name__}")
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[Doubao] 超时重试 {attempt + 1}/{max_retries}...")
+                        await asyncio.sleep(5)
+                        continue
+                    raise
+                except Exception as e:
+                    import traceback
+                    logger.error(f"[Doubao] 请求异常: {type(e).__name__}: {e}")
+                    logger.error(f"[Doubao] 完整堆栈:\n{traceback.format_exc()}")
+                    raise
+        
+        # 所有重试都失败
+        raise RuntimeError(f"[Doubao] 所有 {max_retries} 次重试均失败")
 
 
 # ============================================
@@ -279,4 +331,41 @@ def get_creative_llm() -> BaseChatModel:
 
 def get_analysis_llm() -> BaseChatModel:
     """获取分析 LLM（用于情绪分析等）"""
-    return get_llm(temperature=0.2, max_tokens=2000)
+    return get_llm(temperature=0.2, max_tokens=8000)
+
+
+def get_outline_llm() -> BaseChatModel:
+    """
+    获取大纲生成专用 LLM（使用 Flash 模型 - 速度快）
+    
+    用于 B-Roll 生成的第一阶段：快速生成视频大纲
+    """
+    from app.config import get_settings
+    settings = get_settings()
+    
+    return DoubaoChat(
+        model_endpoint=settings.doubao_model_endpoint,  # flash 模型
+        api_key=settings.volcengine_ark_api_key,
+        temperature=0.2,  # 低温度，更稳定
+        max_tokens=4000,
+        timeout=60.0,  # flash 模型速度快
+    )
+
+
+def get_remotion_llm() -> BaseChatModel:
+    """
+    获取 B-Roll 配置生成专用 LLM（使用 Doubao-Seed-1.8）
+    
+    Seed-1.8 相比 Seed-1.6 具有更强的推理能力和复杂任务处理能力，
+    更适合生成结构化的 B-Roll 配置 JSON
+    """
+    from app.config import get_settings
+    settings = get_settings()
+    
+    return DoubaoChat(
+        model_endpoint=settings.doubao_seed_1_8_endpoint,
+        api_key=settings.volcengine_ark_api_key,
+        temperature=0.3,  # 适度创意
+        max_tokens=8000,  # 足够生成完整配置
+        timeout=300.0,  # ★ 增加到 5 分钟，长 prompt 需要更多时间
+    )

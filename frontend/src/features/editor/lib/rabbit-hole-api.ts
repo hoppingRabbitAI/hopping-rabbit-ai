@@ -90,7 +90,7 @@ export interface TextToVideoRequest {
   negative_prompt?: string;
   model_name?: 'kling-v1' | 'kling-v1-5' | 'kling-v1-6';
   duration?: '5' | '10';
-  aspect_ratio?: '16:9' | '9:16' | '1:1';
+  aspect_ratio?: '16:9' | '9:16';  // ★ 仅支持 16:9 和 9:16
   cfg_scale?: number;
 }
 

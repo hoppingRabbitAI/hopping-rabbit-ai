@@ -167,7 +167,7 @@ export function BeautyProvider({ children }: { children: React.ReactNode }) {
         height: video.videoHeight,
       });
       
-      return result.outputCanvas;
+      return result.outputCanvas as HTMLCanvasElement;
     } catch (error) {
       console.error('[BeautyContext] 处理帧失败:', error);
       return null;

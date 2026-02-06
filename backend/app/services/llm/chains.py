@@ -11,9 +11,12 @@ LangChain Chains 模块
 
 import json
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.callbacks import StdOutCallbackHandler
+from langchain_core.tracers import ConsoleCallbackHandler
 
 from .clients import get_llm, get_analysis_llm, get_creative_llm
 from .prompts import (
@@ -36,6 +39,16 @@ from .parsers import (
 
 logger = logging.getLogger(__name__)
 
+# ★ LangChain 调试开关 - 通过环境变量控制
+LANGCHAIN_DEBUG = os.getenv("LANGCHAIN_DEBUG", "").lower() in ("true", "1", "yes")
+
+# ★ 如果开启调试，配置 LangChain 全局调试
+if LANGCHAIN_DEBUG:
+    import langchain
+    langchain.debug = True
+    logger.setLevel(logging.DEBUG)
+    logger.info("★★★ LangChain 调试模式已开启 ★★★")
+
 
 # ============================================
 # 输出解析器
@@ -47,22 +60,31 @@ def create_json_parser(pydantic_model):
     
     def safe_parse(text: str) -> dict:
         """安全解析，处理 markdown 代码块等情况"""
-        # 移除 markdown 代码块
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
+        raw_text = text.content if hasattr(text, 'content') else str(text)
         
-        text = text.strip()
+        # ★ 调试日志：原始 LLM 输出
+        if LANGCHAIN_DEBUG:
+            logger.debug(f"[LangChain] 原始 LLM 输出 (前500字符):\n{raw_text[:500]}")
+        
+        # 移除 markdown 代码块
+        if "```json" in raw_text:
+            raw_text = raw_text.split("```json")[1].split("```")[0]
+        elif "```" in raw_text:
+            raw_text = raw_text.split("```")[1].split("```")[0]
+        
+        raw_text = raw_text.strip()
         
         try:
-            return json.loads(text)
+            result = json.loads(raw_text)
+            if LANGCHAIN_DEBUG:
+                logger.debug(f"[LangChain] JSON 解析成功: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+            return result
         except json.JSONDecodeError as e:
-            logger.warning(f"JSON 解析失败: {e}, 原文: {text[:200]}...")
+            logger.warning(f"JSON 解析失败: {e}, 原文: {raw_text[:200]}...")
             # 返回空结果
             return {"results": []}
     
-    return RunnableLambda(lambda x: safe_parse(x.content if hasattr(x, 'content') else str(x)))
+    return RunnableLambda(lambda x: safe_parse(x))
 
 
 # ============================================
@@ -109,8 +131,19 @@ async def analyze_emotions(segments: List[Dict[str, Any]]) -> EmotionAnalysisRes
     
     chain = create_emotion_analysis_chain()
     
+    # ★ 调试日志
+    if LANGCHAIN_DEBUG:
+        logger.info(f"[LangChain] ===== 情绪分析开始 =====")
+        logger.info(f"[LangChain] 输入片段数: {len(segments)}")
+        logger.debug(f"[LangChain] 输入文本:\n{segments_text[:500]}...")
+    
     try:
-        result = await chain.ainvoke({"segments_text": segments_text})
+        # ★ 使用回调处理器获取更多信息
+        callbacks = [ConsoleCallbackHandler()] if LANGCHAIN_DEBUG else []
+        result = await chain.ainvoke({"segments_text": segments_text}, config={"callbacks": callbacks})
+        
+        if LANGCHAIN_DEBUG:
+            logger.info(f"[LangChain] 原始结果: {result}")
         
         # 转换为 Pydantic 模型
         parsed_results = []
@@ -126,10 +159,15 @@ async def analyze_emotions(segments: List[Dict[str, Any]]) -> EmotionAnalysisRes
             except Exception as e:
                 logger.warning(f"解析片段结果失败: {e}, data={r}")
         
+        if LANGCHAIN_DEBUG:
+            logger.info(f"[LangChain] ===== 情绪分析完成，解析 {len(parsed_results)} 个结果 =====")
+        
         return EmotionAnalysisResult(results=parsed_results)
         
     except Exception as e:
         logger.error(f"情绪分析失败: {e}")
+        import traceback
+        logger.error(f"堆栈:\n{traceback.format_exc()}")
         return EmotionAnalysisResult(results=[])
 
 
@@ -231,6 +269,10 @@ def create_broll_suggestion_chain():
         """解析 B-Roll 列表"""
         content = response.content if hasattr(response, 'content') else str(response)
         
+        # ★ 调试日志
+        if LANGCHAIN_DEBUG:
+            logger.debug(f"[LangChain] B-Roll 原始响应 (前500字符):\n{content[:500]}")
+        
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
@@ -238,8 +280,12 @@ def create_broll_suggestion_chain():
         
         try:
             data = json.loads(content.strip())
-            return data.get("suggestions", data) if isinstance(data, dict) else data
-        except:
+            result = data.get("suggestions", data) if isinstance(data, dict) else data
+            if LANGCHAIN_DEBUG:
+                logger.debug(f"[LangChain] B-Roll 解析结果: {len(result)} 条建议")
+            return result
+        except Exception as e:
+            logger.error(f"[LangChain] B-Roll JSON 解析失败: {e}")
             return []
     
     chain = BROLL_SUGGESTION_PROMPT | llm | RunnableLambda(parse_broll_list)
@@ -265,11 +311,24 @@ async def suggest_broll(transcript: List[Dict[str, Any]]) -> List[BRollSuggestio
         for t in transcript
     ])
     
+    # ★ 调试日志
+    if LANGCHAIN_DEBUG:
+        logger.info(f"[LangChain] ===== B-Roll 建议开始 =====")
+        logger.info(f"[LangChain] 输入片段数: {len(transcript)}")
+        logger.debug(f"[LangChain] 输入文本:\n{transcript_text[:500]}...")
+    
     try:
-        results = await chain.ainvoke({"transcript": transcript_text})
+        callbacks = [ConsoleCallbackHandler()] if LANGCHAIN_DEBUG else []
+        results = await chain.ainvoke({"transcript": transcript_text}, config={"callbacks": callbacks})
+        
+        if LANGCHAIN_DEBUG:
+            logger.info(f"[LangChain] ===== B-Roll 建议完成，{len(results)} 条 =====")
+        
         return [BRollSuggestion(**r) for r in results]
     except Exception as e:
         logger.error(f"B-Roll 建议失败: {e}")
+        import traceback
+        logger.error(f"堆栈:\n{traceback.format_exc()}")
         return []
 
 

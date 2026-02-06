@@ -20,6 +20,7 @@ import {
   X,
   Wind,         // For Breath
   Settings,     // For cleanup settings
+  Search,       // For B-Roll placeholder
 } from 'lucide-react';
 import { useEditorStore, TICK_WIDTH, TOTAL_DURATION } from '../store/editor-store';
 import type { Track, ClipType, Clip } from '../types';
@@ -83,6 +84,7 @@ function pixelsToMs(px: number, zoomLevel: number): number {
 // 内容块类型图标
 const CLIP_TYPE_ICONS: Record<ClipType, React.ReactNode> = {
   video: <Film size={14} />,
+  broll: <Film size={14} />,
   audio: <Music size={14} />,
   image: <Image size={14} />,   // 图片
   text: <Type size={14} />,
@@ -234,6 +236,9 @@ export function Timeline() {
   const closeTrackContextMenu = getStore().closeTrackContextMenu;
   const updateTrackOrder = getStore().updateTrackOrder;
   const setActiveSidebarPanel = getStore().setActiveSidebarPanel;
+  const setActiveLeftPanel = getStore().setActiveLeftPanel;
+  const setBrollInitialKeywords = getStore().setBrollInitialKeywords;
+  const setActiveBrollPlaceholderId = getStore().setActiveBrollPlaceholderId;
   const getClipKeyframes = getStore().getClipKeyframes;
 
   // Helper to check if clip has any keyframes
@@ -274,8 +279,9 @@ export function Timeline() {
     currentY: number;
   } | null>(null);
 
-  // ========== 播放头拖动状态 ==========
-  const [isScrubbingPlayhead, setIsScrubbingPlayhead] = useState(false);
+  // ========== 播放头拖动状态（使用全局 store，让 VideoCanvas 可以感知）==========
+  const isScrubbingPlayhead = useEditorStore((s) => s.isScrubbingPlayhead);
+  const setIsScrubbingPlayhead = getStore().setIsScrubbingPlayhead;
 
   // ========== 淡入淡出拖动状态 ==========
   const [fadeState, setFadeState] = useState<{
@@ -471,16 +477,19 @@ export function Timeline() {
     setTargetTrackId(newTargetTrackId);
 
     // 🎯 视频类型 clip 的约束：不允许向右拖动产生空隙
+    // ★ B-Roll clips (metadata.is_broll) 不受此约束，可以自由放置
     // 注意：多选拖动时暂时跳过此约束，因为整体移动不会产生间隙
     // ⚠️ 重要：使用当前目标轨道（newTargetTrackId）来判断约束，而不是原始轨道
     const effectiveTrackId = newTargetTrackId.startsWith('__NEW_') ? null : newTargetTrackId;
+    const isBRollClip = currentClip.metadata?.is_broll === true;
 
-    if (currentDragState.clipType === 'video' && !isMultiDrag && effectiveTrackId) {
-      // 获取目标轨道中的所有视频 clips（排除正在拖拽的 clip）
+    if (currentDragState.clipType === 'video' && !isBRollClip && !isMultiDrag && effectiveTrackId) {
+      // 获取目标轨道中的所有视频 clips（排除正在拖拽的 clip 和 B-Roll clips）
       const targetTrackClips = clips.filter(c =>
         c.id !== currentDragState.clipId &&
         c.trackId === effectiveTrackId &&
-        c.clipType === 'video'
+        c.clipType === 'video' &&
+        !c.metadata?.is_broll
       );
 
       // 如果目标轨道是空的（或只有当前clip），允许自由移动
@@ -645,6 +654,7 @@ export function Timeline() {
   /**
    * 自动贴紧视频 clips - 移除同轨道视频片段之间的空隙
    * 视频 clips 必须紧密排列，不允许有空隙
+   * ★ 注意：B-Roll clips (metadata.is_broll === true) 不受此规则限制
    * 使用 1ms 容差来处理浮点精度问题
    * 注意：使用 getState() 获取最新 clips 数据，避免闭包问题
    */
@@ -655,18 +665,20 @@ export function Timeline() {
     const latestClips = useEditorStore.getState().clips;
     const latestUpdateClip = useEditorStore.getState().updateClip;
 
-    // 获取所有视频轨道
+    // 获取所有视频轨道（★ 排除 B-Roll 专用轨道）
     const videoTracks = new Set<string>();
     latestClips.forEach(c => {
-      if (c.clipType === 'video') {
+      // ★ B-Roll clips 不参与紧密排列检测
+      if (c.clipType === 'video' && !c.metadata?.is_broll) {
         videoTracks.add(c.trackId);
       }
     });
 
     // 对每个视频轨道进行贴紧处理
     videoTracks.forEach(trackId => {
+      // ★ 只处理非 B-Roll 的视频 clips
       const trackVideoClips = latestClips
-        .filter(c => c.trackId === trackId && c.clipType === 'video')
+        .filter(c => c.trackId === trackId && c.clipType === 'video' && !c.metadata?.is_broll)
         .sort((a, b) => a.start - b.start);
 
       if (trackVideoClips.length === 0) return;
@@ -728,14 +740,16 @@ export function Timeline() {
     } else {
       // 单选拖动：处理跨轨道移动
       const originalTrackId = currentDragState.originalTrackId;
-      const isVideoClip = clip.clipType === 'video';
+      // ★ B-Roll clips 不受视频轨道规则限制（不强制紧密排列、不挤开空间）
+      const isBRollClip = clip.metadata?.is_broll === true;
+      const isVideoClip = clip.clipType === 'video' && !isBRollClip;
 
       if (currentTargetTrackId.startsWith('__NEW_')) {
         // 用户明确拖到新轨道区域，强制创建新轨道
         const newTrackId = addTrack();
         updateClip(clip.id, { trackId: newTrackId });
 
-        // 如果是视频 clip 且从其他轨道移来，原轨道需要紧凑化
+        // 如果是视频 clip（非 B-Roll）且从其他轨道移来，原轨道需要紧凑化
         if (isVideoClip) {
           setTimeout(() => compactVideoClips(), 0);
         }
@@ -1250,13 +1264,11 @@ export function Timeline() {
         // B-roll 视频时长（秒转毫秒）
         const durationMs = video.duration * 1000;
         
-        // 计算宽高比
-        let aspectRatio: '16:9' | '9:16' | '1:1' | undefined;
+        // 计算宽高比（仅支持 16:9 和 9:16）
+        let aspectRatio: '16:9' | '9:16' | undefined;
         if (video.width && video.height) {
           const ratio = video.width / video.height;
-          if (ratio > 1.5) aspectRatio = '16:9';
-          else if (ratio < 0.7) aspectRatio = '9:16';
-          else aspectRatio = '1:1';
+          aspectRatio = ratio > 1 ? '16:9' : '9:16';
         }
         
         // 创建新的 clip ID
@@ -1452,13 +1464,11 @@ export function Timeline() {
       const isImage = asset.type === 'image';
       const durationMs = isImage ? 3000 : (asset.metadata?.duration || 10) * 1000;
       
-      // 获取素材的宽高比
-      let aspectRatio: '16:9' | '9:16' | '1:1' | undefined;
+      // 获取素材的宽高比（仅支持 16:9 和 9:16）
+      let aspectRatio: '16:9' | '9:16' | undefined;
       if (asset.metadata?.width && asset.metadata?.height) {
         const ratio = asset.metadata.width / asset.metadata.height;
-        if (ratio > 1.5) aspectRatio = '16:9';
-        else if (ratio < 0.7) aspectRatio = '9:16';
-        else aspectRatio = '1:1';
+        aspectRatio = ratio > 1 ? '16:9' : '9:16';
       }
       
       // 确定 clip 类型 (video/audio/image)
@@ -1532,10 +1542,14 @@ export function Timeline() {
   };
 
   // ========== 播放头拖动 ==========
+  // ★★★ 优化：拖动中只更新 UI，松开后才真正 seek（避免频繁请求 ts 文件）★★★
+  const scrubbingTimeRef = useRef<number>(0);  // 拖动中的临时时间
+  
   const handlePlayheadMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsScrubbingPlayhead(true);
+    scrubbingTimeRef.current = currentTimeRef.current;  // 记录拖动起始时间
 
     // 暂停播放
     if (isPlaying) {
@@ -1552,11 +1566,24 @@ export function Timeline() {
       const rect = timelineRef.current.getBoundingClientRect();
       const clickX = e.clientX - rect.left + timelineRef.current.scrollLeft;
       const timeMs = Math.max(0, pixelsToMs(clickX, zoomLevel));
-      setCurrentTime(timeMs);
+      
+      // ★★★ 拖动中：只更新播放头 UI，不调用 setCurrentTime（避免 seek）★★★
+      scrubbingTimeRef.current = timeMs;
+      if (playheadRef.current) {
+        playheadRef.current.style.transform = `translateX(${msToPixels(timeMs, zoomLevel)}px)`;
+      }
+      if (playheadLabelRef.current) {
+        playheadLabelRef.current.textContent = `${msToSec(timeMs).toFixed(2)}s`;
+      }
+      // ★ 同时更新 ref（其他组件如 SubtitleHighlight 可能依赖）
+      currentTimeRef.current = timeMs;
     };
 
     const handleMouseUp = () => {
       setIsScrubbingPlayhead(false);
+      // ★★★ 松开时：才真正调用 setCurrentTime 触发 seek ★★★
+      const finalTime = scrubbingTimeRef.current;
+      setCurrentTime(finalTime);
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -1648,6 +1675,12 @@ export function Timeline() {
         setActiveSidebarPanel('subtitle');
       } else if (clip.clipType === 'text') {
         setActiveSidebarPanel('text');
+      } else if (clip.clipType === 'broll' && clip.metadata?.is_placeholder) {
+        // B-Roll placeholder：打开 B-Roll 面板并传递搜索关键词
+        const searchKeywords = clip.metadata?.search_keywords as string[] || [];
+        setBrollInitialKeywords(searchKeywords);
+        setActiveBrollPlaceholderId(clipId);
+        setActiveLeftPanel('b-roll');
       }
     }
   };
@@ -1747,6 +1780,72 @@ export function Timeline() {
             <span className={`text-xs font-medium truncate ${isSelected ? 'text-gray-950' : 'text-gray-900'}`}>
               {clip.contentText || clip.name}
             </span>
+          </div>
+        </div>
+      );
+    }
+
+    // B-Roll 片段：蓝色主题，占位符显示搜索关键词
+    if (clip.clipType === 'broll') {
+      const isPlaceholder = clip.metadata?.is_placeholder === true;
+      const searchKeywords = clip.metadata?.search_keywords as string[] | undefined;
+      const keywordsText = searchKeywords?.join(', ') || clip.name;
+      const downloadStatus = clip.metadata?.download_status as string | undefined;
+      const thumbnail = clip.metadata?.thumbnail as string | undefined;
+      
+      // 下载中状态
+      if (downloadStatus === 'downloading' || downloadStatus === 'pending') {
+        return (
+          <div className={`relative w-full h-full overflow-hidden pointer-events-none ${isSelected ? 'bg-blue-400/60' : 'bg-blue-500/50'} border border-blue-400 rounded-sm`}>
+            {/* 缩略图背景（如果有） */}
+            {thumbnail && (
+              <img src={thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover opacity-50" />
+            )}
+            <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-blue-900/60">
+              <div className="animate-spin w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+              <span className="text-[10px] font-medium text-white">下载中...</span>
+            </div>
+          </div>
+        );
+      }
+      
+      if (isPlaceholder) {
+        // 占位符：虚线边框 + 搜索图标
+        return (
+          <div className={`relative w-full h-full overflow-hidden pointer-events-auto ${isSelected ? 'bg-blue-400/40' : 'bg-blue-500/30'} border-2 border-dashed border-blue-400 rounded-sm`}>
+            <div className="absolute inset-0 flex items-center px-2 gap-1.5">
+              <Search size={12} className="text-blue-300 flex-shrink-0" />
+              <span className="text-[10px] font-medium text-blue-100 truncate">
+                {keywordsText}
+              </span>
+            </div>
+            {/* 悬浮提示：点击搜索素材 */}
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-blue-600/80">
+              <span className="text-[10px] font-bold text-white">点击选择素材</span>
+            </div>
+          </div>
+        );
+      }
+      
+      // 已填充的 B-Roll：显示缩略图或素材名
+      if (clip.thumbnail || clip.mediaUrl || thumbnail) {
+        return (
+          <div className="relative w-full h-full overflow-hidden pointer-events-none rounded-sm">
+            <ClipThumbnail clip={clip} width={clipWidth} height={TRACK_HEIGHT - 4} />
+            {/* B-Roll 标记 */}
+            <div className="absolute top-1 left-1 px-1 py-0.5 bg-blue-600/80 rounded text-[8px] font-bold text-white">
+              B-Roll
+            </div>
+          </div>
+        );
+      }
+      
+      // 默认 B-Roll 显示
+      return (
+        <div className={`relative w-full h-full overflow-hidden pointer-events-none ${isSelected ? 'bg-blue-500' : 'bg-blue-600'}`}>
+          <div className="absolute inset-0 flex items-center px-2">
+            <Film size={12} className="text-blue-200 mr-1.5 flex-shrink-0" />
+            <span className="text-[10px] font-medium text-white truncate">{clip.name}</span>
           </div>
         </div>
       );

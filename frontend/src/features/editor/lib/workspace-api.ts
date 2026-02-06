@@ -51,6 +51,8 @@ export interface AssetUploadInfo {
 export interface CreateSessionRequest {
   source_type: SourceType;
   task_type?: TaskType;
+  // ★ 强制比例（仅 9:16 / 16:9）
+  aspect_ratio?: '9:16' | '16:9';
   // === 单文件模式（兼容旧版）===
   file_name?: string;
   file_size?: number;
@@ -183,6 +185,7 @@ export async function createSession(
   const requestBody = {
     source_type,
     task_type: data.task_type,
+    aspect_ratio: data.aspect_ratio,
     // 单文件模式
     file_name: data.file_name,
     file_size: data.file_size,
@@ -606,7 +609,7 @@ export async function archiveProject(projectId: string): Promise<ProjectRecord> 
 
 export interface StartAIProcessingRequest {
   task_type: TaskType;
-  output_ratio?: string;  // 输出比例: "9:16", "16:9", "1:1"
+  output_ratio?: '9:16' | '16:9';  // 输出比例（仅 9:16 或 16:9）
   template_id?: string;   // 模板 ID
   options?: Record<string, unknown>;  // 其他 AI 选项
 }
@@ -689,11 +692,13 @@ export interface DetectFillersResponse {
 /**
  * 口癖/废话检测 (口播视频精修模式)
  * 
- * ★ 复用 ASR + 静音检测逻辑，返回废话片段供 DefillerModal 使用
+ * ★★★ 智能清理三选项 ★★★
  */
 export interface DetectFillersOptions {
-  detect_fillers?: boolean;      // 识别口癖（含重复词）
-  detect_breaths?: boolean;      // 识别换气
+  // ★★★ 新版三选项参数 ★★★
+  cut_silences?: boolean;           // 删除静音片段（换气/停顿/死寂）
+  cut_bad_takes?: boolean;          // 删除NG/重复片段
+  remove_filler_words?: boolean;    // 删除口癖词（嗯/那个/就是）
 }
 
 export async function detectFillers(
@@ -721,10 +726,21 @@ export interface TrimSegment {
   reason?: string;            // 删除原因
 }
 
+export interface TranscriptSegmentInput {
+  id?: string;
+  text: string;
+  start: number;  // 毫秒
+  end: number;    // 毫秒
+  asset_id?: string;
+}
+
 export interface ApplyTrimmingRequest {
   removed_fillers: string[];                // 用户选择删除的口癖词汇
   trim_segments?: TrimSegment[];            // 可选：具体要删除的片段
+  transcript_segments?: TranscriptSegmentInput[];  // ★ 前端传入的转写结果
   create_clips_from_segments?: boolean;     // 是否根据保留片段创建 clips
+  // ★★★ 新增：按片段ID删除（精确控制） ★★★
+  segment_ids_to_remove?: string[];         // 用户选择删除的具体片段ID
 }
 
 export interface ApplyTrimmingResponse {
@@ -759,4 +775,232 @@ export async function applyTrimming(
     method: 'POST',
     body: JSON.stringify(options),
   }, true);  // ★ 使用 ensureToken=true 确保 token 有效
+}
+
+
+// ============================================
+// ★ V2: 新版 API
+// ============================================
+
+// V2 Clip 信息（智能分析阶段直接创建）
+export interface ClipInfoV2 {
+  id: string;
+  text: string;
+  start_time: number;
+  end_time: number;
+  source_start: number;
+  source_end: number;
+  asset_id: string;
+  is_filler: boolean;
+  filler_type?: string;
+  filler_reason?: string;
+  confidence: number;
+}
+
+// V2 detect-fillers 响应扩展
+export interface DetectFillersResponseV2 extends DetectFillersResponse {
+  clips?: ClipInfoV2[];
+  clips_created?: number;
+  filler_clips_count?: number;
+}
+
+// V2 apply-trimming 请求
+export interface ApplyTrimmingRequestV2 {
+  clip_ids_to_hide: string[];
+  clip_ids_to_show?: string[];
+}
+
+// V2 apply-trimming 响应
+export interface ApplyTrimmingResponseV2 {
+  status: string;
+  session_id: string;
+  project_id: string;
+  hidden_clips_count: number;
+  visible_clips_count: number;
+  removed_duration_ms: number;
+  remaining_duration_ms: number;
+}
+
+/**
+ * V2 应用口癖修剪 - 简化版本
+ * 直接操作 clips 的隐藏状态
+ */
+export async function applyTrimmingV2(
+  sessionId: string,
+  options: ApplyTrimmingRequestV2
+): Promise<ApplyTrimmingResponseV2> {
+  debugLog('[applyTrimmingV2] 应用修剪:', sessionId, options);
+
+  return request(`/workspace/sessions/${sessionId}/apply-trimming-v2`, {
+    method: 'POST',
+    body: JSON.stringify(options),
+  }, true);
+}
+
+// Remotion 配置类型
+// ★ 抖音风格双层字幕系统
+export interface TextComponent {
+  id: string;
+  type: 'text';
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  // ★ 新增 main-subtitle 和 keyword-highlight 核心类型
+  animation: 'main-subtitle' | 'keyword-highlight' | 'typewriter' | 'fade-in' | 'slide-up' | 'highlight' | 'bounce' | 'zoom-in' | 'none';
+  // ★ 新增 subtitle-main 和 subtitle-keyword 位置
+  position: 'subtitle-main' | 'subtitle-keyword' | 'center' | 'bottom' | 'top' | 'left' | 'right' | 'bottom-left' | 'bottom-right';
+  style: {
+    fontSize: number;
+    color: string;
+    fontWeight?: string;
+    backgroundColor?: string;  // ★ keyword-highlight 需要背景色
+  };
+  linkedSubtitleId?: string;  // ★ 可选：关联的主字幕 ID
+}
+
+export interface BRollComponent {
+  id: string;
+  type: 'broll';
+  start_ms: number;
+  end_ms: number;
+  search_keywords: string[];
+  display_mode: 'fullscreen' | 'pip';  // ★ 只有两种模式
+  transition_in: string;
+  transition_out: string;
+  asset_url?: string;
+  asset_id?: string;
+}
+
+export interface ChapterComponent {
+  id: string;
+  type: 'chapter';
+  start_ms: number;
+  end_ms: number;
+  title: string;
+  subtitle?: string;
+  style: string;
+}
+
+export interface RemotionConfig {
+  version: string;
+  total_duration_ms: number;
+  fps: number;
+  theme: string;
+  color_palette: string[];
+  font_family: string;
+  text_components: TextComponent[];
+  broll_components: BRollComponent[];
+  chapter_components: ChapterComponent[];
+  broll_count: number;
+  text_count: number;
+}
+
+export interface GetRemotionConfigResponse {
+  status: string;
+  session_id: string;
+  project_id: string;
+  total_duration_ms: number;
+  remotion_config: RemotionConfig;
+  broll_count: number;
+  text_count: number;
+  chapter_count: number;
+}
+
+/**
+ * V2: 获取 Remotion 渲染配置
+ * 分析完整文本，生成整体的视频渲染配置
+ */
+export async function getRemotionConfig(
+  sessionId: string
+): Promise<GetRemotionConfigResponse> {
+  debugLog('[getRemotionConfig] 获取 Remotion 配置:', sessionId);
+
+  return request(`/workspace/sessions/${sessionId}/remotion-config`, {
+    method: 'POST',
+  }, true);
+}
+// ============================================
+// V3: 生成 B-Roll Clips 并保存到数据库
+// ============================================
+
+export interface GenerateBRollClipsResponse {
+  status: string;
+  session_id: string;
+  project_id: string;
+  broll_clips_created: number;
+  broll_track_id: string;
+  message: string;
+  // ★★★ 新增：返回完整 Remotion 配置（包含 text_components）★★★
+  remotion_config?: {
+    version: string;
+    total_duration_ms: number;
+    fps: number;
+    theme: string;
+    color_palette: string[];
+    font_family: string;
+    text_components: Array<{
+      id: string;
+      type: string;
+      start_ms: number;
+      end_ms: number;
+      text: string;
+      animation: string;
+      position: string;
+      style: Record<string, unknown>;
+    }>;
+    broll_components: Array<{
+      id: string;
+      type: string;
+      start_ms: number;
+      end_ms: number;
+      search_keywords: string[];
+      display_mode: string;
+      transition_in: string;
+      transition_out: string;
+    }>;
+    chapter_components: Array<{
+      id: string;
+      type: string;
+      start_ms: number;
+      end_ms: number;
+      title: string;
+      subtitle?: string;
+      style: string;
+    }>;
+    broll_count: number;
+    text_count: number;
+  };
+}
+
+/**
+ * V3: 生成 B-Roll 配置并保存为 clips 到数据库
+ * 
+ * 在口癖修剪后调用，它会：
+ * 1. 调用 LLM 生成 B-Roll 配置（插入点、搜索关键词）
+ * 2. 创建 B-Roll 占位 clips 写入数据库
+ * 3. 用户在编辑器中可以看到这些占位 clips，点击搜索/选择实际素材
+ */
+export async function generateBRollClips(
+  sessionId: string
+): Promise<GenerateBRollClipsResponse> {
+  debugLog('[generateBRollClips] 生成 B-Roll clips:', sessionId);
+
+  return request(`/workspace/sessions/${sessionId}/generate-broll-clips`, {
+    method: 'POST',
+  }, true);
+}
+
+/**
+ * 通过 projectId 获取 sessionId
+ * 用于在编辑器中手动触发 B-Roll 生成
+ */
+export async function getSessionByProject(projectId: string): Promise<{
+  session_id: string;
+  project_id: string;
+  workflow_step: string;
+  entry_mode: string;
+  status: string;
+}> {
+  debugLog('[getSessionByProject] 获取 session:', projectId);
+  return request(`/workspace/sessions/by-project/${projectId}/workflow-step`);
 }

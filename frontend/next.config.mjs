@@ -31,6 +31,11 @@ const nextConfig = {
         source: '/api/storage/:path*',
         destination: 'https://rduiyxvzknaxomrrehzs.supabase.co/storage/v1/:path*',
       },
+      // 代理后端静态缓存文件请求（分镜缩略图等）
+      {
+        source: '/cache/:path*',
+        destination: `${backendUrl}/cache/:path*`,
+      },
       // 代理后端 API 请求
       {
         source: '/api/:path*',

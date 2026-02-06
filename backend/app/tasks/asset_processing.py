@@ -414,7 +414,7 @@ async def generate_hls_stream(asset_id: str, input_path: str) -> Optional[str]:
     """生成 HLS 流式播放文件（.m3u8 + .ts 分片）
     
     输出规格:
-    - 分辨率: 720p（自动缩放）
+    - 分辨率: 根据项目设置裁剪到 9:16 或 16:9，然后缩放到 720p
     - 编码: H.264 (Main Profile, Level 3.1 - 兼容性好)
     - 分片: 4 秒每片
     - 格式: fMP4 (兼容性更好) 或 TS
@@ -429,6 +429,7 @@ async def generate_hls_stream(asset_id: str, input_path: str) -> Optional[str]:
     """
     try:
         from ..services.supabase_client import supabase
+        from ..services.video_utils import calculate_crop_area, AspectRatio
         import shutil
         
         # 获取原始视频信息
@@ -439,26 +440,84 @@ async def generate_hls_stream(asset_id: str, input_path: str) -> Optional[str]:
         
         logger.info(f"[HLS] 开始生成: {asset_id}, 原始分辨率: {original_width}x{original_height}, 时长: {duration:.1f}s")
         
+        # ★★★ 获取项目目标比例，用于裁剪 ★★★
+        target_aspect_ratio: Optional[str] = None
+        try:
+            # 从 asset 获取 project_id
+            asset_result = supabase.table("assets").select("project_id").eq("id", asset_id).single().execute()
+            if asset_result.data and asset_result.data.get("project_id"):
+                project_id = asset_result.data["project_id"]
+                # 从 project 获取 resolution
+                project_result = supabase.table("projects").select("resolution").eq("id", project_id).single().execute()
+                if project_result.data and project_result.data.get("resolution"):
+                    resolution = project_result.data["resolution"]
+                    # 根据 resolution 判断目标比例
+                    if resolution.get("width") and resolution.get("height"):
+                        if resolution["width"] > resolution["height"]:
+                            target_aspect_ratio = "16:9"
+                        else:
+                            target_aspect_ratio = "9:16"
+                        logger.info(f"[HLS] 📐 项目目标比例: {target_aspect_ratio} (resolution={resolution})")
+        except Exception as e:
+            logger.warning(f"[HLS] ⚠️ 获取项目比例失败，使用原始比例: {e}")
+        
         # 创建临时目录
         hls_temp_dir = tempfile.mkdtemp(prefix=f"hls_{asset_id}_")
         playlist_path = os.path.join(hls_temp_dir, "playlist.m3u8")
         segment_pattern = os.path.join(hls_temp_dir, "segment_%03d.ts")
         
-        # 计算缩放滤镜：保持宽高比，最大 720p
-        if original_width > original_height:
+        # ★★★ 计算滤镜链：裁剪 → 缩放 ★★★
+        filter_parts = []
+        
+        # 1. 裁剪滤镜（如果需要）
+        if target_aspect_ratio:
+            # 计算源视频比例
+            source_ratio = original_width / original_height
+            target_ratio = 16/9 if target_aspect_ratio == "16:9" else 9/16
+            
+            # 只有比例不匹配时才裁剪
+            ratio_diff = abs(source_ratio - target_ratio) / target_ratio
+            if ratio_diff > 0.05:  # 超过 5% 差异才裁剪
+                crop_x, crop_y, crop_w, crop_h = calculate_crop_area(
+                    original_width, 
+                    original_height, 
+                    AspectRatio(target_aspect_ratio),
+                    alignment="center"
+                )
+                crop_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
+                filter_parts.append(crop_filter)
+                # 记录裁剪后的分辨率（用于后续更新 metadata）
+                cropped_width, cropped_height = crop_w, crop_h
+                logger.info(f"[HLS] ✂️ 应用裁剪滤镜: {crop_filter}, 裁剪后: {crop_w}x{crop_h}")
+            else:
+                cropped_width, cropped_height = original_width, original_height
+                logger.info(f"[HLS] ✅ 比例接近目标，无需裁剪 (diff={ratio_diff:.2%})")
+        else:
+            cropped_width, cropped_height = original_width, original_height
+        
+        # 2. 缩放滤镜
+        if target_aspect_ratio == "16:9":
             # 横屏视频：宽度不超过 1280
             scale_filter = "scale='min(1280,iw):-2'"
         else:
             # 竖屏视频：高度不超过 1280
             scale_filter = "scale='-2:min(1280,ih)'"
+        filter_parts.append(scale_filter)
+        
+        # 3. 帧率滤镜
+        filter_parts.append("fps=30")
+        
+        # 组合滤镜链
+        video_filter = ",".join(filter_parts)
+        logger.info(f"[HLS] 🎬 视频滤镜链: {video_filter}")
         
         # FFmpeg HLS 生成命令
         # 🎯 预览使用 30fps，提升浏览器解码性能，最终导出支持 60fps
         cmd = [
             "ffmpeg",
             "-i", input_path,
-            # 视频编码
-            "-vf", f"{scale_filter},fps=30",  # 强制 30fps 预览
+            # 视频编码（使用组合滤镜链：裁剪 → 缩放 → 帧率）
+            "-vf", video_filter,
             "-r", "30",  # 输出帧率 30fps
             "-c:v", "libx264",
             "-preset", "fast",
@@ -546,12 +605,21 @@ async def generate_hls_stream(asset_id: str, input_path: str) -> Optional[str]:
             logger.error(f"[HLS] 没有文件上传成功")
             return None
         
-        # 更新数据库记录
+        # 更新数据库记录（包含裁剪后的分辨率）
         try:
-            supabase.table("assets").update({
-                "hls_path": hls_storage_dir
-            }).eq("id", asset_id).execute()
+            update_data = {
+                "hls_path": hls_storage_dir,
+            }
+            # ★ 如果进行了裁剪，更新 metadata 中的宽高为裁剪后的值
+            if target_aspect_ratio and (cropped_width != original_width or cropped_height != original_height):
+                update_data["width"] = cropped_width
+                update_data["height"] = cropped_height
+                logger.info(f"[HLS] 📐 更新分辨率: {original_width}x{original_height} → {cropped_width}x{cropped_height}")
+            
+            supabase.table("assets").update(update_data).eq("id", asset_id).execute()
             logger.info(f"[HLS] 已更新数据库: hls_path = {hls_storage_dir}")
+        except Exception as db_error:
+            logger.warning(f"[HLS] 更新数据库失败: {db_error}")
         except Exception as db_error:
             logger.warning(f"[HLS] 更新数据库失败: {db_error}")
         
@@ -1196,16 +1264,76 @@ async def generate_thumbnail_from_url(asset_id: str, video_url: str, timestamp: 
 
 
 async def generate_thumbnail(asset_id: str, input_path: str) -> str:
-    """从视频生成缩略图"""
+    """从视频生成缩略图（根据项目比例裁剪）"""
     try:
         from ..services.supabase_client import supabase
+        from ..services.video_utils import calculate_crop_area, AspectRatio
         
-        # 获取视频时长
+        # 获取视频元数据
         metadata = extract_metadata(input_path)
         duration = metadata.get("duration", 10)
+        original_width = metadata.get("width", 1920)
+        original_height = metadata.get("height", 1080)
         
         # 在 10% 位置截取缩略图
         timestamp = duration * 0.1
+        
+        # ★★★ 获取项目目标比例，用于裁剪（和 HLS 逻辑一致） ★★★
+        target_aspect_ratio: Optional[str] = None
+        try:
+            # 从 asset 获取 project_id
+            asset_result = supabase.table("assets").select("project_id").eq("id", asset_id).single().execute()
+            if asset_result.data and asset_result.data.get("project_id"):
+                project_id = asset_result.data["project_id"]
+                # 从 project 获取 resolution
+                project_result = supabase.table("projects").select("resolution").eq("id", project_id).single().execute()
+                if project_result.data and project_result.data.get("resolution"):
+                    resolution = project_result.data["resolution"]
+                    # 根据 resolution 判断目标比例
+                    if resolution.get("width") and resolution.get("height"):
+                        if resolution["width"] > resolution["height"]:
+                            target_aspect_ratio = "16:9"
+                        else:
+                            target_aspect_ratio = "9:16"
+                        logger.info(f"[Thumbnail] 📐 项目目标比例: {target_aspect_ratio}")
+        except Exception as e:
+            logger.warning(f"[Thumbnail] ⚠️ 获取项目比例失败，使用原始比例: {e}")
+        
+        # ★★★ 计算滤镜链：裁剪 → 缩放 ★★★
+        filter_parts = []
+        
+        # 1. 裁剪滤镜（如果需要）
+        if target_aspect_ratio:
+            source_ratio = original_width / original_height
+            target_ratio = 16/9 if target_aspect_ratio == "16:9" else 9/16
+            
+            ratio_diff = abs(source_ratio - target_ratio) / target_ratio
+            if ratio_diff > 0.05:  # 超过 5% 差异才裁剪
+                crop_x, crop_y, crop_w, crop_h = calculate_crop_area(
+                    original_width, 
+                    original_height, 
+                    AspectRatio(target_aspect_ratio),
+                    alignment="center"
+                )
+                crop_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
+                filter_parts.append(crop_filter)
+                logger.info(f"[Thumbnail] ✂️ 应用裁剪: {crop_filter}")
+        
+        # 2. 缩放滤镜（根据目标比例确定缩略图尺寸）
+        if target_aspect_ratio == "9:16":
+            # 竖屏缩略图：高度固定，宽度按比例
+            thumb_w = THUMBNAIL_HEIGHT  # 180
+            thumb_h = int(thumb_w * 16 / 9)  # 320
+        else:
+            # 横屏缩略图：宽度固定，高度按比例
+            thumb_w = THUMBNAIL_WIDTH   # 320
+            thumb_h = THUMBNAIL_HEIGHT  # 180
+        
+        scale_filter = f"scale={thumb_w}:{thumb_h}:force_original_aspect_ratio=decrease,pad={thumb_w}:{thumb_h}:(ow-iw)/2:(oh-ih)/2"
+        filter_parts.append(scale_filter)
+        
+        video_filter = ",".join(filter_parts)
+        logger.info(f"[Thumbnail] 🎬 滤镜链: {video_filter}")
         
         output_path = tempfile.mktemp(suffix=".jpg")
         
@@ -1214,7 +1342,7 @@ async def generate_thumbnail(asset_id: str, input_path: str) -> str:
             "-ss", str(timestamp),
             "-i", input_path,
             "-vframes", "1",
-            "-vf", f"scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:force_original_aspect_ratio=decrease,pad={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:(ow-iw)/2:(oh-ih)/2",
+            "-vf", video_filter,
             "-y",
             output_path
         ]
@@ -1231,12 +1359,10 @@ async def generate_thumbnail(asset_id: str, input_path: str) -> str:
         with open(output_path, 'rb') as f:
             supabase.storage.from_("clips").upload(storage_path, f)
         
-        from ..services.supabase_client import get_file_url
-        thumbnail_url = get_file_url("clips", storage_path)
-        
         os.remove(output_path)
         
-        return thumbnail_url
+        # ★ 返回存储路径，不是签名 URL
+        return storage_path
         
     except Exception as e:
         logger.error(f"缩略图生成失败: {e}")
@@ -1244,16 +1370,70 @@ async def generate_thumbnail(asset_id: str, input_path: str) -> str:
 
 
 async def generate_image_thumbnail(asset_id: str, input_path: str) -> str:
-    """从图片生成缩略图"""
+    """从图片生成缩略图（根据项目比例裁剪）"""
     try:
         from ..services.supabase_client import supabase
+        from ..services.video_utils import calculate_crop_area, AspectRatio
+        
+        # 获取图片尺寸
+        metadata = extract_metadata(input_path)
+        original_width = metadata.get("width", 1920)
+        original_height = metadata.get("height", 1080)
+        
+        # ★★★ 获取项目目标比例，用于裁剪 ★★★
+        target_aspect_ratio: Optional[str] = None
+        try:
+            asset_result = supabase.table("assets").select("project_id").eq("id", asset_id).single().execute()
+            if asset_result.data and asset_result.data.get("project_id"):
+                project_id = asset_result.data["project_id"]
+                project_result = supabase.table("projects").select("resolution").eq("id", project_id).single().execute()
+                if project_result.data and project_result.data.get("resolution"):
+                    resolution = project_result.data["resolution"]
+                    if resolution.get("width") and resolution.get("height"):
+                        if resolution["width"] > resolution["height"]:
+                            target_aspect_ratio = "16:9"
+                        else:
+                            target_aspect_ratio = "9:16"
+                        logger.info(f"[ImageThumb] 📐 项目目标比例: {target_aspect_ratio}")
+        except Exception as e:
+            logger.warning(f"[ImageThumb] ⚠️ 获取项目比例失败: {e}")
+        
+        # ★★★ 计算滤镜链 ★★★
+        filter_parts = []
+        
+        if target_aspect_ratio:
+            source_ratio = original_width / original_height
+            target_ratio = 16/9 if target_aspect_ratio == "16:9" else 9/16
+            
+            ratio_diff = abs(source_ratio - target_ratio) / target_ratio
+            if ratio_diff > 0.05:
+                crop_x, crop_y, crop_w, crop_h = calculate_crop_area(
+                    original_width, 
+                    original_height, 
+                    AspectRatio(target_aspect_ratio),
+                    alignment="center"
+                )
+                filter_parts.append(f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}")
+                logger.info(f"[ImageThumb] ✂️ 应用裁剪: crop={crop_w}:{crop_h}:{crop_x}:{crop_y}")
+        
+        # 缩放滤镜
+        if target_aspect_ratio == "9:16":
+            thumb_w = THUMBNAIL_HEIGHT
+            thumb_h = int(thumb_w * 16 / 9)
+        else:
+            thumb_w = THUMBNAIL_WIDTH
+            thumb_h = THUMBNAIL_HEIGHT
+        
+        filter_parts.append(f"scale={thumb_w}:{thumb_h}:force_original_aspect_ratio=decrease,pad={thumb_w}:{thumb_h}:(ow-iw)/2:(oh-ih)/2")
+        
+        video_filter = ",".join(filter_parts)
         
         output_path = tempfile.mktemp(suffix=".jpg")
         
         cmd = [
             "ffmpeg",
             "-i", input_path,
-            "-vf", f"scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:force_original_aspect_ratio=decrease,pad={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:(ow-iw)/2:(oh-ih)/2",
+            "-vf", video_filter,
             "-y",
             output_path
         ]
@@ -1269,12 +1449,10 @@ async def generate_image_thumbnail(asset_id: str, input_path: str) -> str:
         with open(output_path, 'rb') as f:
             supabase.storage.from_("clips").upload(storage_path, f)
         
-        from ..services.supabase_client import get_file_url
-        thumbnail_url = get_file_url("clips", storage_path)
-        
         os.remove(output_path)
         
-        return thumbnail_url
+        # ★ 返回存储路径，不是签名 URL
+        return storage_path
         
     except Exception as e:
         logger.error(f"图片缩略图生成失败: {e}")
@@ -1371,8 +1549,9 @@ async def update_asset_record(asset_id: str, results: dict):
     if results.get("proxy_url"):
         update_data["proxy_url"] = results["proxy_url"]
     
+    # ★ 存储路径到 thumbnail_path 字段
     if results.get("thumbnail_url"):
-        update_data["thumbnail_url"] = results["thumbnail_url"]
+        update_data["thumbnail_path"] = results["thumbnail_url"]
     
     if results.get("waveform_data"):
         update_data["waveform_data"] = results["waveform_data"]

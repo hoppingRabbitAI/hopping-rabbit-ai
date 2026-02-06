@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { X, Search, Plus, Mic, Settings2, Trash2 } from 'lucide-react';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { Toggle } from '@/components/common/Toggle';
@@ -43,8 +43,19 @@ function AssetItem({ asset, index, isSelected, onSelect, onDelete, setItemRef }:
     }
   };
 
+  // ★ 判断是否是 B-Roll 素材（通过 broll_metadata 或名称判断）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isBRoll = !!(asset as any).broll_metadata || asset.name?.startsWith('B-roll:');
+  const isDownloading = asset.status === 'processing';
+
   // 处理拖拽开始
   const handleDragStart = (e: React.DragEvent) => {
+    // 下载中的素材不允许拖拽
+    if (isDownloading) {
+      e.preventDefault();
+      return;
+    }
+    
     // 允许视频、音频和图片素材拖拽到时间轴
     const assetType = asset.type as string;
     if (assetType !== 'video' && assetType !== 'audio' && assetType !== 'image' && assetType !== 'extracted_audio') {
@@ -69,7 +80,7 @@ function AssetItem({ asset, index, isSelected, onSelect, onDelete, setItemRef }:
 
   // 判断是否可拖拽 (video, audio, image, extracted_audio 都可以拖拽到时间轴)
   const assetType = asset.type as string;
-  const isDraggable = assetType === 'video' || assetType === 'audio' || assetType === 'image' || assetType === 'extracted_audio';
+  const isDraggable = !isDownloading && (assetType === 'video' || assetType === 'audio' || assetType === 'image' || assetType === 'extracted_audio');
 
   return (
     <div
@@ -78,7 +89,7 @@ function AssetItem({ asset, index, isSelected, onSelect, onDelete, setItemRef }:
       draggable={isDraggable}
       onDragStart={handleDragStart}
       className={`group relative rounded-md transition-all duration-150 ${
-        isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+        isDraggable ? 'cursor-grab active:cursor-grabbing' : isDownloading ? 'cursor-wait' : 'cursor-pointer'
       } ${
         isSelected
           ? 'bg-blue-50 border border-blue-400 shadow-sm'
@@ -89,11 +100,17 @@ function AssetItem({ asset, index, isSelected, onSelect, onDelete, setItemRef }:
         <span className="flex-shrink-0 text-[10px] font-bold text-gray-400 w-5">
           {String(index + 1).padStart(2, '0')}
         </span>
-        <div className="flex-shrink-0 w-10 h-10 rounded bg-gray-100 flex items-center justify-center overflow-hidden">
+        <div className="flex-shrink-0 w-10 h-10 rounded bg-gray-100 flex items-center justify-center overflow-hidden relative">
           {asset.thumbnail_url ? (
             <img src={asset.thumbnail_url} alt={asset.name} className="w-full h-full object-cover" />
           ) : (
             <span className="text-lg">{getTypeIcon()}</span>
+          )}
+          {/* ★ B-Roll 下载中显示加载动画遮罩 */}
+          {isDownloading && (
+            <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            </div>
           )}
         </div>
         <div className="flex-1 min-w-0">
@@ -101,36 +118,50 @@ function AssetItem({ asset, index, isSelected, onSelect, onDelete, setItemRef }:
             {asset.name}
           </p>
           <div className="flex items-center gap-2 text-[10px] text-gray-400">
-            {asset.metadata?.duration && (
-              <span>{formatDuration(asset.metadata.duration)}</span>
+            {/* ★ B-Roll 下载中显示状态文字 */}
+            {isDownloading && isBRoll ? (
+              <span className="text-yellow-600 font-medium animate-pulse">⬇️ 下载中...</span>
+            ) : (
+              <>
+                {asset.metadata?.duration && (
+                  <span>{formatDuration(asset.metadata.duration)}</span>
+                )}
+                {asset.file_size && (
+                  <span>{formatFileSize(asset.file_size)}</span>
+                )}
+              </>
             )}
-            {asset.file_size && (
-              <span>{formatFileSize(asset.file_size)}</span>
+            {isBRoll && !isDownloading && (
+              <span className="px-1 py-0.5 bg-sky-100 text-sky-600 rounded text-[9px]">
+                B-Roll
+              </span>
             )}
-            {asset.subtype && asset.subtype !== 'original' && (
+            {asset.subtype && asset.subtype !== 'original' && !isBRoll && (
               <span className="px-1 py-0.5 bg-gray-100 rounded text-[9px]">
                 {asset.subtype}
               </span>
             )}
           </div>
         </div>
-        {asset.status === 'processing' && (
+        {asset.status === 'processing' && !isBRoll && (
           <div className="flex-shrink-0 w-2 h-2 bg-yellow-400 rounded-full animate-pulse" title="处理中" />
         )}
         {asset.status === 'error' && (
           <div className="flex-shrink-0 w-2 h-2 bg-red-500 rounded-full" title="错误" />
         )}
-        {/* 删除按钮 - 鼠标悬停时显示 */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="flex-shrink-0 p-1.5 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
-          title="删除素材"
-        >
-          <Trash2 size={14} className="text-red-500" />
-        </button>
+        {/* 删除按钮 - 下载中不显示 */}
+        {!isDownloading && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="flex-shrink-0 p-1.5 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+            title="删除素材"
+          >
+            <Trash2 size={14} className="text-red-500" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -164,6 +195,14 @@ export function AssetsPanel({ onClose }: AssetsPanelProps) {
   const loadKeyframes = useEditorStore((s) => s.loadKeyframes);
   const requestCleanupWizard = useEditorStore((s) => s.requestCleanupWizard);
   const setSelectedClipId = useEditorStore((s) => s.setSelectedClipId);
+
+  // ★ 组件挂载时自动加载 assets
+  useEffect(() => {
+    if (projectId && loadAssets) {
+      console.log('[AssetsPanel] 挂载时加载 assets, projectId:', projectId);
+      loadAssets();
+    }
+  }, [projectId, loadAssets]);
 
   // 删除素材
   const handleDeleteAsset = useCallback(async () => {

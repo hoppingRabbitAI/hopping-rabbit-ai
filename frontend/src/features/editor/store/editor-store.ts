@@ -11,10 +11,11 @@ import type { Asset } from '../types/asset';
 import type { Keyframe, KeyframeProperty, EasingType, CompoundValue } from '../types';
 import { KEYFRAME_TOLERANCE } from '../types';
 import { SyncManager, SyncStatus } from '../lib/sync-manager';
-import { projectApi, assetApi, taskApi, smartApi, exportApi, clipsApi } from '@/lib/api';
+import { projectApi, assetApi, taskApi, smartApi, exportApi, clipsApi, tracksApi } from '@/lib/api';
 import { getAssetStreamUrl } from '@/lib/api/media-proxy';
 import { clearHlsCache, preheatNewAsset } from '../components/canvas/VideoCanvasStore';
 import { generateId } from '@/lib/utils';
+import { getSessionSafe } from '@/lib/supabase/session';
 
 // ==================== 调试开关 ====================
 // ★ 已关闭 store 日志，视频缓冲日志在 VideoCanvasStore 中
@@ -208,10 +209,12 @@ interface EditorState {
   currentTime: number;
   isPlaying: boolean;
   isVideoReady: boolean;  // 视频是否加载就绪可播放
+  isScrubbingPlayhead: boolean;  // ★★★ 是否正在拖动播放头（拖动时不 seek 视频）
   duration: number;
   setCurrentTime: (time: number) => void;
   setIsPlaying: (playing: boolean) => void;
   setIsVideoReady: (ready: boolean) => void;
+  setIsScrubbingPlayhead: (scrubbing: boolean) => void;  // ★★★ 新增
   setDuration: (duration: number) => void;
 
   // ========== 当前活动视频 ==========
@@ -258,6 +261,7 @@ interface EditorState {
   loadClips: (clipType?: string) => Promise<void>;
   refreshSubtitleClips: () => Promise<void>;
   loadAssets: () => Promise<void>;  // ★ 新增：刷新素材列表
+  loadTracks: () => Promise<void>;  // ★ 新增：刷新轨道列表
   loadKeyframes: () => Promise<void>;  // ★ 新增：刷新关键帧
   
   // ========== 内部方法 ==========
@@ -278,16 +282,24 @@ interface EditorState {
   setCanvasEditMode: (mode: 'transform' | 'text' | 'subtitle' | null) => void;
   
   /** 侧边栏激活的面板 */
-  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | 'background' | null;
-  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | 'background' | null) => void;
+  activeSidebarPanel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | 'background' | 'visual-agent' | null;
+  setActiveSidebarPanel: (panel: 'transform' | 'text' | 'subtitle' | 'audio' | 'ai-tools' | 'speed' | 'image-adjust' | 'beauty' | 'background' | 'visual-agent' | null) => void;
   
   /** 左侧栏激活的面板 */
   activeLeftPanel: 'subtitles' | 'assets' | 'b-roll' | null;
   setActiveLeftPanel: (panel: 'subtitles' | 'assets' | 'b-roll' | null) => void;
   
+  /** B-Roll 面板的初始搜索关键词（从 placeholder 点击传入） */
+  brollInitialKeywords: string[];
+  setBrollInitialKeywords: (keywords: string[]) => void;
+  
+  /** 当前选中的 B-Roll placeholder clip ID（用于替换素材） */
+  activeBrollPlaceholderId: string | null;
+  setActiveBrollPlaceholderId: (clipId: string | null) => void;
+  
   /** 画布/导出比例（青色框的比例），默认 9:16 抖音竖屏 */
-  canvasAspectRatio: '16:9' | '9:16' | '1:1';
-  setCanvasAspectRatio: (ratio: '16:9' | '9:16' | '1:1') => void;
+  canvasAspectRatio: '16:9' | '9:16';
+  setCanvasAspectRatio: (ratio: '16:9' | '9:16') => void;
   
   /** 导演模式 - 控制视频合成策略 */
   directorMode: 'pure-avatar' | 'intercut' | 'pure-broll';
@@ -307,6 +319,16 @@ interface EditorState {
   getClipKeyframes: (clipId: string, property?: KeyframeProperty) => Keyframe[];
   selectKeyframe: (keyframeId: string, multi?: boolean) => void;
   clearKeyframeSelection: () => void;
+  
+  // ========== Remotion Agent 视觉配置 ==========
+  /** 当前项目的视觉效果配置 */
+  visualConfig: import('@/remotion/types/visual').VisualConfig | null;
+  /** 设置视觉配置 */
+  setVisualConfig: (config: import('@/remotion/types/visual').VisualConfig | null) => void;
+  /** 视觉配置是否已应用 */
+  visualConfigApplied: boolean;
+  /** 设置视觉配置应用状态 */
+  setVisualConfigApplied: (applied: boolean) => void;
 }
 
 // ==================== 默认轨道配置 ====================
@@ -321,6 +343,7 @@ const DEFAULT_TRACKS: Track[] = [
 // 内容块类型颜色映射 - 按类型区分
 const CLIP_TYPE_COLORS: Record<ClipType, string[]> = {
   video: ['from-blue-500/80 to-indigo-600/60', 'from-blue-600/80 to-indigo-700/60', 'from-indigo-500/80 to-blue-600/60'],
+  broll: ['from-sky-500/80 to-blue-600/60', 'from-blue-500/80 to-sky-600/60', 'from-cyan-500/80 to-blue-600/60'],
   image: ['from-violet-500/80 to-purple-600/60', 'from-purple-500/80 to-violet-600/60', 'from-fuchsia-500/80 to-violet-600/60'],
   audio: ['from-green-500/80 to-emerald-600/60', 'from-emerald-500/80 to-green-600/60', 'from-teal-500/80 to-green-600/60'],
   text: ['from-purple-500/80 to-violet-600/60', 'from-violet-500/80 to-purple-600/60', 'from-fuchsia-500/80 to-purple-600/60'],
@@ -681,6 +704,14 @@ export const useEditorStore = create<EditorState>()(
           ? Math.min(...finalClips.map(c => c.start))
           : 0;
         
+        // ★ 从项目分辨率推断画布比例（9:16 或 16:9）
+        const projectResolution = (project as { resolution?: { width?: number; height?: number } }).resolution;
+        let canvasRatio: '16:9' | '9:16' = '9:16';  // 默认竖屏
+        if (projectResolution && projectResolution.width && projectResolution.height) {
+          canvasRatio = projectResolution.width > projectResolution.height ? '16:9' : '9:16';
+        }
+        debugLog('[LoadProject] 📐 项目分辨率:', projectResolution, '→ 画布比例:', canvasRatio);
+        
         set({
           projectId,
           projectName: project.name,
@@ -698,6 +729,7 @@ export const useEditorStore = create<EditorState>()(
           history: [],
           historyIndex: -1,
           currentTime: firstClipStart,  // ✅ 跳到第一个 clip，确保有内容显示
+          canvasAspectRatio: canvasRatio,  // ★ 根据项目分辨率设置画布比例
         });
         
         debugLog('[LoadProject] ✅ Store 状态已更新');
@@ -1031,9 +1063,10 @@ export const useEditorStore = create<EditorState>()(
       debugLog('[compactVideoTrack] 当前 clips 总数:', clips.length);
       
       // 获取需要处理的轨道
+      // ★★★ 关键：排除 B-Roll clips，它们不参与紧密排列 ★★★
       const trackIds = trackId 
         ? [trackId] 
-        : Array.from(new Set(clips.filter(c => c.clipType === 'video').map(c => c.trackId)));
+        : Array.from(new Set(clips.filter(c => c.clipType === 'video' && !c.metadata?.is_broll).map(c => c.trackId)));
       
       debugLog('[compactVideoTrack] 要处理的轨道 IDs:', trackIds);
       
@@ -1048,8 +1081,9 @@ export const useEditorStore = create<EditorState>()(
       
       for (const tid of trackIds) {
         // 获取该轨道的所有视频 clips，按开始时间排序
+        // ★★★ 关键：排除 B-Roll clips，它们可以自由放置 ★★★
         const videoClips = clips
-          .filter(c => c.trackId === tid && c.clipType === 'video')
+          .filter(c => c.trackId === tid && c.clipType === 'video' && !c.metadata?.is_broll)
           .sort((a, b) => a.start - b.start);
         
         debugLog(`[compactVideoTrack] 轨道 ${tid.slice(0,8)}... 视频 clips:`, videoClips.length);
@@ -1935,6 +1969,7 @@ export const useEditorStore = create<EditorState>()(
     currentTime: 0,
     isPlaying: false,
     isVideoReady: false,
+    isScrubbingPlayhead: false,  // ★★★ 拖动播放头状态（拖动时不 seek 视频）
     duration: 0,
     setCurrentTime: (time) => {
       const { clips } = get();
@@ -1947,6 +1982,7 @@ export const useEditorStore = create<EditorState>()(
     },
     setIsPlaying: (playing) => set({ isPlaying: playing }),
     setIsVideoReady: (ready) => set({ isVideoReady: ready }),
+    setIsScrubbingPlayhead: (scrubbing) => set({ isScrubbingPlayhead: scrubbing }),  // ★★★ 新增
     setDuration: (duration) => set({ duration }),
 
     // ========== 当前活动视频 ==========
@@ -1986,8 +2022,15 @@ export const useEditorStore = create<EditorState>()(
       }
       
       try {
+        // ★ 治本：获取 session token 用于鉴权
+        const session = await getSessionSafe();
+        const headers: HeadersInit = {};
+        if (session?.access_token) {
+          headers['Authorization'] = `Bearer ${session.access_token}`;
+        }
+        
         // 调用后端取消任务 API
-        await fetch(`/api/tasks/${currentTaskId}/cancel`, { method: 'POST' });
+        await fetch(`/api/tasks/${currentTaskId}/cancel`, { method: 'POST', headers });
       } catch (e) {
         debugWarn('取消任务失败:', e);
       }
@@ -2581,29 +2624,63 @@ export const useEditorStore = create<EditorState>()(
           set({ clips: newClips });
         }
         
-        // 如果加载了新的 tracks（字幕轨道），也需要更新
+        // 如果加载了新的 tracks，需要更新
         // 检查是否有新的 trackId 需要添加
         const existingTrackIds = new Set(tracks.map(t => t.id));
         const newTrackIds = new Set(newClips.map(c => c.trackId).filter(id => !existingTrackIds.has(id)));
         
         if (newTrackIds.size > 0) {
-          // 需要重新加载 tracks（这种情况很少发生）
-          debugLog('[loadClips] 发现新的轨道，需要刷新 tracks');
-          // 可以调用 projectApi 获取最新的 tracks，但这里简单处理
-          // 创建临时的字幕轨道
-          const newTracks: Track[] = Array.from(newTrackIds).map((id, index) => ({
-            id,
-            name: 'Subtitles',
-            orderIndex: -1 - index, // 放在底部
-            color: 'text-yellow-400',
-            isVisible: true,
-            isLocked: false,
-            isMuted: false,
-          }));
+          debugLog('[loadClips] 发现新的轨道，需要刷新 tracks:', Array.from(newTrackIds));
           
-          set((state) => ({
-            tracks: [...state.tracks, ...newTracks]
-          }));
+          // ★ 根据 clips 的类型推断 track 名称和颜色
+          const newTracks: Track[] = Array.from(newTrackIds).map((trackId, index) => {
+            // 找到属于这个 track 的第一个 clip 来推断类型
+            const trackClips = newClips.filter(c => c.trackId === trackId);
+            const firstClip = trackClips[0];
+            const clipType = firstClip?.clipType || 'video';
+            
+            // ★ 重构：broll 是 video 的子类型，通过 metadata.is_broll 识别
+            const isBRoll = firstClip?.metadata?.is_broll === true;
+            
+            // 根据 clipType 和 metadata 设置 track 名称和颜色
+            let name = 'Track';
+            let color = 'text-blue-400';
+            
+            if (isBRoll || clipType === 'broll') {
+              // ★ 优先检查 metadata.is_broll（重构后的方式）
+              name = 'B-Roll';
+              color = 'text-sky-400';
+            } else if (clipType === 'subtitle') {
+              name = 'Subtitles';
+              color = 'text-yellow-400';
+            } else if (clipType === 'audio') {
+              name = 'Audio';
+              color = 'text-green-400';
+            } else if (clipType === 'video') {
+              name = 'Video';
+              color = 'text-blue-400';
+            }
+            
+            debugLog(`[loadClips] 创建新轨道: id=${trackId}, name=${name}, clipType=${clipType}, is_broll=${isBRoll}`);
+            
+            return {
+              id: trackId,
+              name,
+              orderIndex: tracks.length + index, // 放在现有轨道之后
+              color,
+              isVisible: true,
+              isLocked: false,
+              isMuted: false,
+            };
+          });
+          
+          // ★★★ 修复：追加前过滤掉已存在的 track（防止重复）★★★
+          set((state) => {
+            const existingIds = new Set(state.tracks.map(t => t.id));
+            const uniqueNewTracks = newTracks.filter(t => !existingIds.has(t.id));
+            if (uniqueNewTracks.length === 0) return state; // 无变化
+            return { tracks: [...state.tracks, ...uniqueNewTracks] };
+          });
         }
         
       } catch (error) {
@@ -2666,6 +2743,53 @@ export const useEditorStore = create<EditorState>()(
         
       } catch (error) {
         debugError('[loadAssets] 加载异常:', error);
+      }
+    },
+
+    // ★ 新增：刷新轨道列表（从后端加载，确保与 B-Roll 等新建轨道同步）
+    loadTracks: async () => {
+      const { projectId } = get();
+      if (!projectId) {
+        debugWarn('[loadTracks] 没有打开的项目');
+        return;
+      }
+      
+      try {
+        debugLog('[loadTracks] 开始加载 tracks, projectId:', projectId);
+        
+        const response = await tracksApi.getTracksByProject(projectId);
+        
+        if (response.error) {
+          debugError('[loadTracks] 加载失败:', response.error);
+          return;
+        }
+        
+        const serverTracks = response.data || [];
+        debugLog('[loadTracks] 加载成功，获取到', serverTracks.length, '个 tracks');
+        
+        // ★ 与本地 tracks 合并：保留本地的显示状态，更新服务器的数据
+        const { tracks: localTracks } = get();
+        const localTrackMap = new Map(localTracks.map(t => [t.id, t]));
+        
+        const mergedTracks: Track[] = serverTracks.map(st => {
+          const local = localTrackMap.get(st.id);
+          return {
+            ...st,
+            // 保留本地的可视状态（如果有）
+            isVisible: local?.isVisible ?? st.isVisible,
+            isLocked: local?.isLocked ?? st.isLocked,
+            isMuted: local?.isMuted ?? st.isMuted,
+          };
+        });
+        
+        // 按 orderIndex 排序
+        mergedTracks.sort((a, b) => a.orderIndex - b.orderIndex);
+        
+        set({ tracks: mergedTracks });
+        debugLog('[loadTracks] ✅ tracks 已更新:', mergedTracks.map(t => t.name));
+        
+      } catch (error) {
+        debugError('[loadTracks] 加载异常:', error);
       }
     },
 
@@ -2833,6 +2957,18 @@ export const useEditorStore = create<EditorState>()(
       set({ activeLeftPanel: panel });
     },
     
+    // ========== B-Roll 面板初始搜索关键词 ==========
+    brollInitialKeywords: [],
+    setBrollInitialKeywords: (keywords) => {
+      set({ brollInitialKeywords: keywords });
+    },
+    
+    // ========== 当前选中的 B-Roll placeholder clip ID ==========
+    activeBrollPlaceholderId: null,
+    setActiveBrollPlaceholderId: (clipId) => {
+      set({ activeBrollPlaceholderId: clipId });
+    },
+    
     // ========== 画布/导出比例（青色框固定比例）==========
     canvasAspectRatio: '9:16',  // 默认抖音竖屏比例
     setCanvasAspectRatio: (ratio) => {
@@ -2849,6 +2985,16 @@ export const useEditorStore = create<EditorState>()(
     globalBrollEnabled: true,  // 默认启用
     setGlobalBrollEnabled: (enabled) => {
       set({ globalBrollEnabled: enabled });
+    },
+    
+    // ========== Remotion Agent 视觉配置 ==========
+    visualConfig: null,
+    setVisualConfig: (config) => {
+      set({ visualConfig: config });
+    },
+    visualConfigApplied: false,
+    setVisualConfigApplied: (applied) => {
+      set({ visualConfigApplied: applied });
     },
     
     // ========== 关键帧操作 V2（使用 offset） ==========

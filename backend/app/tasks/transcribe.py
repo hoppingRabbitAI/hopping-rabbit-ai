@@ -315,6 +315,152 @@ async def _poll_asr_result(
     raise Exception(f"转写超时（已等待 {max_retries} 秒），请稍后重试")
 
 
+def _split_utterance_by_punctuation(text: str, words: list, start_time: int, end_time: int, speaker: str) -> list[dict]:
+    """
+    ★★★ 按标点符号将长 utterance 切分成多个短句 ★★★
+    
+    切分规则：
+    1. 在句末标点（。！？；，、）处切分
+    2. 使用 words 数组的时间戳精确定位每个子句的时间
+    3. 如果没有 words 数组，按字符比例估算时间
+    
+    Args:
+        text: 完整文本
+        words: 逐字时间戳数组 [{"text": "你", "start_time": 100, "end_time": 200}, ...]
+        start_time: utterance 起始时间 (ms)
+        end_time: utterance 结束时间 (ms)
+        speaker: 说话人
+    
+    Returns:
+        切分后的 segments 列表
+    """
+    import re
+    
+    # 中英文标点分隔符（句号、问号、感叹号、分号、逗号、顿号）
+    SPLIT_PUNCTUATION = r'[。！？；，、.!?;,]'
+    
+    # 如果文本很短（少于 20 字符），不切分
+    if len(text) <= 20:
+        return [{
+            "id": str(uuid4()),
+            "text": text,
+            "start": start_time,
+            "end": end_time,
+            "words": words,
+            "speaker": speaker,
+            "is_deleted": False,
+            "auto_zoom": False,
+            "silence_info": None,
+        }]
+    
+    # 按标点切分文本
+    # 使用正则保留分隔符
+    parts = re.split(f'({SPLIT_PUNCTUATION})', text)
+    
+    # 合并标点和前面的文本
+    sentences = []
+    current_sentence = ""
+    for part in parts:
+        if re.match(SPLIT_PUNCTUATION, part):
+            current_sentence += part
+            if current_sentence.strip():
+                sentences.append(current_sentence.strip())
+            current_sentence = ""
+        else:
+            current_sentence += part
+    if current_sentence.strip():
+        sentences.append(current_sentence.strip())
+    
+    # 如果只有一个句子，不需要切分
+    if len(sentences) <= 1:
+        return [{
+            "id": str(uuid4()),
+            "text": text,
+            "start": start_time,
+            "end": end_time,
+            "words": words,
+            "speaker": speaker,
+            "is_deleted": False,
+            "auto_zoom": False,
+            "silence_info": None,
+        }]
+    
+    # ★★★ 使用 words 数组精确定位时间 ★★★
+    segments = []
+    
+    if words and len(words) > 0:
+        # 有逐字时间戳，精确切分
+        word_idx = 0
+        total_words = len(words)
+        
+        for sentence in sentences:
+            if not sentence:
+                continue
+            
+            # 找到这个句子对应的 words 范围
+            sentence_words = []
+            sentence_len = len(sentence.replace(" ", ""))  # 去掉空格计算
+            chars_found = 0
+            seg_start = None
+            seg_end = None
+            
+            while word_idx < total_words and chars_found < sentence_len:
+                word = words[word_idx]
+                word_text = word.get("text", "")
+                
+                if seg_start is None:
+                    seg_start = word.get("start_time", start_time)
+                
+                sentence_words.append(word)
+                chars_found += len(word_text)
+                seg_end = word.get("end_time", end_time)
+                word_idx += 1
+            
+            # 创建 segment
+            if seg_start is not None and seg_end is not None:
+                segments.append({
+                    "id": str(uuid4()),
+                    "text": sentence,
+                    "start": seg_start,
+                    "end": seg_end,
+                    "words": sentence_words,
+                    "speaker": speaker,
+                    "is_deleted": False,
+                    "auto_zoom": False,
+                    "silence_info": None,
+                })
+    else:
+        # 没有逐字时间戳，按字符比例估算
+        total_len = len(text)
+        total_duration = end_time - start_time
+        current_pos = 0
+        current_time = start_time
+        
+        for sentence in sentences:
+            if not sentence:
+                continue
+            
+            sentence_len = len(sentence)
+            sentence_duration = int(total_duration * sentence_len / total_len)
+            
+            segments.append({
+                "id": str(uuid4()),
+                "text": sentence,
+                "start": current_time,
+                "end": current_time + sentence_duration,
+                "words": [],
+                "speaker": speaker,
+                "is_deleted": False,
+                "auto_zoom": False,
+                "silence_info": None,
+            })
+            
+            current_time += sentence_duration
+    
+    logger.debug(f"[ASR] 切分长句: '{text[:30]}...' -> {len(segments)} 个子句")
+    return segments
+
+
 def _parse_doubao_result(result: dict) -> list[dict]:
     """
     解析豆包 API 返回的结果为标准 segment 格式
@@ -323,8 +469,9 @@ def _parse_doubao_result(result: dict) -> list[dict]:
     
     处理流程:
     1. 解析语音片段 (speech segments)，保留 words 数组用于精确时间截取
-    2. 分析片段间的静音 (silence analysis)
-    3. 插入静音片段并分级标记
+    2. ★★★ 按标点符号切分长句，生成更细粒度的字幕 ★★★
+    3. 分析片段间的静音 (silence analysis)
+    4. 插入静音片段并分级标记
     """
     segments = []
     
@@ -348,19 +495,9 @@ def _parse_doubao_result(result: dict) -> list[dict]:
         if "speaker_id" in additions:
             speaker = f"speaker_{additions['speaker_id']}"
         
-        segment = {
-            "id": str(uuid4()),
-            "text": text,
-            "start": start_time,   # 毫秒，适配 Clip
-            "end": end_time,       # 毫秒，适配 Clip
-            "words": words,        # 逐字时间戳，用于精确截取
-            "speaker": speaker,
-            "is_deleted": False,
-            "auto_zoom": False,
-            "silence_info": None,  # 语音片段无静音信息
-        }
-        
-        segments.append(segment)
+        # ★★★ 按标点切分长句 ★★★
+        sub_segments = _split_utterance_by_punctuation(text, words, start_time, end_time, speaker)
+        segments.extend(sub_segments)
     
     logger.info(f"解析出 {len(segments)} 个语音分句")
     
@@ -396,8 +533,8 @@ def _insert_silence_segments(speech_segments: list[dict]) -> list[dict]:
     SENTENCE_END_PUNCTUATION = set("。！？；…….?!;")
     
     # 阈值定义 (毫秒)
-    MICRO_PAUSE_THRESHOLD = 200      # < 200ms: 忽略
-    HESITATION_THRESHOLD = 500       # > 500ms 句中停顿: 卡顿
+    MICRO_PAUSE_THRESHOLD = 800      # < 800ms: 忽略（短停顿不算换气）
+    HESITATION_THRESHOLD = 1000      # > 1000ms 句中停顿: 卡顿（从500ms调高）
     BREATH_MAX_THRESHOLD = 3500      # < 3500ms 句末停顿: 气口（包含较长换气）
     DEAD_AIR_THRESHOLD = 4000        # > 4000ms: 无论如何都是死寂
     

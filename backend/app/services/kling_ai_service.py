@@ -448,9 +448,12 @@ class KlingAIClient:
         """
         options = options or {}
         
+        # 清洗 data:xxx;base64, 前缀
+        from app.schemas.kling import clean_base64_field
+        
         # 构建请求体
         payload = {
-            "image": image,  # 必填
+            "image": clean_base64_field(image),  # 必填
         }
         
         # 可选参数
@@ -461,7 +464,7 @@ class KlingAIClient:
             payload["model_name"] = options["model_name"]
         
         if options.get("image_tail"):
-            payload["image_tail"] = options["image_tail"]
+            payload["image_tail"] = clean_base64_field(options["image_tail"])
         
         if options.get("negative_prompt"):
             payload["negative_prompt"] = options["negative_prompt"]
@@ -487,7 +490,7 @@ class KlingAIClient:
         
         # 运动笔刷（与 camera_control 互斥）
         if options.get("static_mask"):
-            payload["static_mask"] = options["static_mask"]
+            payload["static_mask"] = clean_base64_field(options["static_mask"])
         
         if options.get("dynamic_masks"):
             payload["dynamic_masks"] = options["dynamic_masks"]
@@ -583,8 +586,9 @@ class KlingAIClient:
         if len(image_list) > 4:
             raise ValueError("image_list 最多支持4张图片")
         
-        # 构建 image_list 格式
-        formatted_image_list = [{"image": img} for img in image_list]
+        # 构建 image_list 格式 - 清洗 data:xxx;base64, 前缀
+        from app.schemas.kling import clean_base64_field
+        formatted_image_list = [{"image": clean_base64_field(img)} for img in image_list]
         
         # 构建请求体
         payload = {
@@ -999,9 +1003,10 @@ class KlingAIClient:
         else:
             payload["model_name"] = "kling-v1-6"
         
-        # 图片列表
+        # 图片列表 - 清洗 data:xxx;base64, 前缀
         if options.get("image_list"):
-            formatted_image_list = [{"image": img} for img in options["image_list"]]
+            from app.schemas.kling import clean_base64_field
+            formatted_image_list = [{"image": clean_base64_field(img)} for img in options["image_list"]]
             payload["image_list"] = formatted_image_list
         
         if options.get("negative_prompt"):
@@ -1224,7 +1229,8 @@ class KlingAIClient:
         
         # 参考图像（图生图模式）
         if image:
-            payload["image"] = image
+            from app.schemas.kling import clean_base64_field
+            payload["image"] = clean_base64_field(image)
             
             # kling-v1-5 图生图必须指定 image_reference
             if image_reference:
@@ -1390,9 +1396,14 @@ class KlingAIClient:
         if options.get("model_name"):
             payload["model_name"] = options["model_name"]
         
-        # 参考图列表
+        # 参考图列表 - 清洗 data:xxx;base64, 前缀
         if image_list:
-            payload["image_list"] = image_list
+            from app.schemas.kling import clean_base64_field
+            cleaned_image_list = [
+                {"image": clean_base64_field(item.get("image", ""))} 
+                for item in image_list
+            ]
+            payload["image_list"] = cleaned_image_list
         
         # 主体参考列表
         if element_list:
@@ -1419,8 +1430,10 @@ class KlingAIClient:
             payload["external_task_id"] = options["external_task_id"]
         
         logger.info(f"[KlingAI] 创建 Omni-Image 任务: prompt={prompt[:50]}..., images={len(image_list) if image_list else 0}")
+        logger.debug(f"[KlingAI] Omni-Image 请求参数: {payload}")
         
         result = await self._request("POST", "/images/omni-image", payload)
+        logger.info(f"[KlingAI] Omni-Image 响应: {result}")
         return result
     
     async def get_omni_image_task(self, task_id: str) -> Dict:
@@ -1756,7 +1769,7 @@ class KouboService:
                 on_progress(int(i / total * 80), f"动态化第 {i+1}/{total} 张图片")
             
             task = await self.client.create_image_to_video_task(
-                image_url=img_url,
+                image=img_url,  # 参数名是 image 不是 image_url
                 prompt="smooth zoom in, product showcase, professional lighting",
                 options={"duration": 5, "motion_scale": 0.8}
             )

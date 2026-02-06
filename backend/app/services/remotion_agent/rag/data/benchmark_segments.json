@@ -1,0 +1,2974 @@
+{
+  "001": [
+    {
+      "id": "001-opener-01",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以「这句话真的合理吗？」的疑问引发观众兴趣",
+      "input_text_clean": "现在不用念医学系，3-5年后机器人开刀技术会超越人类 这句话真的合理吗？",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": "现在不用念医学系，3-5年后机器人开刀技术会超越人类",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "现在不用念医学系，3-5年后机器人开刀技术会超越人类",
+          "position": "bottom-center"
+        },
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。人物全屏建立信任感。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "001"
+      ],
+      "created_at": "2026-01-31 19:10:03.317228",
+      "updated_at": "2026-01-31 19:10:03.317236"
+    },
+    {
+      "id": "001-concept-01",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "马斯克核心观点：3-5年内医疗机器人技术将成熟到可替代人类医生，无需再攻读医学系",
+      "input_text_clean": "马斯克核心观点：3-5年内医疗机器人技术将成熟到可替代人类医生，无需再攻读医学系",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "001",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:10:03.317354",
+      "updated_at": "2026-01-31 19:10:03.317355"
+    },
+    {
+      "id": "001-data-01",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "机器人技术成长逻辑：以递归（Recursive）的指数级速度进步，由硬件精度、AI模型强度、数据量三者共同驱动，三者为相乘效应而非简单相加，达到临界点后会自我加速迭代",
+      "input_text_clean": "Recursive AI",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "gradient",
+          "text": "Recursive",
+          "position": "center",
+          "style": "data-highlight"
+        },
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "001",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:10:03.317607",
+      "updated_at": "2026-01-31 19:10:03.317608"
+    },
+    {
+      "id": "001-concept-02",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "技术发展趋势：AI与机器人正处于爆发性成长阶段，结合Scaling Law（缩放定律），边缘晶片算力等技术推进将加速技术奇点的到来",
+      "input_text_clean": "AI Scaling Law",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "001",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:10:03.329113",
+      "updated_at": "2026-01-31 19:10:03.329118"
+    },
+    {
+      "id": "001-event-01",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 2.0,
+        "timestamp_end": 12.0
+      },
+      "input_text": "切换马斯克画面，呈现「不用念医学系」的核心观点",
+      "input_text_clean": "切换马斯克画面，呈现「不用念医学系」的核心观点",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeB",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "切换马斯克画面，呈现「不用念医学系」的核心观点",
+        "pip_config": {
+          "type": "person",
+          "position": "bottom-right",
+          "size": "small"
+        },
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:02: 概念解释清晰易懂。素材全屏突出内容主体。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "001",
+        "00-00-02"
+      ],
+      "created_at": "2026-01-31 19:10:03.329253",
+      "updated_at": "2026-01-31 19:10:03.329254"
+    },
+    {
+      "id": "001-event-02",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 5.0,
+        "timestamp_end": 15.0
+      },
+      "input_text": "展示医疗机器人手术画面，呼应观点内容",
+      "input_text_clean": "展示医疗机器人手术画面，呼应观点内容",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeB",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "展示医疗机器人手术画面，呼应观点内容",
+        "pip_config": {
+          "type": "person",
+          "position": "bottom-right",
+          "size": "small"
+        },
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:05: 概念解释清晰易懂。素材全屏突出内容主体。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "001",
+        "00-00-05"
+      ],
+      "created_at": "2026-01-31 19:10:03.329303",
+      "updated_at": "2026-01-31 19:10:03.329304"
+    },
+    {
+      "id": "001-event-03",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 9.0,
+        "timestamp_end": 19.0
+      },
+      "input_text": "主持人回归，以疑问开启观点分析",
+      "input_text_clean": "主持人回归，以疑问开启观点分析",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:09: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "001",
+        "00-00-09"
+      ],
+      "created_at": "2026-01-31 19:10:03.329341",
+      "updated_at": "2026-01-31 19:10:03.329342"
+    },
+    {
+      "id": "001-event-04",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 20.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "讲解机器人递归式指数成长的逻辑",
+      "input_text_clean": "讲解机器人递归式指数成长的逻辑",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:20: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "001",
+        "00-00-20"
+      ],
+      "created_at": "2026-01-31 19:10:03.329409",
+      "updated_at": "2026-01-31 19:10:03.329410"
+    },
+    {
+      "id": "001-event-05",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 74.0,
+        "timestamp_end": 84.0
+      },
+      "input_text": "展示人形机器人运动画面，说明当前技术落地情况",
+      "input_text_clean": "展示人形机器人运动画面，说明当前技术落地情况",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeB",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "展示人形机器人运动画面，说明当前技术落地情况",
+        "pip_config": {
+          "type": "person",
+          "position": "bottom-right",
+          "size": "small"
+        },
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:14: 概念解释清晰易懂。素材全屏突出内容主体。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "001",
+        "00-01-14"
+      ],
+      "created_at": "2026-01-31 19:10:03.329450",
+      "updated_at": "2026-01-31 19:10:03.329451"
+    },
+    {
+      "id": "001-event-06",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 94.0,
+        "timestamp_end": 104.0
+      },
+      "input_text": "出现Podcast推荐卡片，引导延伸内容",
+      "input_text_clean": "出现Podcast推荐卡片，引导延伸内容",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:34: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "001",
+        "00-01-34"
+      ],
+      "created_at": "2026-01-31 19:10:03.329487",
+      "updated_at": "2026-01-31 19:10:03.329487"
+    },
+    {
+      "id": "001-cta-01",
+      "source": {
+        "video_id": "001",
+        "video_title": "开场通过主持人抛出马斯克「现在不用念医学系，3-5年后机器人开刀技术会超越人类」的争议观点，紧接着以",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "结尾展示Podcast推荐卡片，引导观众收听「EP123-馬斯克談未來、Anthropic上市能買嗎、蘋果認輸、ChatGPT廣告」的延伸内容",
+      "input_text_clean": "结尾展示Podcast推荐卡片，引导观众收听「EP123-馬斯克談未來、Anthropic上市能買嗎",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "001"
+      ],
+      "created_at": "2026-01-31 19:10:03.329503",
+      "updated_at": "2026-01-31 19:10:03.329504"
+    }
+  ],
+  "002": [
+    {
+      "id": "002-opener-01",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+      "input_text_clean": "不用存退休金",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": "不用存退休金",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "不用存退休金",
+          "position": "bottom-center"
+        },
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。人物全屏建立信任感。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "002"
+      ],
+      "created_at": "2026-01-31 19:10:57.577028",
+      "updated_at": "2026-01-31 19:10:57.577031"
+    },
+    {
+      "id": "002-concept-01",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "未来10-20年，商品与服务成本将接近免费，甚至高成本手术可由机器人完成",
+      "input_text_clean": "未来10-20年，商品与服务成本将接近免费，甚至高成本手术可由机器人完成",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "002",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:10:57.577123",
+      "updated_at": "2026-01-31 19:10:57.577125"
+    },
+    {
+      "id": "002-concept-02",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "未来稀缺资源（如核心地段房产、特殊自然资源）及人类提供的高社交价值服务（如手工咖啡、定制社交体验）仍具备高价值",
+      "input_text_clean": "未来稀缺资源（如核心地段房产、特殊自然资源）及人类提供的高社交价值服务（如手工咖啡、定制社交体验）仍",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "002",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:10:57.577179",
+      "updated_at": "2026-01-31 19:10:57.577180"
+    },
+    {
+      "id": "002-concept-03",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "「未来无需存退休金」的观点是科技圈CEO、投资人的普遍共识",
+      "input_text_clean": "未来无需存退休金 CEO",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "002",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:10:57.577224",
+      "updated_at": "2026-01-31 19:10:57.577225"
+    },
+    {
+      "id": "002-event-01",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 16.0,
+        "timestamp_end": 26.0
+      },
+      "input_text": "讲解未来商品服务成本接近免费，展示自助购物0元结算画面",
+      "input_text_clean": "讲解未来商品服务成本接近免费，展示自助购物0元结算画面",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeB",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "讲解未来商品服务成本接近免费，展示自助购物0元结算画面",
+        "pip_config": {
+          "type": "person",
+          "position": "bottom-right",
+          "size": "small"
+        },
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:16: 概念解释清晰易懂。素材全屏突出内容主体。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "002",
+        "00-00-16"
+      ],
+      "created_at": "2026-01-31 19:10:57.577286",
+      "updated_at": "2026-01-31 19:10:57.577287"
+    },
+    {
+      "id": "002-event-02",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 24.0,
+        "timestamp_end": 34.0
+      },
+      "input_text": "提及未来机器人可执行昂贵手术，呈现医疗机器人手术场景",
+      "input_text_clean": "提及未来机器人可执行昂贵手术，呈现医疗机器人手术场景",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:24: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "002",
+        "00-00-24"
+      ],
+      "created_at": "2026-01-31 19:10:57.577324",
+      "updated_at": "2026-01-31 19:10:57.577325"
+    },
+    {
+      "id": "002-event-03",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 44.0,
+        "timestamp_end": 54.0
+      },
+      "input_text": "阐述稀缺资源仍具价值，展示高端海景房画面",
+      "input_text_clean": "阐述稀缺资源仍具价值，展示高端海景房画面",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeB",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "阐述稀缺资源仍具价值，展示高端海景房画面",
+        "pip_config": {
+          "type": "person",
+          "position": "bottom-right",
+          "size": "small"
+        },
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:44: 概念解释清晰易懂。素材全屏突出内容主体。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "002",
+        "00-00-44"
+      ],
+      "created_at": "2026-01-31 19:10:57.577357",
+      "updated_at": "2026-01-31 19:10:57.577358"
+    },
+    {
+      "id": "002-event-04",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 54.0,
+        "timestamp_end": 64.0
+      },
+      "input_text": "讲解人类提供的社交价值服务，呈现群体聚会与手工咖啡制作场景",
+      "input_text_clean": "讲解人类提供的社交价值服务，呈现群体聚会与手工咖啡制作场景",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:54: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "002",
+        "00-00-54"
+      ],
+      "created_at": "2026-01-31 19:10:57.577392",
+      "updated_at": "2026-01-31 19:10:57.577393"
+    },
+    {
+      "id": "002-event-05",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 68.0,
+        "timestamp_end": 78.0
+      },
+      "input_text": "说明该观点是科技圈共识，展示科技团队研讨画面",
+      "input_text_clean": "说明该观点是科技圈共识，展示科技团队研讨画面",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeB",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "说明该观点是科技圈共识，展示科技团队研讨画面",
+        "pip_config": {
+          "type": "person",
+          "position": "bottom-right",
+          "size": "small"
+        },
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:08: 概念解释清晰易懂。素材全屏突出内容主体。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "002",
+        "00-01-08"
+      ],
+      "created_at": "2026-01-31 19:10:57.577426",
+      "updated_at": "2026-01-31 19:10:57.577427"
+    },
+    {
+      "id": "002-cta-01",
+      "source": {
+        "video_id": "002",
+        "video_title": "开场以马斯克「不用存退休金」的争议观点切入，搭配破碎存钱罐的视觉画面，快速抓住观众注意力",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "结尾以「就追蹤我吧」引导观众关注账号，完成粉丝留存动作",
+      "input_text_clean": "结尾以「就追蹤我吧」引导观众关注账号，完成粉丝留存动作",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "002"
+      ],
+      "created_at": "2026-01-31 19:10:57.577441",
+      "updated_at": "2026-01-31 19:10:57.577442"
+    }
+  ],
+  "003": [
+    {
+      "id": "003-opener-01",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目标开发者群体兴趣",
+      "input_text_clean": "如何用最小的成本来验证你的产品能不能活下来？ MVP",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": "如何用最小的成本来验证你的产品能不能活下来？",
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "如何用最小的成本来验证你的产品能不能活下来？",
+          "position": "bottom-center"
+        },
+        "has_broll": true,
+        "broll_description": "无B-Roll实拍内容，全程为幻灯片式图文展示",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。抽象概念触发B-Roll可视化表达。纯素材聚焦信息传递。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "003"
+      ],
+      "created_at": "2026-01-31 19:11:33.430190",
+      "updated_at": "2026-01-31 19:11:33.430198"
+    },
+    {
+      "id": "003-data-01",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "MVP核心逻辑：用20%的投入完成核心功能闭环，撬动80%价值，聚焦用户真正依赖的核心功能，砍掉非必要的设置、皮肤、积分等锦上添花类功能",
+      "input_text_clean": "20% 80% MVP",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "data_cite",
+      "broll_trigger_pattern": "20%",
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "gradient",
+          "text": "20%",
+          "position": "center",
+          "style": "data-highlight"
+        },
+        "has_broll": true,
+        "broll_description": "与'20%'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。数据引用触发B-Roll增强视觉冲击。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "003",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:11:33.430633",
+      "updated_at": "2026-01-31 19:11:33.430636"
+    },
+    {
+      "id": "003-concept-01",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "MVP执行标准：采用「一刀切」原则，仅保留「没它流程跑不通」的Must类功能，砍掉Should（体验优化）、Could（锦上添花）类功能",
+      "input_text_clean": "一刀切 没它流程跑不通 MVP Must Should",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "003",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:11:33.430783",
+      "updated_at": "2026-01-31 19:11:33.430785"
+    },
+    {
+      "id": "003-data-02",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "AI英语陪练MVP案例：从常规认知的100%功能（注册、个人中心、会员系统等）砍至仅保留「按住说话→AI回复」核心功能，简化注册（用Device ID游客模式）、支付（限制免费条数后弹收款码）等环节",
+      "input_text_clean": "100% 按住说话→AI回复 AI MVP AI",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "data_cite",
+      "broll_trigger_pattern": "100%",
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "gradient",
+          "text": "100%",
+          "position": "center",
+          "style": "data-highlight"
+        },
+        "has_broll": true,
+        "broll_description": "与'100%'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。数据引用触发B-Roll增强视觉冲击。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "003",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:11:33.430865",
+      "updated_at": "2026-01-31 19:11:33.430866"
+    },
+    {
+      "id": "003-concept-02",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 70.0,
+        "timestamp_end": 90.0
+      },
+      "input_text": "MVP经验补充：MVP阶段需同步带上埋点、运维功能；若产品所在赛道成熟（如计算器、手电筒类），无需做MVP，直接模仿行业最佳实践；MVP的本质是克制",
+      "input_text_clean": "MVP MVP MVP",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": "MVP",
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "与'MVP'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。抽象概念触发B-Roll可视化表达。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "003",
+        "point-4"
+      ],
+      "created_at": "2026-01-31 19:11:33.430966",
+      "updated_at": "2026-01-31 19:11:33.430967"
+    },
+    {
+      "id": "003-event-01",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 36.0,
+        "timestamp_end": 46.0
+      },
+      "input_text": "讲解MVP「一刀切」执行标准，划分Must/Should/Could三类功能",
+      "input_text_clean": "讲解MVP「一刀切」执行标准，划分Must/Should/Could三类功能",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:36: 概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "003",
+        "00-00-36"
+      ],
+      "created_at": "2026-01-31 19:11:33.431072",
+      "updated_at": "2026-01-31 19:11:33.431073"
+    },
+    {
+      "id": "003-event-02",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 53.0,
+        "timestamp_end": 63.0
+      },
+      "input_text": "展示AI英语陪练MVP案例，对比全量功能与核心MVP功能的取舍",
+      "input_text_clean": "展示AI英语陪练MVP案例，对比全量功能与核心MVP功能的取舍",
+      "content_type": "example",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "comparison",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:53: 举例说明增强理解。对比触发B-Roll直观展示差异。纯素材聚焦信息传递。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "003",
+        "00-00-53"
+      ],
+      "created_at": "2026-01-31 19:11:33.431140",
+      "updated_at": "2026-01-31 19:11:33.431141"
+    },
+    {
+      "id": "003-event-03",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 97.0,
+        "timestamp_end": 107.0
+      },
+      "input_text": "分享MVP阶段的实操经验，包括埋点运维要求与成熟赛道建议",
+      "input_text_clean": "分享MVP阶段的实操经验，包括埋点运维要求与成熟赛道建议",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:37: 概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "003",
+        "00-01-37"
+      ],
+      "created_at": "2026-01-31 19:11:33.431200",
+      "updated_at": "2026-01-31 19:11:33.431201"
+    },
+    {
+      "id": "003-cta-01",
+      "source": {
+        "video_id": "003",
+        "video_title": "以「如何用最小的成本来验证你的产品能不能活下来？」的问题开场，引出MVP最小可执行产品的概念，吸引目",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "回归开场问题，再次强调MVP的价值，提示观众听懂内容可节省开发时间、降低试错成本",
+      "input_text_clean": "回归开场问题，再次强调MVP的价值，提示观众听懂内容可节省开发时间、降低试错成本",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "003"
+      ],
+      "created_at": "2026-01-31 19:11:33.431231",
+      "updated_at": "2026-01-31 19:11:33.431232"
+    }
+  ],
+  "004": [
+    {
+      "id": "004-opener-01",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skill概念的好奇",
+      "input_text_clean": "skill到底是啥？是新的软件吗？ Skill",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": "skill到底是啥？是新的软件吗？",
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "skill到底是啥？是新的软件吗？",
+          "position": "bottom-center"
+        },
+        "has_broll": true,
+        "broll_description": "无额外B-Roll素材，仅通过屏幕文档内容切换、文字高亮与口播画面固定搭配完成信息传递",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。抽象概念触发B-Roll可视化表达。纯素材聚焦信息传递。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "004"
+      ],
+      "created_at": "2026-01-31 19:12:16.162840",
+      "updated_at": "2026-01-31 19:12:16.162847"
+    },
+    {
+      "id": "004-data-01",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "Skill不是软件，是大模型的「菜谱」，属于结构化文件包，包含元数据（名称/描述）、流程指令、example、reference、脚本等，通常存放在本地~/claude路径下",
+      "input_text_clean": "菜谱 Skill",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "gradient",
+          "text": "菜谱",
+          "position": "center",
+          "style": "data-highlight"
+        },
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "004",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:12:16.163189",
+      "updated_at": "2026-01-31 19:12:16.163193"
+    },
+    {
+      "id": "004-concept-01",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "Skill的使用场景：支持Claude、AI coding类软件（Claude code/cursor）及其他国内AI软件",
+      "input_text_clean": "Skill Claude AI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "004",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:12:16.163287",
+      "updated_at": "2026-01-31 19:12:16.163289"
+    },
+    {
+      "id": "004-concept-02",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "Skill的使用方法：先创建/下载Skill到本地（创建可梳理任务步骤让AI生成，或与AI协作总结流程生成；下载可从各类marketplace获取），再在支持的软件中通过提示词调用",
+      "input_text_clean": "Skill Skill AI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "process_desc",
+      "broll_trigger_pattern": "Skill",
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "与'Skill'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。流程描述触发B-Roll可视化步骤。纯素材聚焦信息传递。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "004",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:12:16.163412",
+      "updated_at": "2026-01-31 19:12:16.163414"
+    },
+    {
+      "id": "004-event-01",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 40.0
+      },
+      "input_text": "切换到Skill使用场景的板块，讲解可支持的软件类型",
+      "input_text_clean": "切换到Skill使用场景的板块，讲解可支持的软件类型",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:30: 概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "004",
+        "00-00-30"
+      ],
+      "created_at": "2026-01-31 19:12:16.163487",
+      "updated_at": "2026-01-31 19:12:16.163489"
+    },
+    {
+      "id": "004-event-02",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 60.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "进入Skill使用方法板块，拆解创建与下载两种获取路径",
+      "input_text_clean": "进入Skill使用方法板块，拆解创建与下载两种获取路径",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:00: 概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "004",
+        "00-01-00"
+      ],
+      "created_at": "2026-01-31 19:12:16.163539",
+      "updated_at": "2026-01-31 19:12:16.163540"
+    },
+    {
+      "id": "004-event-03",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 135.0,
+        "timestamp_end": 145.0
+      },
+      "input_text": "展示调用Skill的提示词示例，讲解使用时的稳定产出优势",
+      "input_text_clean": "展示调用Skill的提示词示例，讲解使用时的稳定产出优势",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeC",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:02:15: 概念解释清晰易懂。纯素材聚焦信息传递。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "004",
+        "00-02-15"
+      ],
+      "created_at": "2026-01-31 19:12:16.163586",
+      "updated_at": "2026-01-31 19:12:16.163587"
+    },
+    {
+      "id": "004-cta-01",
+      "source": {
+        "video_id": "004",
+        "video_title": "以疑问「skill到底是啥？是新的软件吗？」作为开场，搭配图文文档与口播同步讲解，引发观众对Skil",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "结尾引导观众互动，邀请有困惑的问题留言，同时呼吁一键三连，预告下期内容",
+      "input_text_clean": "结尾引导观众互动，邀请有困惑的问题留言，同时呼吁一键三连，预告下期内容",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "004"
+      ],
+      "created_at": "2026-01-31 19:12:16.163606",
+      "updated_at": "2026-01-31 19:12:16.163607"
+    }
+  ],
+  "005": [
+    {
+      "id": "005-opener-01",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概念，吸引目标观众注意力",
+      "input_text_clean": "AI",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": "AI",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "AI",
+          "position": "bottom-center"
+        },
+        "has_broll": true,
+        "broll_description": "B-Roll以工具操作的屏幕录屏为主，全程直观展示AI工具的界面、操作步骤与输出成果，无额外外景类B-Roll",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。抽象概念触发B-Roll可视化表达。人物全屏建立信任感。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "005"
+      ],
+      "created_at": "2026-01-31 19:12:57.579774",
+      "updated_at": "2026-01-31 19:12:57.579777"
+    },
+    {
+      "id": "005-concept-01",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "介绍两类AI自主执行工具：claude cowork（月费200）与阶跃小伙（免费国货工具），强调其能替代人工完成任务，实现技术平权",
+      "input_text_clean": "AI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "005",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:12:57.579842",
+      "updated_at": "2026-01-31 19:12:57.579843"
+    },
+    {
+      "id": "005-summary-01",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "演示阶跃小伙工具的使用：输入爬取AI科技信息的需求，展示AI自动拆解任务、执行并生成专业总结报告的全流程",
+      "input_text_clean": "AI AI",
+      "content_type": "summary",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "总结回顾加深印象。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "summary",
+        "005",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:12:57.579917",
+      "updated_at": "2026-01-31 19:12:57.579918"
+    },
+    {
+      "id": "005-concept-02",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "讲解工具“妙计”功能：支持创建/导入技能（与claude skills打通），可在妙计广场获取各领域现成技能，进一步提升效率",
+      "input_text_clean": "讲解工具“妙计”功能：支持创建/导入技能（与claude skills打通），可在妙计广场获取各领域",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "005",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:12:57.579968",
+      "updated_at": "2026-01-31 19:12:57.579968"
+    },
+    {
+      "id": "005-event-01",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 22.0,
+        "timestamp_end": 32.0
+      },
+      "input_text": "切换到工具介绍页面，讲解两类AI自主执行工具的差异",
+      "input_text_clean": "切换到工具介绍页面，讲解两类AI自主执行工具的差异",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:22: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "005",
+        "00-00-22"
+      ],
+      "created_at": "2026-01-31 19:12:57.580007",
+      "updated_at": "2026-01-31 19:12:57.580008"
+    },
+    {
+      "id": "005-event-02",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 56.0,
+        "timestamp_end": 66.0
+      },
+      "input_text": "开始演示阶跃小伙工具，输入爬取AI信息的需求",
+      "input_text_clean": "开始演示阶跃小伙工具，输入爬取AI信息的需求",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:56: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "005",
+        "00-00-56"
+      ],
+      "created_at": "2026-01-31 19:12:57.580036",
+      "updated_at": "2026-01-31 19:12:57.580037"
+    },
+    {
+      "id": "005-event-03",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 83.0,
+        "timestamp_end": 93.0
+      },
+      "input_text": "展示工具生成的AI科技信息总结报告",
+      "input_text_clean": "展示工具生成的AI科技信息总结报告",
+      "content_type": "summary",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:23: 总结回顾加深印象。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "005",
+        "00-01-23"
+      ],
+      "created_at": "2026-01-31 19:12:57.580062",
+      "updated_at": "2026-01-31 19:12:57.580063"
+    },
+    {
+      "id": "005-event-04",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 90.0,
+        "timestamp_end": 100.0
+      },
+      "input_text": "介绍“妙计”功能，展示技能创建/导入界面",
+      "input_text_clean": "介绍“妙计”功能，展示技能创建/导入界面",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:30: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "005",
+        "00-01-30"
+      ],
+      "created_at": "2026-01-31 19:12:57.580089",
+      "updated_at": "2026-01-31 19:12:57.580089"
+    },
+    {
+      "id": "005-event-05",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 100.0,
+        "timestamp_end": 110.0
+      },
+      "input_text": "演示妙计广场，展示各领域技能资源",
+      "input_text_clean": "演示妙计广场，展示各领域技能资源",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:40: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "005",
+        "00-01-40"
+      ],
+      "created_at": "2026-01-31 19:12:57.580115",
+      "updated_at": "2026-01-31 19:12:57.580115"
+    },
+    {
+      "id": "005-event-06",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 117.0,
+        "timestamp_end": 127.0
+      },
+      "input_text": "提及工具内测阶段，引导观众领取内测码",
+      "input_text_clean": "提及工具内测阶段，引导观众领取内测码",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:57: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "005",
+        "00-01-57"
+      ],
+      "created_at": "2026-01-31 19:12:57.580141",
+      "updated_at": "2026-01-31 19:12:57.580142"
+    },
+    {
+      "id": "005-cta-01",
+      "source": {
+        "video_id": "005",
+        "video_title": "以“不会编程的人正在超越程序员”“硅谷程序员996加班”的反差话题切入，提出AI技术平权工具的核心概",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "说明工具处于内测阶段，引导观众领取内测码，完成用户转化引导",
+      "input_text_clean": "说明工具处于内测阶段，引导观众领取内测码，完成用户转化引导",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "005"
+      ],
+      "created_at": "2026-01-31 19:12:57.580164",
+      "updated_at": "2026-01-31 19:12:57.580165"
+    }
+  ],
+  "006": [
+    {
+      "id": "006-opener-01",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经典文章《苦涩的教训》，快速抓住观众注意力",
+      "input_text_clean": "AI",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": "AI",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "AI",
+          "position": "bottom-center"
+        },
+        "has_broll": true,
+        "broll_description": "使用名人（马斯克、萨顿）肖像、AI发展相关场景B-Roll、学术文章截图等，辅助讲解内容，增强专业性与画面丰富度",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。抽象概念触发B-Roll可视化表达。人物全屏建立信任感。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "006"
+      ],
+      "created_at": "2026-01-31 19:13:53.373047",
+      "updated_at": "2026-01-31 19:13:53.373055"
+    },
+    {
+      "id": "006-concept-01",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "《苦涩的教训》核心观点：从AI70年发展历史来看，长远维度下计算能力+可扩展通用算法，表现优于嵌入人类知识的专业算法，对应发展三阶段为早期人工规则优势、瓶颈期、通用算法成为最终胜利者",
+      "input_text_clean": "AI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "006",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:13:53.373243",
+      "updated_at": "2026-01-31 19:13:53.373246"
+    },
+    {
+      "id": "006-data-01",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "“苦涩的教训”揭示的深层真相：人类研究者的价值在算力增长下被削弱；对“智能”的认知需从模仿人类思维转向依托算力的通用方法；人们总是低估通用方法在算力支持下的爆发性力量",
+      "input_text_clean": "“苦涩的教训”揭示的深层真相：人类研究者的价值在算力增长下被削弱；对“智能”的认知需从模仿人类思维转",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "006",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:13:53.373334",
+      "updated_at": "2026-01-31 19:13:53.373336"
+    },
+    {
+      "id": "006-example-01",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "解读通用方法与“元方法”：如蒙特卡罗树搜索、深度学习、强化学习这类可随算力扩展的方法，大模型是该理念的成功实践案例",
+      "input_text_clean": "解读通用方法与“元方法”：如蒙特卡罗树搜索、深度学习、强化学习这类可随算力扩展的方法，大模型是该理念",
+      "content_type": "example",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "举例说明增强理解。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "example",
+        "006",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:13:53.373417",
+      "updated_at": "2026-01-31 19:13:53.373419"
+    },
+    {
+      "id": "006-event-01",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 20.0
+      },
+      "input_text": "介绍萨顿是强化学习奠基人，引出其文章《苦涩的教训》",
+      "input_text_clean": "介绍萨顿是强化学习奠基人，引出其文章《苦涩的教训》",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:10: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "006",
+        "00-00-10"
+      ],
+      "created_at": "2026-01-31 19:13:53.373523",
+      "updated_at": "2026-01-31 19:13:53.373525"
+    },
+    {
+      "id": "006-event-02",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 105.0,
+        "timestamp_end": 115.0
+      },
+      "input_text": "开始拆解AI70年发展的三阶段：早期优势、瓶颈期、最终胜利者",
+      "input_text_clean": "开始拆解AI70年发展的三阶段：早期优势、瓶颈期、最终胜利者",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:45: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "006",
+        "00-01-45"
+      ],
+      "created_at": "2026-01-31 19:13:53.373586",
+      "updated_at": "2026-01-31 19:13:53.373588"
+    },
+    {
+      "id": "006-event-03",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 175.0,
+        "timestamp_end": 185.0
+      },
+      "input_text": "解读“苦涩的教训”的三个深层真相：研究者价值削弱、智能认知转变、低估通用方法力量",
+      "input_text_clean": "解读“苦涩的教训”的三个深层真相：研究者价值削弱、智能认知转变、低估通用方法力量",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:02:55: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "006",
+        "00-02-55"
+      ],
+      "created_at": "2026-01-31 19:13:53.373648",
+      "updated_at": "2026-01-31 19:13:53.373649"
+    },
+    {
+      "id": "006-event-04",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 260.0,
+        "timestamp_end": 270.0
+      },
+      "input_text": "讲解通用方法与“元方法”，点明大模型是该理念的成功案例",
+      "input_text_clean": "讲解通用方法与“元方法”，点明大模型是该理念的成功案例",
+      "content_type": "example",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:04:20: 举例说明增强理解。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "006",
+        "00-04-20"
+      ],
+      "created_at": "2026-01-31 19:13:53.373701",
+      "updated_at": "2026-01-31 19:13:53.373702"
+    },
+    {
+      "id": "006-cta-01",
+      "source": {
+        "video_id": "006",
+        "video_title": "以提问“AI的第一性原理是什么呢”开场，搭配马斯克解释第一性原理的素材，引出强化学习奠基人萨顿及其经",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "点明大模型是《苦涩的教训》理念的成功案例，收尾呼应核心主题，强化观众认知",
+      "input_text_clean": "点明大模型是《苦涩的教训》理念的成功案例，收尾呼应核心主题，强化观众认知",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "006"
+      ],
+      "created_at": "2026-01-31 19:13:53.373726",
+      "updated_at": "2026-01-31 19:13:53.373727"
+    }
+  ],
+  "007": [
+    {
+      "id": "007-opener-01",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户项目的反差案例，引发观众好奇",
+      "input_text_clean": "Gemini",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": "Gemini",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "Gemini",
+          "position": "bottom-center"
+        },
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。人物全屏建立信任感。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "007"
+      ],
+      "created_at": "2026-01-31 19:15:10.265973",
+      "updated_at": "2026-01-31 19:15:10.265979"
+    },
+    {
+      "id": "007-concept-01",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "客户沟通，比写代码重要10倍：通过不断反问+具体化需求，主动规划项目需求，避免后续需求膨胀",
+      "input_text_clean": "客户沟通，比写代码重要10倍：通过不断反问+具体化需求，主动规划项目需求，避免后续需求膨胀",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "007",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:15:10.266101",
+      "updated_at": "2026-01-31 19:15:10.266103"
+    },
+    {
+      "id": "007-concept-02",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "一定要写需求文档：将与客户沟通的需求结构化，转化为AI可理解的清晰指令，同时用于客户二次确认，规避模糊需求",
+      "input_text_clean": "AI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "007",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:15:10.266168",
+      "updated_at": "2026-01-31 19:15:10.266170"
+    },
+    {
+      "id": "007-concept-03",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "提示词一定要图文结合：搭配手绘草图、参考网站截图、设计稿，大幅提升AI对需求的理解精度",
+      "input_text_clean": "AI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "007",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:15:10.266225",
+      "updated_at": "2026-01-31 19:15:10.266226"
+    },
+    {
+      "id": "007-concept-04",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 70.0,
+        "timestamp_end": 90.0
+      },
+      "input_text": "中途改功能，一次只改一个：避免多修改导致项目崩溃，改完后测试确认再推进下一步",
+      "input_text_clean": "中途改功能，一次只改一个：避免多修改导致项目崩溃，改完后测试确认再推进下一步",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "007",
+        "point-4"
+      ],
+      "created_at": "2026-01-31 19:15:10.266276",
+      "updated_at": "2026-01-31 19:15:10.266277"
+    },
+    {
+      "id": "007-concept-05",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 90.0,
+        "timestamp_end": 110.0
+      },
+      "input_text": "版本管理，是vibe coding的生命线：保存项目各版本，方便回溯，适合非技术人员的试错式开发",
+      "input_text_clean": "版本管理，是vibe coding的生命线：保存项目各版本，方便回溯，适合非技术人员的试错式开发",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "007",
+        "point-5"
+      ],
+      "created_at": "2026-01-31 19:15:10.266333",
+      "updated_at": "2026-01-31 19:15:10.266334"
+    },
+    {
+      "id": "007-event-01",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 70.0,
+        "timestamp_end": 80.0
+      },
+      "input_text": "开始讲解要点1：客户沟通比写代码重要10倍，强调反问与需求具体化",
+      "input_text_clean": "开始讲解要点1：客户沟通比写代码重要10倍，强调反问与需求具体化",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:10: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "007",
+        "00-01-10"
+      ],
+      "created_at": "2026-01-31 19:15:10.266406",
+      "updated_at": "2026-01-31 19:15:10.266408"
+    },
+    {
+      "id": "007-event-02",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 110.0,
+        "timestamp_end": 120.0
+      },
+      "input_text": "讲解要点2：一定要写需求文档，将沟通需求结构化后再用AI辅助开发",
+      "input_text_clean": "讲解要点2：一定要写需求文档，将沟通需求结构化后再用AI辅助开发",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:50: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "007",
+        "00-01-50"
+      ],
+      "created_at": "2026-01-31 19:15:10.266454",
+      "updated_at": "2026-01-31 19:15:10.266455"
+    },
+    {
+      "id": "007-event-03",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 147.0,
+        "timestamp_end": 157.0
+      },
+      "input_text": "讲解要点3：提示词需图文结合，用草图、截图、设计稿提升AI理解精度",
+      "input_text_clean": "讲解要点3：提示词需图文结合，用草图、截图、设计稿提升AI理解精度",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:02:27: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "007",
+        "00-02-27"
+      ],
+      "created_at": "2026-01-31 19:15:10.266498",
+      "updated_at": "2026-01-31 19:15:10.266499"
+    },
+    {
+      "id": "007-event-04",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 178.0,
+        "timestamp_end": 188.0
+      },
+      "input_text": "讲解要点4：中途修改功能一次只改一个，改完测试确认后再进行下一步",
+      "input_text_clean": "讲解要点4：中途修改功能一次只改一个，改完测试确认后再进行下一步",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:02:58: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "007",
+        "00-02-58"
+      ],
+      "created_at": "2026-01-31 19:15:10.266542",
+      "updated_at": "2026-01-31 19:15:10.266543"
+    },
+    {
+      "id": "007-event-05",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 218.0,
+        "timestamp_end": 228.0
+      },
+      "input_text": "讲解要点5：版本管理是vibe coding的生命线，需保存各版本方便回溯",
+      "input_text_clean": "讲解要点5：版本管理是vibe coding的生命线，需保存各版本方便回溯",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:03:38: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "007",
+        "00-03-38"
+      ],
+      "created_at": "2026-01-31 19:15:10.266602",
+      "updated_at": "2026-01-31 19:15:10.266603"
+    },
+    {
+      "id": "007-cta-01",
+      "source": {
+        "video_id": "007",
+        "video_title": "以客户验收通过的聊天记录切入，结合自身行业从业者身份，讲述不懂代码的设计师用Gemini一周完成客户",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "升华主题，提出AI让懂业务的人获得直接变现能力，最后以轻松的手势和'我们下次见'搭配卡通猴子图标收尾",
+      "input_text_clean": "升华主题，提出AI让懂业务的人获得直接变现能力，最后以轻松的手势和'我们下次见'搭配卡通猴子图标收尾",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "007"
+      ],
+      "created_at": "2026-01-31 19:15:10.266619",
+      "updated_at": "2026-01-31 19:15:10.266620"
+    }
+  ],
+  "008": [
+    {
+      "id": "008-opener-01",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速抓住观众注意力",
+      "input_text_clean": "反常识观点 Andrej Karpathy",
+      "content_type": "opener",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": "反常识观点",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "dark-solid",
+          "text": "反常识观点",
+          "position": "bottom-center"
+        },
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "开场hook吸引注意力。人物全屏建立信任感。",
+      "quality_score": 0.9,
+      "tags": [
+        "opener",
+        "hook",
+        "008"
+      ],
+      "created_at": "2026-01-31 19:16:27.477199",
+      "updated_at": "2026-01-31 19:16:27.477210"
+    },
+    {
+      "id": "008-data-01",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 10.0,
+        "timestamp_end": 30.0
+      },
+      "input_text": "AI的路线问题：对比人类/动物千百万年环境互动进化与AI瞬间海量知识预训练的差异，以「人类造飞机而非复刻鸟类」类比，说明AI无需模仿生物智能的核心逻辑",
+      "input_text_clean": "人类造飞机而非复刻鸟类 AI AI AI",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "comparison",
+      "broll_trigger_pattern": "人类造飞机而非复刻鸟类",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "gradient",
+          "text": "人类造飞机而非复刻鸟类",
+          "position": "center",
+          "style": "data-highlight"
+        },
+        "has_broll": true,
+        "broll_description": "与'人类造飞机而非复刻鸟类'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。对比触发B-Roll直观展示差异。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "008",
+        "point-1"
+      ],
+      "created_at": "2026-01-31 19:16:27.477714",
+      "updated_at": "2026-01-31 19:16:27.477718"
+    },
+    {
+      "id": "008-concept-01",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 30.0,
+        "timestamp_end": 50.0
+      },
+      "input_text": "智能体的困境：指出当前智能体在持续学习、多模态信息处理、智能水平的三大缺陷，回顾DeepMind强化学习、OpenAI网页操作智能体的尝试，说明当前追求完整智能体为时过早",
+      "input_text_clean": "DeepMind OpenAI",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "product_mention",
+      "broll_trigger_pattern": "DeepMind",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "与'DeepMind'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "概念解释清晰易懂。产品提及触发B-Roll展示实物。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "concept",
+        "008",
+        "point-2"
+      ],
+      "created_at": "2026-01-31 19:16:27.477882",
+      "updated_at": "2026-01-31 19:16:27.477884"
+    },
+    {
+      "id": "008-data-02",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 50.0,
+        "timestamp_end": 70.0
+      },
+      "input_text": "关于AGI的猜想：认为AGI奇点是长期过程，以支付宝系统类比人类对复杂系统的依赖，借自动驾驶「0→90%→99%→99.9%」的难度升级，说明AGI落地的漫长性与安全性挑战",
+      "input_text_clean": "90% 99% 99.9 0→90%→99%→99.9% AGI",
+      "content_type": "data",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "data_cite",
+      "broll_trigger_pattern": "90%",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": {
+          "variant": "gradient",
+          "text": "90%",
+          "position": "center",
+          "style": "data-highlight"
+        },
+        "has_broll": true,
+        "broll_description": "与'90%'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "数据展示增加可信度。数据引用触发B-Roll增强视觉冲击。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "data",
+        "008",
+        "point-3"
+      ],
+      "created_at": "2026-01-31 19:16:27.477965",
+      "updated_at": "2026-01-31 19:16:27.477967"
+    },
+    {
+      "id": "008-comparison-01",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 70.0,
+        "timestamp_end": 90.0
+      },
+      "input_text": "创业项目Eureka：介绍AI原生教育项目，对比GPT「不痛不痒」的教学痛点，说明项目通过AI诊断学习水平、提供个性化教学的核心价值，目标是打造类人教师的AI教学系统",
+      "input_text_clean": "不痛不痒 Eureka AI GPT",
+      "content_type": "comparison",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "comparison",
+      "broll_trigger_pattern": "不痛不痒",
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": "comparison",
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": "与'不痛不痒'相关的素材",
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "对比分析突出差异。对比触发B-Roll直观展示差异。人物全屏建立信任感。",
+      "quality_score": 0.85,
+      "tags": [
+        "comparison",
+        "008",
+        "point-4"
+      ],
+      "created_at": "2026-01-31 19:16:27.478091",
+      "updated_at": "2026-01-31 19:16:27.478093"
+    },
+    {
+      "id": "008-event-01",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 10.0
+      },
+      "input_text": "博主出镜，介绍Andrej Karpathy视频及播客内容，引出话题",
+      "input_text_clean": "博主出镜，介绍Andrej Karpathy视频及播客内容，引出话题",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:00:00: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "008",
+        "00-00-00"
+      ],
+      "created_at": "2026-01-31 19:16:27.478177",
+      "updated_at": "2026-01-31 19:16:27.478178"
+    },
+    {
+      "id": "008-event-02",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 73.0,
+        "timestamp_end": 83.0
+      },
+      "input_text": "进入第一个要点「AI的路线问题」，开始对比生物进化与AI预训练差异",
+      "input_text_clean": "进入第一个要点「AI的路线问题」，开始对比生物进化与AI预训练差异",
+      "content_type": "comparison",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "comparison",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": true,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:01:13: 对比分析突出差异。对比触发B-Roll直观展示差异。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "008",
+        "00-01-13"
+      ],
+      "created_at": "2026-01-31 19:16:27.478224",
+      "updated_at": "2026-01-31 19:16:27.478225"
+    },
+    {
+      "id": "008-event-03",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 143.0,
+        "timestamp_end": 153.0
+      },
+      "input_text": "进入第二个要点「智能体的困境」，分析当前智能体的三大缺陷",
+      "input_text_clean": "进入第二个要点「智能体的困境」，分析当前智能体的三大缺陷",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:02:23: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "008",
+        "00-02-23"
+      ],
+      "created_at": "2026-01-31 19:16:27.478274",
+      "updated_at": "2026-01-31 19:16:27.478275"
+    },
+    {
+      "id": "008-event-04",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 227.0,
+        "timestamp_end": 237.0
+      },
+      "input_text": "进入第三个要点「关于AGI的猜想」，讨论AGI的发展节奏与落地挑战",
+      "input_text_clean": "进入第三个要点「关于AGI的猜想」，讨论AGI的发展节奏与落地挑战",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:03:47: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "008",
+        "00-03-47"
+      ],
+      "created_at": "2026-01-31 19:16:27.478326",
+      "updated_at": "2026-01-31 19:16:27.478327"
+    },
+    {
+      "id": "008-event-05",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 337.0,
+        "timestamp_end": 347.0
+      },
+      "input_text": "进入第四个要点「创业项目Eureka」，介绍AI原生教育项目的核心逻辑",
+      "input_text_clean": "进入第四个要点「创业项目Eureka」，介绍AI原生教育项目的核心逻辑",
+      "content_type": "concept",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:05:37: 概念解释清晰易懂。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "008",
+        "00-05-37"
+      ],
+      "created_at": "2026-01-31 19:16:27.478378",
+      "updated_at": "2026-01-31 19:16:27.478379"
+    },
+    {
+      "id": "008-event-06",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 407.0,
+        "timestamp_end": 417.0
+      },
+      "input_text": "博主总结视频内容，收尾告别并切换场景开启新话题",
+      "input_text_clean": "博主总结视频内容，收尾告别并切换场景开启新话题",
+      "content_type": "summary",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": "concept_visual",
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "关键时刻 00:06:47: 总结回顾加深印象。人物全屏建立信任感。",
+      "quality_score": 0.8,
+      "tags": [
+        "timestamp",
+        "008",
+        "00-06-47"
+      ],
+      "created_at": "2026-01-31 19:16:27.478457",
+      "updated_at": "2026-01-31 19:16:27.478458"
+    },
+    {
+      "id": "008-cta-01",
+      "source": {
+        "video_id": "008",
+        "video_title": "博主以介绍Andrej Karpathy的视频内容切入，引出其「反常识观点」，同时推荐播客内容，快速",
+        "channel": null,
+        "timestamp_start": 0.0,
+        "timestamp_end": 0.0
+      },
+      "input_text": "博主总结视频核心内容，邀请观众探索细节，随后收尾告别并切换场景，开启下一个话题",
+      "input_text_clean": "博主总结视频核心内容，邀请观众探索细节，随后收尾告别并切换场景，开启下一个话题",
+      "content_type": "cta",
+      "template_id": "talking-head-broll",
+      "broll_trigger_type": null,
+      "broll_trigger_pattern": null,
+      "visual_config": {
+        "layout_mode": "modeA",
+        "canvas_type": null,
+        "canvas_config": null,
+        "keyword_card": null,
+        "has_broll": false,
+        "broll_description": null,
+        "pip_config": null,
+        "transition": null
+      },
+      "reasoning": "结尾行动号召，保持人物全屏增强亲和力和可信度。",
+      "quality_score": 0.8,
+      "tags": [
+        "cta",
+        "ending",
+        "008"
+      ],
+      "created_at": "2026-01-31 19:16:27.478480",
+      "updated_at": "2026-01-31 19:16:27.478481"
+    }
+  ]
+}

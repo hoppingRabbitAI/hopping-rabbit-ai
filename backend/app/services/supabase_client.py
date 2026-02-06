@@ -277,9 +277,10 @@ def get_file_urls_batch(bucket: str, paths: List[str], expires_in: int = SIGNED_
     Returns:
         { path: url } 映射
     """
-    # 过滤掉 None 和空字符串
-    paths = [p for p in paths if p]
+    # ★★★ 严格过滤：None、空字符串、非字符串类型 ★★★
+    paths = [p for p in paths if p and isinstance(p, str) and p.strip()]
     if not paths:
+        return {}
         return {}
     
     now = time.time()

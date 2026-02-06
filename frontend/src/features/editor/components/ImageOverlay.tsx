@@ -687,7 +687,7 @@ export function ImageOverlay({
   return (
     <div
       className="absolute inset-0 pointer-events-none"
-      style={{ width: containerWidth, height: containerHeight }}
+      style={{ width: containerWidth, height: containerHeight, zIndex: 30 }}
     >
       {/* 吸附辅助线 - 中心线 */}
       {snapState.centerX && (

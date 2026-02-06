@@ -9,3 +9,6 @@ export * from './transcript';
 export * from './asset';
 export * from './task';
 export * from './text';
+
+// ★★★ 视频播放系统类型 ★★★
+export * from './video';

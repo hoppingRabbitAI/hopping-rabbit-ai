@@ -4,9 +4,16 @@ mediapipe==0.10.9
 opencv-python-headless==4.9.0.80
 numpy>=1.24.0
 
+# Background Replacement Dependencies
+rembg>=2.0.0  # Background removal using U2-Net
+
 # LangChain Dependencies
 langchain>=0.3.0
 langchain-core>=0.3.0
 langchain-community>=0.3.0
 langchain-openai>=0.2.0
 langchain-google-genai>=2.0.0
+
+# RAG Vector Store Dependencies
+# 已迁移到火山方舟 Embedding API，不再需要 sentence-transformers
+# sentence-transformers>=2.2.0  # REMOVED - 使用 doubao-embedding-text-240715

@@ -3,7 +3,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEditorStore, TICK_WIDTH } from '@/features/editor/store/editor-store';
-import { VideoCanvas } from '@/features/editor/components/canvas';  // ★ 新架构
+import { VideoCanvas, VideoCanvasV3 } from '@/features/editor/components/canvas';
+
+// ==================== 视频系统架构开关 ====================
+// true = 使用 V3 全局单例架构（推荐，无生命周期问题）
+// false = 使用原有 VideoCanvas（HLS.js）
+const USE_NEW_VIDEO_SYSTEM = true;
 import { Timeline } from '@/features/editor/components/Timeline';
 import { ContextMenu } from '@/features/editor/components/ContextMenu';
 import { Header } from '@/features/editor/components/Header';
@@ -20,6 +25,8 @@ import { Resizer } from '@/features/editor/components/ResizablePanel';
 import { mediaCache, generateThumbnail, getVideoDuration } from '@/features/editor/lib/media-cache';
 import { uploadVideo } from '@/lib/api/assets';
 import { clearHlsCache } from '@/features/editor/components/canvas/VideoCanvasStore';
+import { videoResourceManager } from '@/features/editor/services/VideoResourceManager';
+import { playbackClock } from '@/features/editor/services/PlaybackClock';
 import type { Clip } from '@/features/editor/types';
 
 // ==================== 调试开关 ====================
@@ -137,6 +144,19 @@ export default function EditorPage() {
 
     initProject();
   }, []); // 只在组件挂载时执行一次
+
+  // ★★★ 页面卸载时清理所有视频资源（防止内存泄漏） ★★★
+  useEffect(() => {
+    return () => {
+      // 清理 V3 架构的视频资源管理器（HLS 实例 + Video 元素）
+      videoResourceManager.destroyAll();
+      // 停止播放时钟
+      playbackClock.stop();
+      // 清理旧版 HLS 缓存
+      clearHlsCache();
+      console.log('[EditorPage] 🗑️ 页面卸载，已清理所有视频资源');
+    };
+  }, []);
 
   // ★★★ 项目加载完成后，预缓冲所有视频到内存 ★★★
   // 确保播放时 100% 流畅，无任何网络依赖
@@ -539,7 +559,7 @@ export default function EditorPage() {
 
           {/* 视频预览区 - 圆角卡片风格 */}
           <div className="flex-1 flex bg-gray-100 min-h-0 overflow-hidden rounded-xl shadow-sm">
-            <VideoCanvas />
+            {USE_NEW_VIDEO_SYSTEM ? <VideoCanvasV3 /> : <VideoCanvas />}
           </div>
 
           {/* 时间轴工作台 - 包含拖拽条 */}

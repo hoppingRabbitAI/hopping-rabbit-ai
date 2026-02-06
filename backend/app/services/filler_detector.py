@@ -127,13 +127,27 @@ def extract_silences_from_asr(segments: List[Dict]) -> List[FillerDetection]:
 async def llm_detect_fillers(
     segments: List[Dict],
     excluded_ids: set = None,
+    # ★★★ 新增细分开关 ★★★
+    detect_ng: bool = True,         # 是否检测 NG/重复片段
+    detect_fillers: bool = True,    # 是否检测口癖词
 ) -> List[FillerDetection]:
     """
     使用 LLM 进行语义分析，检测口吃/填充词/NG片段
     无白名单，全部由 LLM 根据上下文判断
+    
+    Args:
+        segments: 待分析的片段列表
+        excluded_ids: 已被其他检测器标记的片段ID（跳过）
+        detect_ng: 是否检测 NG/重复片段
+        detect_fillers: 是否检测口癖词
     """
     if excluded_ids is None:
         excluded_ids = set()
+    
+    # ★ 如果两个开关都关闭，直接返回空
+    if not detect_ng and not detect_fillers:
+        logger.info("[LLM] NG 和口癖词检测均已关闭，跳过 LLM 分析")
+        return []
     
     try:
         from app.services.llm.clients import get_llm
@@ -152,13 +166,9 @@ async def llm_detect_fillers(
         if not segments_to_analyze:
             return []
         
-        all_detections = []
-        batch_size = 20
-        
-        for i in range(0, len(segments_to_analyze), batch_size):
-            batch = segments_to_analyze[i:i + batch_size]
-            detections = await _llm_analyze_batch(llm, batch)
-            all_detections.extend(detections)
+        # 一次性分析所有 segment，减少 LLM 调用次数
+        logger.info(f"[LLM] 开始分析 {len(segments_to_analyze)} 个语音片段 (ng={detect_ng}, fillers={detect_fillers})")
+        all_detections = await _llm_analyze_batch(llm, segments_to_analyze, detect_ng, detect_fillers)
         
         logger.info(f"[LLM] 检测到 {len(all_detections)} 个语义问题")
         return all_detections
@@ -168,8 +178,15 @@ async def llm_detect_fillers(
         return []
 
 
-async def _llm_analyze_batch(llm, batch: List[Dict]) -> List[FillerDetection]:
-    """LLM 批量分析"""
+async def _llm_analyze_batch(llm, batch: List[Dict], detect_ng: bool = True, detect_fillers: bool = True) -> List[FillerDetection]:
+    """LLM 批量分析
+    
+    Args:
+        llm: LLM 客户端
+        batch: 待分析的片段列表
+        detect_ng: 是否检测 NG/重复片段
+        detect_fillers: 是否检测口癖词
+    """
     from langchain_core.messages import HumanMessage
     
     texts = "\n".join([
@@ -177,17 +194,39 @@ async def _llm_analyze_batch(llm, batch: List[Dict]) -> List[FillerDetection]:
         for i, seg in enumerate(batch)
     ])
     
+    # ★★★ 根据开关动态构建 Prompt ★★★
+    detect_items = []
+    type_hints = []
+    
+    if detect_fillers:
+        detect_items.append("1. **口吃** - \"我我我觉得\"、\"那那那个\"（连续重复同一个字/词）")
+        detect_items.append("2. **填充词** - 整句只有\"嗯\"、\"啊\"、\"呃\"（无意义语气词）")
+        type_hints.append("stutter")
+        type_hints.append("filler_word")
+    
+    if detect_ng:
+        detect_items.append("3. **NG片段** - **紧挨着的**两句话意思完全相同（说错后立即重录）")
+        type_hints.append("ng_take")
+    
+    detect_section = "\n".join(detect_items) if detect_items else "（无检测项）"
+    type_hint_str = "|".join(type_hints) if type_hints else "none"
+    
     prompt = f"""你是视频剪辑助手，分析口播视频文稿，识别需要删除的片段。
 
 ## 需要删除：
-1. **口吃** - "我我我觉得"、"那那那个"（说话卡顿重复）
-2. **填充词** - 整句只有"嗯"、"啊"、"呃"（无意义语气词）
-3. **NG片段** - 连续两句意思相同（说错重录）
+{detect_section}
 
-## 不删除：
+## 不删除（重要！）：
 - "对对对"、"好好好" - 表示赞同的语气强调
 - "那个东西很好" - "那个"是正常指代
 - 有实际内容的完整句子
+- **相隔较远的相似内容** - 这是总结/回顾/强调，不是 NG
+- **不同语境下的重复** - 开头提出概念，结尾总结回顾，这是正常叙述结构
+
+## NG片段判断标准（必须同时满足）：
+- 两句话**紧挨着**出现（中间无其他内容）
+- 两句话**意思完全相同**
+- 明显是说错后**立即重录**的情况
 
 ## 文稿：
 {texts}
@@ -197,7 +236,7 @@ async def _llm_analyze_batch(llm, batch: List[Dict]) -> List[FillerDetection]:
 每个片段只能有一个标签，不要重复标记同一片段。
 
 ```json
-[{{"id": "片段ID", "type": "stutter|filler_word|ng_take", "reason": "原因"}}]
+[{{"id": "片段ID", "type": "{type_hint_str}", "reason": "原因"}}]
 ```"""
 
     try:
@@ -267,14 +306,19 @@ async def detect_all_fillers(
     segments: List[Dict],
     detect_silences: bool = True,
     detect_semantics: bool = True,
+    # ★★★ 新增三选项参数 ★★★
+    cut_bad_takes: bool = True,         # 是否检测 NG/重复片段
+    remove_filler_words: bool = True,   # 是否检测口癖词
 ) -> FillerAnalysisResult:
     """
     综合口癖检测
     
     Args:
         segments: ASR 转写片段（含 silence_info，由 transcribe.py 生成）
-        detect_silences: 是否检测静音（换气/卡顿）
-        detect_semantics: 是否检测语义问题（口吃/填充词/NG）
+        detect_silences: 是否检测静音（换气/卡顿/死寂）
+        detect_semantics: 是否进行 LLM 语义分析
+        cut_bad_takes: 是否检测 NG/重复片段（需要 detect_semantics=True）
+        remove_filler_words: 是否检测口癖词（需要 detect_semantics=True）
     
     流程：
     1. 从 ASR 结果提取静音片段（transcribe.py 已分类）
@@ -296,7 +340,13 @@ async def detect_all_fillers(
     if detect_semantics:
         # 过滤掉静音片段，只分析有文本的
         text_segments = [seg for seg in segments if seg.get("text", "").strip()]
-        llm_detections = await llm_detect_fillers(text_segments, detected_ids)
+        llm_detections = await llm_detect_fillers(
+            text_segments, 
+            detected_ids,
+            # ★★★ 传递细分开关给 LLM 检测 ★★★
+            detect_ng=cut_bad_takes,
+            detect_fillers=remove_filler_words,
+        )
         for d in llm_detections:
             if d.segment_id not in detected_ids:
                 all_detections.append(d)

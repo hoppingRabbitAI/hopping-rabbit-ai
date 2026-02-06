@@ -14,7 +14,8 @@ HoppingRabbit AI - Clips API
 - API 输入输出：毫秒（无需转换）
 - 前端展示时自行转换为秒
 """
-from fastapi import APIRouter, HTTPException, Depends, Query
+import logging
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from typing import Optional, List
 from datetime import datetime
 from uuid import uuid4
@@ -22,6 +23,8 @@ from pydantic import BaseModel
 
 from ..services.supabase_client import supabase, get_file_url
 from .auth import get_current_user_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/clips", tags=["Clips"])
 
@@ -326,6 +329,343 @@ async def split_clip(
         }
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 智能拆分接口
+# ============================================
+
+class SplitSegmentItem(BaseModel):
+    """拆分片段项"""
+    start_ms: int
+    end_ms: int
+    transcript: str
+    confidence: float
+
+
+class AnalyzeSplitRequest(BaseModel):
+    """分析拆分请求"""
+    strategy: str = "sentence"  # sentence | scene | paragraph
+
+
+class AnalyzeSplitResponse(BaseModel):
+    """分析拆分响应"""
+    can_split: bool
+    reason: str
+    segment_count: int
+    segments: List[SplitSegmentItem]
+    split_strategy: str
+
+
+class ExecuteSplitRequest(BaseModel):
+    """执行拆分请求"""
+    segments: List[SplitSegmentItem]
+
+
+class AnalyzeSplitTaskResponse(BaseModel):
+    """分析拆分任务响应 - 异步模式"""
+    task_id: str
+    status: str  # pending | running | completed | failed
+
+
+class DirectSplitRequest(BaseModel):
+    """直接拆分请求（分析+执行一步完成）"""
+    strategy: str = "sentence"  # sentence | scene | paragraph
+
+
+@router.post("/{clip_id}/split")
+async def direct_clip_split(
+    clip_id: str,
+    request: DirectSplitRequest = DirectSplitRequest(),
+    background_tasks: BackgroundTasks = None,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    直接拆分 Clip（分析+执行一步完成）
+    
+    异步模式：返回 task_id，前端轮询获取结果
+    """
+    from uuid import uuid4
+    from datetime import datetime
+    
+    task_id = str(uuid4())
+    now = datetime.utcnow().isoformat()
+    
+    try:
+        # 验证 clip 存在
+        clip_result = supabase.table("clips").select("id, track_id").eq("id", clip_id).single().execute()
+        if not clip_result.data:
+            raise HTTPException(status_code=404, detail="Clip 不存在")
+        
+        # 获取 project_id
+        track_id = clip_result.data.get("track_id")
+        project_id = None
+        if track_id:
+            track_result = supabase.table("tracks").select("project_id").eq("id", track_id).single().execute()
+            if track_result.data:
+                project_id = track_result.data.get("project_id")
+        
+        # 创建任务记录
+        supabase.table("tasks").insert({
+            "id": task_id,
+            "project_id": project_id,
+            "user_id": user_id,
+            "task_type": "smart_clean",  # 兼容 CHECK 约束
+            "status": "pending",
+            "progress": 0,
+            "params": {
+                "actual_type": "direct_clip_split",
+                "clip_id": clip_id,
+                "strategy": request.strategy
+            },
+            "created_at": now
+        }).execute()
+        
+        # 后台执行分析+拆分
+        background_tasks.add_task(
+            _execute_direct_split,
+            task_id, clip_id, request.strategy
+        )
+        
+        logger.info(f"[ClipSplit] 创建直接拆分任务 {task_id[:8]}... clip={clip_id[:8]}...")
+        
+        return {"task_id": task_id, "status": "pending"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ClipSplit] 创建任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _execute_direct_split(task_id: str, clip_id: str, strategy: str):
+    """
+    后台执行直接拆分（分析 + 执行）
+    """
+    try:
+        from ..services.clip_split_service import analyze_clip_for_split, execute_clip_split
+        
+        # 更新为运行中
+        supabase.table("tasks").update({
+            "status": "running",
+            "progress": 10,
+            "started_at": datetime.utcnow().isoformat()
+        }).eq("id", task_id).execute()
+        
+        # Step 1: 分析
+        logger.info(f"[ClipSplit] 开始分析 {clip_id[:8]}... strategy={strategy}")
+        analysis = await analyze_clip_for_split(clip_id, supabase, strategy=strategy)
+        
+        if not analysis.can_split:
+            # 无法拆分
+            supabase.table("tasks").update({
+                "status": "completed",
+                "progress": 100,
+                "result": {
+                    "success": False,
+                    "reason": analysis.reason,
+                    "clips": []
+                },
+                "completed_at": datetime.utcnow().isoformat()
+            }).eq("id", task_id).execute()
+            return
+        
+        # 更新进度
+        supabase.table("tasks").update({
+            "progress": 50,
+        }).eq("id", task_id).execute()
+        
+        # Step 2: 执行拆分
+        logger.info(f"[ClipSplit] 开始执行拆分 {clip_id[:8]}... segments={len(analysis.segments)}")
+        new_clips = await execute_clip_split(clip_id, analysis.segments, supabase)
+        
+        # 更新为完成
+        supabase.table("tasks").update({
+            "status": "completed",
+            "progress": 100,
+            "result": {
+                "success": True,
+                "message": f"成功拆分为 {len(new_clips)} 个片段",
+                "clips": new_clips
+            },
+            "completed_at": datetime.utcnow().isoformat()
+        }).eq("id", task_id).execute()
+        
+        logger.info(f"[ClipSplit] 拆分完成 {task_id[:8]}... new_clips={len(new_clips)}")
+        
+    except Exception as e:
+        logger.error(f"[ClipSplit] 拆分失败 {task_id[:8]}... error={e}")
+        import traceback
+        traceback.print_exc()
+        supabase.table("tasks").update({
+            "status": "failed",
+            "error_message": str(e),
+            "completed_at": datetime.utcnow().isoformat()
+        }).eq("id", task_id).execute()
+
+
+@router.post("/{clip_id}/analyze-split")
+async def analyze_clip_split(
+    clip_id: str,
+    request: AnalyzeSplitRequest = AnalyzeSplitRequest(),
+    background_tasks: BackgroundTasks = None,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    分析 Clip 是否可以拆分 - 异步任务模式
+    
+    策略：
+    - sentence: 分句（按语音断句）
+    - scene: 分镜（按画面变化）
+    - paragraph: 分段落（按语义段落）
+    
+    返回 task_id，前端轮询 /tasks/{task_id} 获取结果
+    避免长时间 HTTP 连接导致的 socket hang up
+    """
+    try:
+        task_id = str(uuid4())
+        now = datetime.utcnow().isoformat()
+        
+        # 获取 clip 信息以获取 project_id
+        clip_result = supabase.table("clips").select(
+            "id, track_id"
+        ).eq("id", clip_id).single().execute()
+        
+        if not clip_result.data:
+            raise HTTPException(status_code=404, detail="Clip 不存在")
+        
+        # 通过 track_id 获取 project_id
+        track_id = clip_result.data.get("track_id")
+        project_id = None
+        if track_id:
+            track_result = supabase.table("tracks").select("project_id").eq("id", track_id).single().execute()
+            if track_result.data:
+                project_id = track_result.data.get("project_id")
+        
+        # 创建任务记录
+        # 注意：task_type 使用 smart_clean 以兼容数据库 CHECK 约束
+        # result.params 中记录实际类型为 clip_split_analysis
+        supabase.table("tasks").insert({
+            "id": task_id,
+            "project_id": project_id,
+            "user_id": user_id,
+            "task_type": "smart_clean",
+            "status": "pending",
+            "progress": 0,
+            "params": {
+                "actual_type": "clip_split_analysis",
+                "clip_id": clip_id,
+                "strategy": request.strategy
+            },
+            "created_at": now
+        }).execute()
+        
+        # 后台执行分析
+        background_tasks.add_task(
+            _execute_clip_split_analysis,
+            task_id, clip_id, request.strategy
+        )
+        
+        logger.info(f"[ClipSplit] 创建分析任务 {task_id[:8]}... clip={clip_id[:8]}...")
+        
+        return {"task_id": task_id, "status": "pending"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ClipSplit] 创建任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _execute_clip_split_analysis(task_id: str, clip_id: str, strategy: str):
+    """
+    后台执行 clip split 分析
+    结果存入 tasks.result 中
+    """
+    try:
+        # 更新为运行中
+        supabase.table("tasks").update({
+            "status": "running",
+            "progress": 10,
+            "started_at": datetime.utcnow().isoformat()
+        }).eq("id", task_id).execute()
+        
+        from ..services.clip_split_service import analyze_clip_for_split
+        
+        # 执行分析
+        result = await analyze_clip_for_split(clip_id, supabase, strategy=strategy)
+        
+        # 构建结果
+        analysis_result = {
+            "can_split": result.can_split,
+            "reason": result.reason,
+            "segment_count": result.segment_count,
+            "segments": [
+                {
+                    "start_ms": seg.start_ms,
+                    "end_ms": seg.end_ms,
+                    "transcript": seg.transcript,
+                    "confidence": seg.confidence
+                }
+                for seg in result.segments
+            ],
+            "split_strategy": result.split_strategy
+        }
+        
+        # 更新为完成
+        supabase.table("tasks").update({
+            "status": "completed",
+            "progress": 100,
+            "result": analysis_result,
+            "completed_at": datetime.utcnow().isoformat()
+        }).eq("id", task_id).execute()
+        
+        logger.info(f"[ClipSplit] 任务完成 {task_id[:8]}... segments={result.segment_count}")
+        
+    except Exception as e:
+        logger.error(f"[ClipSplit] 任务失败 {task_id[:8]}... error={e}")
+        supabase.table("tasks").update({
+            "status": "failed",
+            "error_message": str(e),
+            "completed_at": datetime.utcnow().isoformat()
+        }).eq("id", task_id).execute()
+
+
+@router.post("/{clip_id}/execute-split")
+async def execute_clip_split_api(
+    clip_id: str,
+    request: ExecuteSplitRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    执行 Clip 拆分
+    
+    将原始 clip 拆分为多个子 clip
+    原始 clip 会被删除，新 clips 保留 parent_clip_id 追溯
+    """
+    try:
+        from ..services.clip_split_service import execute_clip_split, SplitSegment
+        
+        # 转换请求格式
+        segments = [
+            SplitSegment(
+                start_ms=seg.start_ms,
+                end_ms=seg.end_ms,
+                transcript=seg.transcript,
+                confidence=seg.confidence
+            )
+            for seg in request.segments
+        ]
+        
+        new_clips = await execute_clip_split(clip_id, segments, supabase)
+        
+        return {
+            "success": True,
+            "message": f"成功拆分为 {len(new_clips)} 个片段",
+            "clips": new_clips
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

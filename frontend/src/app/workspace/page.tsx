@@ -11,8 +11,7 @@ import { ProcessingView } from '../../components/workspace/ProcessingView';
 import { SmartProcessingView } from '../../components/workspace/SmartProcessingView';
 import { ReviewView } from '../../components/workspace/ReviewView';
 import { DefillerModal, type FillerWord } from '../../components/workspace/DefillerModal';
-import { BRollConfigModal } from '../../components/workspace/BRollConfigModal';
-import { WorkflowModal, type WorkflowStep, type EntryMode } from '../../components/workspace/WorkflowModal';
+import { WorkflowModal, type WorkflowStep, type EntryMode, type WorkflowPauseData } from '../../components/workspace/WorkflowModal';
 import { AnalysisResult, startContentAnalysis } from '@/features/editor/lib/smart-v2-api';
 import {
   createSession,
@@ -108,6 +107,8 @@ export default function WorkspacePage() {
     projectId: string;
     step: WorkflowStep;
     mode: EntryMode;
+    enableSmartClip?: boolean;
+    enableBroll?: boolean;
   } | undefined>(undefined);
 
   const handleCreateProject = () => {
@@ -119,10 +120,12 @@ export default function WorkspacePage() {
   const handleResumeWorkflow = (data: {
     sessionId: string;
     projectId: string;
-    step: WorkflowStep;
-    mode: EntryMode;
+    step: string;
+    mode: string;
+    enableSmartClip?: boolean;
+    enableBroll?: boolean;
   }) => {
-    setWorkflowResumeData(data);
+    setWorkflowResumeData(data as { sessionId: string; projectId: string; step: WorkflowStep; mode: EntryMode; enableSmartClip?: boolean; enableBroll?: boolean });
     setShowCreateModal(true);
   };
 
@@ -254,7 +257,15 @@ export default function WorkspacePage() {
       {showCreateModal && (
         <WorkflowModal
           isOpen={showCreateModal}
-          onClose={() => setShowCreateModal(false)}
+          onClose={() => {
+            setShowCreateModal(false);
+            setWorkflowResumeData(undefined); // 完全关闭时清除状态
+          }}
+          onPause={(data: WorkflowPauseData) => {
+            // 暂停时保存状态，下次打开可恢复
+            setWorkflowResumeData(data);
+            setShowCreateModal(false);
+          }}
           resumeData={workflowResumeData}
         />
       )}
@@ -324,9 +335,6 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
     fillerWords: Array<{ word: string; count: number; total_duration_ms: number }>;
     transcriptSegments: Array<{ id: string; text: string; start: number; end: number; silence_info?: { classification: string } }>;
   } | null>(null);
-
-  // === B-Roll 配置弹窗状态 (refine 模式) ===
-  const [showBRollConfigModal, setShowBRollConfigModal] = useState(false);
 
   // === 拖拽处理 ===
   const handleDragOver = (e: React.DragEvent) => {
@@ -926,23 +934,12 @@ function CreateProjectModal({ onClose, onStart }: CreateProjectModalProps) {
               totalDuration: f.total_duration_ms,
             }))}
             onComplete={() => {
-              // ★ 口癖修剪完成后，显示 B-Roll 配置弹窗
+              // ★ 口癖修剪完成
               setShowDefillerModal(false);
-              setShowBRollConfigModal(true);
             }}
           />
         )}
-        
-        {/* ★ B-Roll 配置弹窗 (refine 模式) - 组件内部处理跳转 */}
-        {showBRollConfigModal && uploadedSession && (
-          <BRollConfigModal
-            isOpen={showBRollConfigModal}
-            onClose={() => setShowBRollConfigModal(false)}
-            sessionId={uploadedSession.sessionId}
-            projectId={uploadedSession.projectId}
-            transcriptSegments={defillerData?.transcriptSegments}
-          />
-        )}
+
       </>
     );
   }

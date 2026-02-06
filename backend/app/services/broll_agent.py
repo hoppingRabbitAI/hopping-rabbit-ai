@@ -24,6 +24,13 @@ from app.services.llm.clients import get_analysis_llm
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
+# 🆕 导入规则引擎
+from app.services.remotion_agent.broll_trigger import (
+    detect_broll_triggers,
+    detect_primary_trigger,
+    BrollTriggerType,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -211,11 +218,33 @@ BROLL_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
 # B-Roll Agent 类
 # ============================================
 
+# 🆕 触发类型到 B-Roll 类型的映射
+TRIGGER_TO_BROLL_TYPE = {
+    BrollTriggerType.DATA_CITE: BRollType.IMAGE,       # 数据 → 图表/数字图片
+    BrollTriggerType.EXAMPLE_MENTION: BRollType.VIDEO, # 示例 → 演示视频
+    BrollTriggerType.COMPARISON: BRollType.IMAGE,      # 对比 → 对比图
+    BrollTriggerType.PRODUCT_MENTION: BRollType.VIDEO, # 产品 → 产品视频
+    BrollTriggerType.PROCESS_DESC: BRollType.VIDEO,    # 流程 → 演示视频
+    BrollTriggerType.CONCEPT_VISUAL: BRollType.IMAGE,  # 概念 → 概念图
+}
+
+# 🆕 触发类型到中文名称的映射
+TRIGGER_TYPE_NAMES = {
+    BrollTriggerType.DATA_CITE: "数据引用",
+    BrollTriggerType.EXAMPLE_MENTION: "示例提及",
+    BrollTriggerType.COMPARISON: "对比说明",
+    BrollTriggerType.PRODUCT_MENTION: "产品提及",
+    BrollTriggerType.PROCESS_DESC: "流程描述",
+    BrollTriggerType.CONCEPT_VISUAL: "概念可视化",
+}
+
+
 class BRollAgent:
     """
     B-Roll 智能推荐 Agent
     
     工作流程:
+    0. 🆕 规则引擎快速预检测 - 识别触发类型
     1. analyze_segments - LLM 分析哪些片段需要 B-Roll
     2. search_assets - 为每个片段搜索匹配素材
     3. rank_and_select - 排序并选择最佳素材
@@ -229,6 +258,47 @@ class BRollAgent:
         self.pexels_api_key = pexels_api_key or os.getenv("PEXELS_API_KEY", "")
         self.pixabay_api_key = pixabay_api_key or os.getenv("PIXABAY_API_KEY", "")
         self.llm = get_analysis_llm()
+    
+    def _detect_with_rules(
+        self,
+        segments: List[Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        🆕 使用规则引擎快速检测 B-Roll 触发点
+        
+        Returns:
+            {segment_id: {need_broll, trigger_type, trigger_text, importance, suggested_broll}}
+        """
+        hints = {}
+        
+        for seg in segments:
+            seg_id = seg.get("id", "")
+            text = seg.get("text", "")
+            
+            if not text:
+                hints[seg_id] = {"need_broll": False, "trigger_type": None}
+                continue
+            
+            # 使用规则引擎检测
+            triggers = detect_broll_triggers(text)
+            
+            if triggers:
+                # 取最高优先级的触发
+                primary = triggers[0]  # 已按优先级排序
+                hints[seg_id] = {
+                    "need_broll": True,
+                    "trigger_type": primary.trigger_type,
+                    "trigger_type_name": TRIGGER_TYPE_NAMES.get(primary.trigger_type, ""),
+                    "trigger_text": primary.matched_text,
+                    "importance": primary.importance,
+                    "suggested_broll": primary.suggested_broll,
+                    "suggested_broll_type": TRIGGER_TO_BROLL_TYPE.get(primary.trigger_type, BRollType.VIDEO),
+                    "all_triggers": [(t.trigger_type.value, t.matched_text) for t in triggers],
+                }
+            else:
+                hints[seg_id] = {"need_broll": False, "trigger_type": None}
+        
+        return hints
         
     async def analyze(
         self,
@@ -253,11 +323,16 @@ class BRollAgent:
         """
         logger.info(f"[BRollAgent] 开始分析 {len(segments)} 个片段")
         
-        # Step 1: LLM 分析
+        # 🆕 Step 0: 规则引擎快速预检测
+        rule_hints = self._detect_with_rules(segments)
+        logger.info(f"[BRollAgent] 规则引擎检测到 {sum(1 for h in rule_hints.values() if h['need_broll'])} 个片段需要 B-Roll")
+        
+        # Step 1: LLM 分析 (结合规则提示)
         decisions = await self._analyze_with_llm(
             segments=segments,
             video_style=video_style,
             total_duration_ms=total_duration_ms,
+            rule_hints=rule_hints,  # 🆕 传递规则提示
         )
         
         # Step 2: 搜索素材 (可选)
@@ -295,72 +370,157 @@ class BRollAgent:
         segments: List[Dict[str, Any]],
         video_style: str,
         total_duration_ms: int,
+        rule_hints: Optional[Dict[str, Dict[str, Any]]] = None,  # 🆕 规则提示
     ) -> List[SegmentBRollDecision]:
         """
-        使用 LLM 分析片段
+        使用 LLM 分析片段 (结合规则引擎提示)
         """
         if not segments:
             return []
         
-        # 准备输入数据
+        rule_hints = rule_hints or {}
+        
+        # 准备输入数据 (🆕 添加规则提示)
         segments_for_llm = []
         for seg in segments:
-            segments_for_llm.append({
-                "id": seg.get("id", ""),
+            seg_id = seg.get("id", "")
+            seg_data = {
+                "id": seg_id,
                 "text": seg.get("text", ""),
                 "start_ms": seg.get("start", 0),
                 "end_ms": seg.get("end", 0),
                 "duration_ms": seg.get("end", 0) - seg.get("start", 0),
-            })
+            }
+            
+            # 🆕 添加规则引擎提示
+            hint = rule_hints.get(seg_id, {})
+            if hint.get("need_broll"):
+                seg_data["rule_hint"] = {
+                    "trigger_type": hint.get("trigger_type_name", ""),
+                    "trigger_text": hint.get("trigger_text", ""),
+                    "suggested_broll": hint.get("suggested_broll", ""),
+                    "importance": hint.get("importance", "medium"),
+                }
+            
+            segments_for_llm.append(seg_data)
         
         total_duration_sec = total_duration_ms / 1000 if total_duration_ms else sum(s["duration_ms"] for s in segments_for_llm) / 1000
+        
+        # ★ 打印 LLM 入参
+        # 🆕 记录规则引擎提示
+        rule_triggered = sum(1 for s in segments_for_llm if s.get("rule_hint"))
+        logger.info(f"[BRollAgent] 规则引擎预检测: {rule_triggered}/{len(segments_for_llm)} 片段有触发提示")
+        
+        segments_json_str = json.dumps(segments_for_llm, ensure_ascii=False, indent=2)
+        logger.info(f"[BRollAgent] ========== LLM 入参 ==========")
+        logger.info(f"[BRollAgent] video_style: {video_style}")
+        logger.info(f"[BRollAgent] total_duration_sec: {total_duration_sec:.1f}")
+        logger.info(f"[BRollAgent] segments 数量: {len(segments_for_llm)}")
+        logger.info(f"[BRollAgent] segments_json (前500字符):\n{segments_json_str[:500]}")
+        logger.info(f"[BRollAgent] ================================")
         
         # 调用 LLM
         try:
             chain = BROLL_ANALYSIS_PROMPT | self.llm
             response = await chain.ainvoke({
-                "segments_json": json.dumps(segments_for_llm, ensure_ascii=False, indent=2),
+                "segments_json": segments_json_str,
                 "video_style": video_style,
                 "total_duration_sec": f"{total_duration_sec:.1f}",
             })
             
             # 解析响应
             content = response.content if hasattr(response, 'content') else str(response)
-            decisions = self._parse_llm_response(content, segments)
+            logger.info(f"[BRollAgent] LLM 响应长度: {len(content)}, 前200字符: {content[:200] if content else '(空)'}")
+            
+            if not content or not content.strip():
+                logger.warning(f"[BRollAgent] ⚠️ LLM 返回空内容，使用规则引擎结果降级")
+                # 🆕 使用规则引擎结果降级
+                return self._fallback_to_rules(segments, rule_hints)
+            
+            decisions = self._parse_llm_response(content, segments, rule_hints)
             return decisions
             
         except Exception as e:
-            logger.error(f"[BRollAgent] LLM 分析失败: {e}")
-            # 返回默认决策（不添加 B-Roll）
-            return [
-                SegmentBRollDecision(
-                    segment_id=seg.get("id", f"seg-{i}"),
+            import traceback
+            logger.error(f"[BRollAgent] LLM 分析失败: {type(e).__name__}: {e}")
+            logger.error(f"[BRollAgent] 完整堆栈:\n{traceback.format_exc()}")
+            # 🆕 使用规则引擎结果降级
+            logger.info(f"[BRollAgent] 使用规则引擎结果降级")
+            return self._fallback_to_rules(segments, rule_hints)
+    
+    def _fallback_to_rules(
+        self,
+        segments: List[Dict[str, Any]],
+        rule_hints: Dict[str, Dict[str, Any]],
+    ) -> List[SegmentBRollDecision]:
+        """
+        🆕 LLM 失败时使用规则引擎结果降级
+        """
+        decisions = []
+        for i, seg in enumerate(segments):
+            seg_id = seg.get("id", f"seg-{i}")
+            hint = rule_hints.get(seg_id, {})
+            
+            if hint.get("need_broll"):
+                # 从规则提示构建决策
+                trigger_type = hint.get("trigger_type")
+                suggested_broll_type = hint.get("suggested_broll_type", BRollType.VIDEO)
+                
+                # 简单关键词提取：使用触发文本
+                trigger_text = hint.get("trigger_text", "")
+                keywords_cn = [trigger_text] if trigger_text else []
+                # 简单翻译（可以后续优化）
+                keywords_en = []
+                
+                decisions.append(SegmentBRollDecision(
+                    segment_id=seg_id,
+                    need_broll=True,
+                    broll_type=suggested_broll_type,
+                    reason=f"规则检测: {hint.get('trigger_type_name', '未知')}",
+                    confidence=0.9 if hint.get("importance") == "high" else 0.7,
+                    suggested_duration_ms=min(3000, (seg.get("end", 0) - seg.get("start", 0)) * 0.6),
+                    keywords_cn=keywords_cn,
+                    keywords_en=keywords_en,
+                    scene_description=hint.get("suggested_broll", ""),
+                ))
+            else:
+                decisions.append(SegmentBRollDecision(
+                    segment_id=seg_id,
                     need_broll=False,
                     broll_type=BRollType.NONE,
-                    reason="分析失败，使用默认设置",
-                )
-                for i, seg in enumerate(segments)
-            ]
+                    reason="规则未检测到触发",
+                ))
+        
+        return decisions
     
     def _parse_llm_response(
         self,
         content: str,
         original_segments: List[Dict],
+        rule_hints: Optional[Dict[str, Dict[str, Any]]] = None,  # 🆕 规则提示
     ) -> List[SegmentBRollDecision]:
         """
-        解析 LLM 响应
+        解析 LLM 响应 (结合规则提示增强)
         """
+        rule_hints = rule_hints or {}
+        logger.info(f"[BRollAgent] 开始解析 LLM 响应，原始内容长度: {len(content)}")
+        
         # 提取 JSON
+        json_content = content
         if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
+            json_content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
+            json_content = content.split("```")[1].split("```")[0]
+        
+        logger.info(f"[BRollAgent] 提取 JSON 后长度: {len(json_content)}, 内容预览: {json_content[:300] if json_content else '(空)'}")
         
         try:
-            data = json.loads(content.strip())
+            data = json.loads(json_content.strip())
             decisions_data = data.get("decisions", [])
+            logger.info(f"[BRollAgent] JSON 解析成功，获得 {len(decisions_data)} 个 decisions")
         except json.JSONDecodeError as e:
             logger.warning(f"[BRollAgent] JSON 解析失败: {e}")
+            logger.warning(f"[BRollAgent] 原始内容: {content[:500] if content else '(空)'}")
             decisions_data = []
         
         # 转换为 Pydantic 模型
@@ -399,17 +559,32 @@ class BRollAgent:
             )
             decisions.append(decision)
         
-        # 补充缺失的片段（LLM 可能遗漏）
+        # 补充缺失的片段（LLM 可能遗漏）- 🆕 使用规则引擎结果补充
         returned_ids = {d.segment_id for d in decisions}
         for i, seg in enumerate(original_segments):
             seg_id = seg.get("id", f"seg-{i}")
             if seg_id not in returned_ids:
-                decisions.append(SegmentBRollDecision(
-                    segment_id=seg_id,
-                    need_broll=False,
-                    broll_type=BRollType.NONE,
-                    reason="默认不添加",
-                ))
+                # 检查规则引擎是否检测到该片段需要 B-Roll
+                hint = rule_hints.get(seg_id, {})
+                if hint.get("need_broll"):
+                    # 使用规则引擎结果补充
+                    decisions.append(SegmentBRollDecision(
+                        segment_id=seg_id,
+                        need_broll=True,
+                        broll_type=hint.get("suggested_broll_type", BRollType.VIDEO),
+                        reason=f"规则补充: {hint.get('trigger_type_name', '')}",
+                        confidence=0.85,
+                        suggested_duration_ms=3000,
+                        keywords_cn=[hint.get("trigger_text", "")] if hint.get("trigger_text") else [],
+                        scene_description=hint.get("suggested_broll", ""),
+                    ))
+                else:
+                    decisions.append(SegmentBRollDecision(
+                        segment_id=seg_id,
+                        need_broll=False,
+                        broll_type=BRollType.NONE,
+                        reason="默认不添加",
+                    ))
         
         # 按原始顺序排序
         id_order = {seg.get("id", f"seg-{i}"): i for i, seg in enumerate(original_segments)}
@@ -422,100 +597,81 @@ class BRollAgent:
         keywords: List[str],
         broll_type: BRollType,
         duration_hint_ms: int = 3000,
-        limit: int = 5,
+        limit: int = 3,
     ) -> List[Dict[str, Any]]:
         """
         搜索 B-Roll 素材
         
         搜索策略:
-        1. 先用第一个关键词搜索（最精准）
-        2. 如果结果不足，用组合关键词搜索
-        3. 如果还不足，用第二个关键词单独搜索
-        4. 按相关度排序返回
+        - 使用 LLM 提供的关键词组合成一个查询字符串
+        - 单次 API 调用获取结果
+        - LLM 负责生成优质关键词，搜索层只负责执行
         """
-        assets = []
-        seen_ids = set()  # 去重
-        
         if not keywords:
-            return assets
+            return []
         
-        # 搜索策略：多轮搜索
-        search_queries = []
+        # 关键词组合：用空格连接，Pexels API 会自动处理
+        # 例如: ["smartphone", "camera"] -> "smartphone camera"
+        query = " ".join(keywords[:3])  # 最多取前3个关键词
         
-        # 第一轮：第一个关键词（最精准）
-        if keywords:
-            search_queries.append(keywords[0])
+        assets = []
         
-        # 第二轮：前两个关键词组合
-        if len(keywords) >= 2:
-            search_queries.append(f"{keywords[0]} {keywords[1]}")
+        # 搜索 Pexels
+        if self.pexels_api_key and broll_type == BRollType.VIDEO:
+            try:
+                pexels_results = await self._search_pexels(
+                    query=query, 
+                    limit=limit,
+                    min_duration_sec=max(2, duration_hint_ms // 1000 - 1),
+                )
+                assets.extend(pexels_results)
+            except Exception as e:
+                logger.warning(f"[BRollAgent] Pexels 搜索 '{query}' 失败: {e}")
         
-        # 第三轮：第二个关键词单独
-        if len(keywords) >= 2:
-            search_queries.append(keywords[1])
+        # Pexels 不够时尝试 Pixabay 补充
+        if len(assets) < limit and self.pixabay_api_key:
+            try:
+                pixabay_results = await self._search_pixabay(
+                    query=query, 
+                    media_type="video" if broll_type == BRollType.VIDEO else "photo",
+                    limit=limit - len(assets)
+                )
+                assets.extend(pixabay_results)
+            except Exception as e:
+                logger.warning(f"[BRollAgent] Pixabay 搜索 '{query}' 失败: {e}")
         
-        for query in search_queries:
-            if len(assets) >= limit:
-                break
-                
-            # 尝试 Pexels
-            if self.pexels_api_key and broll_type == BRollType.VIDEO:
-                try:
-                    pexels_results = await self._search_pexels(
-                        query, 
-                        limit=limit - len(assets),
-                        min_duration_sec=max(2, duration_hint_ms // 1000 - 1),  # 至少比建议时长少1秒
-                    )
-                    for r in pexels_results:
-                        if r["id"] not in seen_ids:
-                            seen_ids.add(r["id"])
-                            assets.append(r)
-                except Exception as e:
-                    logger.warning(f"[BRollAgent] Pexels 搜索 '{query}' 失败: {e}")
-            
-            # 如果结果不足，尝试 Pixabay
-            if len(assets) < limit and self.pixabay_api_key:
-                try:
-                    pixabay_results = await self._search_pixabay(
-                        query, 
-                        media_type="video" if broll_type == BRollType.VIDEO else "photo",
-                        limit=limit - len(assets)
-                    )
-                    for r in pixabay_results:
-                        if r["id"] not in seen_ids:
-                            seen_ids.add(r["id"])
-                            assets.append(r)
-                except Exception as e:
-                    logger.warning(f"[BRollAgent] Pixabay 搜索 '{query}' 失败: {e}")
-        
-        # 按相关度排序
-        assets.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-        
-        logger.info(f"[BRollAgent] 搜索完成: keywords={keywords}, 找到 {len(assets)} 个素材")
+        logger.info(f"[BRollAgent] 搜索完成: query='{query}', 找到 {len(assets)} 个素材")
         return assets[:limit]
     
     async def _search_pexels(
         self,
         query: str,
-        limit: int = 5,
+        limit: int = 3,
         min_duration_sec: int = 2,
     ) -> List[Dict[str, Any]]:
         """
         搜索 Pexels 视频
         
-        Args:
-            query: 搜索关键词
-            limit: 返回数量
-            min_duration_sec: 最小时长(秒)
+        Pexels Video Search API:
+        - URL: GET https://api.pexels.com/videos/search
+        - Headers: Authorization: {API_KEY}
+        - Params: query (required), orientation, size, locale, page, per_page
+        - Response: {page, per_page, total_results, url, videos: [Video...]}
+        
+        Video 对象:
+        - id, width, height, url, image, duration (秒)
+        - user: {id, name, url}
+        - video_files: [{id, quality, file_type, width, height, fps, link}, ...]
+        - video_pictures: [{id, picture, nr}, ...]
         """
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://api.pexels.com/videos/search",
                 params={
                     "query": query,
-                    "per_page": min(limit * 2, 20),  # 多拉一些用于过滤
-                    "orientation": "landscape",
-                    "size": "medium",  # medium = Full HD
+                    "per_page": min(limit * 2, 10),  # 请求数量：limit*2 用于过滤，最多10条
+                    "orientation": "landscape",      # landscape | portrait | square
+                    "size": "medium",                # large(4K) | medium(FullHD) | small(HD)
                 },
                 headers={"Authorization": self.pexels_api_key},
                 timeout=10.0,
@@ -525,7 +681,7 @@ class BRollAgent:
             
             results = []
             for video in data.get("videos", []):
-                duration_sec = video.get("duration", 0)
+                duration_sec = video.get("duration", 0)  # Pexels 返回的是秒
                 
                 # 过滤太短的视频
                 if duration_sec < min_duration_sec:
@@ -534,35 +690,40 @@ class BRollAgent:
                 # 选择最佳质量的视频文件 (优先 HD 1280+)
                 video_files = video.get("video_files", [])
                 best_file = None
-                for f in sorted(video_files, key=lambda x: x.get("width", 0), reverse=True):
-                    if f.get("quality") == "hd" and f.get("width", 0) >= 1280:
+                
+                # 按宽度降序排列，选择 HD 质量的文件
+                for f in sorted(video_files, key=lambda x: x.get("width", 0) or 0, reverse=True):
+                    quality = f.get("quality", "")
+                    width = f.get("width") or 0
+                    # 优先选 hd 且宽度 >= 1280 的
+                    if quality == "hd" and width >= 1280:
                         best_file = f
                         break
-                if not best_file and video_files:
-                    best_file = max(video_files, key=lambda x: x.get("width", 0))
+                
+                # 如果没找到合适的 HD，取最大宽度的（排除 hls）
+                if not best_file:
+                    for f in sorted(video_files, key=lambda x: x.get("width", 0) or 0, reverse=True):
+                        if f.get("quality") != "hls":  # hls 没有 width/height
+                            best_file = f
+                            break
                 
                 if not best_file:
                     continue
                 
-                # 计算相关度评分
-                relevance = 0.9  # Pexels 基础分
-                # 时长适中的加分
-                if 3 <= duration_sec <= 10:
-                    relevance += 0.05
-                # 高清加分
-                if best_file.get("width", 0) >= 1920:
-                    relevance += 0.03
-                
                 results.append({
                     "id": f"pexels-{video['id']}",
                     "source": "pexels",
+                    "pexels_url": video.get("url", ""),  # Pexels 页面链接（用于归属）
                     "thumbnail_url": video.get("image", ""),
                     "video_url": best_file.get("link", ""),
-                    "width": best_file.get("width", 1920),
-                    "height": best_file.get("height", 1080),
+                    "width": best_file.get("width") or 1920,
+                    "height": best_file.get("height") or 1080,
                     "duration_ms": duration_sec * 1000,
+                    "quality": best_file.get("quality", "hd"),
+                    "file_type": best_file.get("file_type", "video/mp4"),
+                    "fps": best_file.get("fps"),
                     "author": video.get("user", {}).get("name", ""),
-                    "relevance_score": round(relevance, 2),
+                    "author_url": video.get("user", {}).get("url", ""),
                     "query": query,  # 记录搜索词，便于调试
                 })
                 

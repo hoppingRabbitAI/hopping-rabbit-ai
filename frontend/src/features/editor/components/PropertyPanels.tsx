@@ -10,6 +10,7 @@ import { SpeedPanel } from './SpeedPanel';
 import { ImageAdjustPanel } from './ImageAdjustPanel';
 import { BeautyPanel } from './BeautyPanel';
 import { BackgroundPanel } from './BackgroundPanel';
+import { VisualAgentPanel } from './VisualAgentPanel';
 
 export function PropertyPanels() {
   const activeSidebarPanel = useEditorStore((s) => s.activeSidebarPanel);
@@ -86,6 +87,11 @@ export function PropertyPanels() {
       {/* 背景设置面板 */}
       {activeSidebarPanel === 'background' && (
         <BackgroundPanel onClose={closePanel} />
+      )}
+
+      {/* 智能视觉编排面板 */}
+      {activeSidebarPanel === 'visual-agent' && (
+        <VisualAgentPanel onClose={closePanel} />
       )}
     </div>
   );

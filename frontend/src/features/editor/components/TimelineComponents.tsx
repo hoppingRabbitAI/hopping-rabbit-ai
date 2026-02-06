@@ -145,8 +145,46 @@ interface ClipThumbnailProps {
   height: number;
 }
 
-// 全局生成锁，防止同一个 clip 重复生成
-const generatingClips = new Set<string>();
+// 全局生成锁，防止同一个 asset 重复生成
+// ★★★ 治本：锁的粒度改为 assetId，不包含 thumbnailCount ★★★
+const generatingAssets = new Set<string>();
+// ★★★ 等待队列：同一 asset 的其他 clip 等待首个生成完成 ★★★
+const assetGenerationCallbacks = new Map<string, Array<(thumbnails: string[] | null) => void>>();
+
+// ★★★ 并发控制：限制同时生成缩略图的数量 ★★★
+const MAX_CONCURRENT_THUMBNAIL_GEN = 2;
+let activeThumbnailGenCount = 0;
+const pendingThumbnailGen: (() => void)[] = [];
+
+function acquireThumbnailSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    if (activeThumbnailGenCount < MAX_CONCURRENT_THUMBNAIL_GEN) {
+      activeThumbnailGenCount++;
+      resolve();
+    } else {
+      pendingThumbnailGen.push(resolve);
+    }
+  });
+}
+
+function releaseThumbnailSlot() {
+  activeThumbnailGenCount--;
+  const next = pendingThumbnailGen.shift();
+  if (next) {
+    activeThumbnailGenCount++;
+    next();
+  }
+}
+
+// ★★★ 检查 URL 是否适合生成缩略图 ★★★
+function isThumbnailCompatibleUrl(url: string): boolean {
+  if (!url) return false;
+  // HLS 流不适合直接生成缩略图
+  if (url.includes('.m3u8') || url.includes('/hls/')) return false;
+  // 代理流（asset-proxy）可能也不适合
+  if (url.includes('/api/assets/') && url.includes('/proxy')) return false;
+  return true;
+}
 
 export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }: ClipThumbnailProps) {
   const [thumbnails, setThumbnails] = useState<string[]>([]);
@@ -198,14 +236,17 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
   }, []);
   
   // 生成缩略图（带缓存和生成锁）
+  // ★★★ 治本：同一个 asset 只生成一次缩略图，其他 clip 复用 ★★★
   useEffect(() => {
     if (!isInView || !clip.mediaUrl || clip.clipType !== 'video') {
       setIsLoading(false);
       return;
     }
     
-    // 检查缓存 - 使用 assetId + sourceStart 作为缓存 key（同 asset 可复用）
+    // ★★★ 缓存 key 使用 assetId（同 asset 共享缩略图）★★★
     const cacheKey = clip.assetId || clip.id;
+    
+    // 1. 检查缓存（任意数量的缩略图都可以复用）
     const cached = getCachedThumbnails(cacheKey, thumbnailCount);
     if (cached) {
       setThumbnails(cached);
@@ -213,36 +254,35 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
       return;
     }
     
-    // 检查是否正在生成中（防止重复触发）
-    const lockKey = `${cacheKey}:${thumbnailCount}`;
-    if (generatingClips.has(lockKey)) {
-      // 已经在生成中，等待完成后重试
-      const checkInterval = setInterval(() => {
-        const result = getCachedThumbnails(cacheKey, thumbnailCount);
+    // 2. 检查是否正在生成中（同 asset 的其他 clip 等待）
+    if (generatingAssets.has(cacheKey)) {
+      // 注册回调，等待生成完成
+      const callbacks = assetGenerationCallbacks.get(cacheKey) || [];
+      callbacks.push((result) => {
         if (result) {
           setThumbnails(result);
-          setIsLoading(false);
-          clearInterval(checkInterval);
         }
-      }, 500);
-      return () => clearInterval(checkInterval);
+        setIsLoading(false);
+      });
+      assetGenerationCallbacks.set(cacheKey, callbacks);
+      return;
     }
     
-    // 加锁
-    generatingClips.add(lockKey);
+    // 3. 加锁，开始生成
+    generatingAssets.add(cacheKey);
     
     let isCancelled = false;
     const video = document.createElement('video');
     video.src = clip.mediaUrl;
     if (process.env.NODE_ENV === 'development') {
-      console.log('[Thumbnail] 🖼️ 开始加载视频缩略图:', {
+      console.log('[Thumbnail] 🖼️ 开始生成缩略图（首个 clip）:', {
         clipId: clip.id?.slice(-8),
-        assetId: clip.assetId?.slice(-8),
+        assetId: cacheKey.slice(-8),
       });
     }
     video.crossOrigin = 'anonymous';
     video.preload = 'metadata';
-    video.muted = true; // 静音以避免自动播放限制
+    video.muted = true;
     
     const generateThumbnails = async () => {
       try {
@@ -286,15 +326,35 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
         canvas.width = thumbWidth;
         canvas.height = thumbHeight;
         
-        const sourceStart = clip.sourceStart || 0;
-        const interval = clip.duration / thumbnailCount;
+        // ★★★ 时间单位说明 ★★★
+        // clip.sourceStart, clip.duration 是毫秒
+        // video.currentTime, video.duration 是秒
+        const sourceStartMs = clip.sourceStart || 0;
+        const intervalMs = clip.duration / thumbnailCount;
         const newThumbnails: string[] = [];
+        
+        // ★★★ 使用 clip 的 originDuration（秒）或从 clip.duration 转换 ★★★
+        // 不依赖 video.duration，因为流式代理可能返回错误值
+        const sourceDurationSec = clip.originDuration || (clip.duration / 1000) || video.duration;
+        
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Thumbnail] 时间计算:', { 
+            clipId: clip.id.slice(-8),
+            sourceStartMs,
+            clipDurationMs: clip.duration,
+            sourceDurationSec,
+            videoDurationSec: video.duration,
+          });
+        }
         
         for (let i = 0; i < thumbnailCount; i++) {
           if (isCancelled) return;
           
-          const time = sourceStart + (i + 0.5) * interval;
-          video.currentTime = Math.min(time, video.duration - 0.1);
+          // 计算缩略图对应的源视频时间（毫秒）
+          const timeMs = sourceStartMs + (i + 0.5) * intervalMs;
+          // 转为秒，并限制在有效范围内
+          const timeSec = Math.min(timeMs / 1000, sourceDurationSec - 0.1);
+          video.currentTime = Math.max(0, timeSec);
           
           await new Promise<void>((resolve) => {
             video.onseeked = () => resolve();
@@ -312,16 +372,24 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
           // 缓存结果 - 使用 cacheKey
           setCachedThumbnails(cacheKey, thumbnailCount, newThumbnails);
           setThumbnails(newThumbnails);
+          
+          // ★★★ 通知所有等待的 clip ★★★
+          const callbacks = assetGenerationCallbacks.get(cacheKey) || [];
+          callbacks.forEach(cb => cb(newThumbnails));
+          assetGenerationCallbacks.delete(cacheKey);
         }
       } catch (error) {
         // ★ 静默处理缩略图生成失败，使用渐变色作为后备
         if (process.env.NODE_ENV === 'development') {
           debugWarn('Failed to generate thumbnails:', error);
         }
-        // 不设置缩略图，让 UI 显示渐变色后备
+        // ★★★ 通知等待者生成失败 ★★★
+        const callbacks = assetGenerationCallbacks.get(cacheKey) || [];
+        callbacks.forEach(cb => cb(null));
+        assetGenerationCallbacks.delete(cacheKey);
       } finally {
         // 解锁
-        generatingClips.delete(lockKey);
+        generatingAssets.delete(cacheKey);
         if (!isCancelled) setIsLoading(false);
       }
     };
@@ -330,7 +398,6 @@ export const ClipThumbnail = memo(function ClipThumbnail({ clip, width, height }
     
     return () => {
       isCancelled = true;
-      // 注意：取消时不解锁，让其他等待者继续等待直到超时
       // 延迟清空 src，避免中断正在进行的异步操作
       setTimeout(() => {
         video.src = '';

@@ -129,7 +129,7 @@ export function ContextMenu() {
     }
   };
 
-  const handleSetAspectRatio = (ratio: '16:9' | '9:16' | '1:1') => {
+  const handleSetAspectRatio = (ratio: '16:9' | '9:16') => {
     if (contextMenu.clipId) {
       updateClip(contextMenu.clipId, { aspectRatio: ratio });
       closeContextMenu();
@@ -220,13 +220,6 @@ export function ContextMenu() {
             >
               <RectangleVertical size={12} />
               <span>9:16 竖屏</span>
-            </button>
-            <button
-              onClick={() => handleSetAspectRatio('1:1')}
-              className={`w-full px-3 py-1.5 text-[11px] flex items-center space-x-2 hover:bg-gray-100 transition-colors ${currentAspectRatio === '1:1' ? 'text-gray-700' : 'text-gray-700'}`}
-            >
-              <Square size={12} />
-              <span>1:1 方形</span>
             </button>
           </div>
         )}

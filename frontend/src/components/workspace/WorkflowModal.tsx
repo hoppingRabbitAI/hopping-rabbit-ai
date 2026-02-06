@@ -9,12 +9,10 @@ import {
     FileVideo,
     Trash2,
     Scissors,
-    Film,
     Check,
     Loader2,
     Sparkles,
     User,
-    Palette,
     ChevronRight,
     RefreshCw,
     Layout,
@@ -25,10 +23,29 @@ import {
     Pause,
     Volume2,
     Wind,
+    Search,
+    Download,
+    Film,
+    MessageSquare,
+    FileText,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { SmartBroadcastStep } from './SmartBroadcastStep';
+import { RemotionConfigPreview } from '@/remotion/components/RemotionConfigPreview';
+import { renderAndDownload } from '@/lib/api/remotion-render';
+import { 
+    BRollConfigPanel, 
+    PiPSettingsPanel,
+    DEFAULT_BROLL_CONFIG, 
+    type BRollConfigState,
+    type MainVideoInfo 
+} from './BRollConfigPanel';
+import VisualStudioPanel from './VisualStudio';
+import { 
+    DEFAULT_VISUAL_STUDIO_CONFIG,
+    type VisualStudioConfig,
+} from './VisualStudio/types';
 
 function cn(...inputs: (string | undefined | null | false)[]) {
     return twMerge(clsx(inputs));
@@ -43,9 +60,10 @@ const log = (...args: unknown[]) => DEBUG && console.log('[WorkflowModal]', ...a
 // ==========================================
 // 工作流步骤定义
 // ==========================================
-export type WorkflowStep = 'entry' | 'upload' | 'config' | 'processing' | 'defiller' | 'broll_config';
+export type WorkflowStep = 'entry' | 'upload' | 'processing' | 'defiller' | 'visual-studio' | 'completed';
 
 export type EntryMode = 'ai-talk' | 'refine';
+export type AspectRatio = '9:16' | '16:9';
 
 // ==========================================
 // 类型定义
@@ -69,6 +87,7 @@ interface TranscriptSegment {
     text: string;
     start: number;
     end: number;
+    assetId?: string;  // 关联的 asset ID
     silence_info?: { classification: string };
 }
 
@@ -89,6 +108,8 @@ interface ClipSuggestion {
     timeRange: { start: number; end: number };
     suggestedAssets: BRollAsset[];
     selectedAssetId?: string;
+    searchKeywords?: string[];  // ★ V2: LLM 生成的搜索关键词
+    isSearching?: boolean;      // 是否正在搜索
 }
 
 interface BRollAsset {
@@ -102,16 +123,56 @@ interface BRollAsset {
     relevanceScore?: number;
 }
 
+// ★ V2: 智能分析阶段创建的 clip 信息
+interface CreatedClipV2 {
+    id: string;
+    text: string;
+    start_time: number;
+    end_time: number;
+    is_filler: boolean;
+    filler_type?: string;
+    filler_reason?: string;
+    confidence: number;
+}
+
+// ★ V2: Remotion 配置中的 B-Roll 组件
+// display_mode 只有两种：fullscreen（全屏覆盖）或 pip（部分位置）
+interface BRollComponentV2 {
+    id: string;
+    type: 'broll';
+    start_ms: number;
+    end_ms: number;
+    search_keywords: string[];
+    display_mode: 'fullscreen' | 'pip';  // ★ 只有两种模式
+    transition_in: string;
+    transition_out: string;
+    asset_url?: string;
+    asset_id?: string;
+}
+
+// 分镜策略类型
+export type ShotStrategy = 'scene' | 'sentence' | 'paragraph';
+
+// 暂停时保存的状态数据
+export interface WorkflowPauseData {
+    sessionId: string;
+    projectId: string;
+    step: WorkflowStep;
+    mode: EntryMode;
+    aspectRatio?: AspectRatio;
+    // ★★★ 新增：功能开关状态（动态步骤依赖）★★★
+    enableSmartClip?: boolean;
+    enableBroll?: boolean;
+    shotStrategy?: ShotStrategy;  // 分镜策略
+}
+
 interface WorkflowModalProps {
     isOpen: boolean;
     onClose: () => void;
+    // 暂时关闭弹窗但保留状态（用于右上角 X 按钮）
+    onPause?: (data: WorkflowPauseData) => void;
     // 如果有 resumeData，则从指定步骤恢复
-    resumeData?: {
-        sessionId: string;
-        projectId: string;
-        step: WorkflowStep;
-        mode: EntryMode;
-    };
+    resumeData?: WorkflowPauseData;
 }
 
 // ==========================================
@@ -119,23 +180,38 @@ interface WorkflowModalProps {
 // ==========================================
 function StepIndicator({ 
     currentStep, 
-    mode 
+    mode,
+    enableSmartClip,
+    enableBroll,
 }: { 
     currentStep: WorkflowStep; 
     mode: EntryMode;
+    enableSmartClip: boolean;
+    enableBroll: boolean;
 }) {
-    const steps = mode === 'refine' 
-        ? [
-            { key: 'upload', label: '上传视频', icon: Upload },
-            { key: 'config', label: '分析配置', icon: Palette },
-            { key: 'processing', label: '智能分析', icon: Sparkles },
-            { key: 'defiller', label: '口癖修剪', icon: Scissors },
-            { key: 'broll_config', label: 'B-Roll', icon: Film },
-        ]
-        : [
-            { key: 'upload', label: '上传素材', icon: Upload },
-            { key: 'processing', label: 'AI 处理', icon: Sparkles },
-        ];
+    // ★★★ 动态计算步骤列表 ★★★
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const steps: Array<{ key: string; label: string; icon: any }> = [];
+    
+    if (mode === 'refine') {
+        // 上传步骤始终存在
+        steps.push({ key: 'upload', label: '上传并配置', icon: Upload });
+        
+        // 智能剪辑开启时添加：智能分析 + 口癖修剪
+        if (enableSmartClip) {
+            steps.push({ key: 'processing', label: '智能分析', icon: Sparkles });
+            steps.push({ key: 'defiller', label: '口癖修剪', icon: Scissors });
+        }
+        
+        // B-Roll 开启时添加：AI 视觉工作室
+        if (enableBroll) {
+            steps.push({ key: 'visual-studio', label: 'AI 视觉', icon: Sparkles });
+        }
+    } else {
+        // AI 模式保持原样
+        steps.push({ key: 'upload', label: '上传素材', icon: Upload });
+        steps.push({ key: 'processing', label: 'AI 处理', icon: Sparkles });
+    }
 
     const currentIndex = steps.findIndex(s => s.key === currentStep);
 
@@ -187,17 +263,103 @@ function StepIndicator({
 // ==========================================
 // 主组件
 // ==========================================
-export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProps) {
+export function WorkflowModal({ isOpen, onClose, onPause, resumeData }: WorkflowModalProps) {
     const router = useRouter();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // === 流程状态 ===
     const [currentStep, setCurrentStep] = useState<WorkflowStep>(resumeData?.step || 'entry');
     const [entryMode, setEntryMode] = useState<EntryMode>(resumeData?.mode || 'refine');
+    const [aspectRatio, setAspectRatio] = useState<AspectRatio | null>(resumeData?.aspectRatio || null);
+    const [aspectRatioError, setAspectRatioError] = useState<string | null>(null);
 
     // === Session 数据 ===
     const [sessionId, setSessionId] = useState<string>(resumeData?.sessionId || '');
     const [projectId, setProjectId] = useState<string>(resumeData?.projectId || '');
+    
+    // 分镜策略状态（需要在 useEffect 之前定义）
+    const [shotStrategy, setShotStrategy] = useState<ShotStrategy | null>(resumeData?.shotStrategy ?? null);
+
+    // ★ visual-studio 步骤时，使用 useEffect 跳转到视觉编辑器（避免在渲染时调用 router.push）
+    useEffect(() => {
+        if (currentStep === 'visual-studio' && sessionId && projectId) {
+            const strategy = shotStrategy || 'scene';
+            router.push(`/visual-editor?project=${projectId}&session=${sessionId}&strategy=${strategy}`);
+        }
+    }, [currentStep, sessionId, projectId, router, shotStrategy]);
+
+    // ★ 暂停并保存状态（用于右上角 X 按钮）
+    const handlePause = async () => {
+        // 只有在有意义的步骤才保存状态（entry 步骤不需要保存）
+        if (currentStep !== 'entry' && sessionId && projectId) {
+            // ★ 保存到后端数据库，支持刷新页面后恢复
+            try {
+                const { authFetch } = await import('@/lib/supabase/session');
+                await authFetch(`/api/workspace/sessions/${sessionId}/workflow-step`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workflow_step: currentStep,
+                        entry_mode: entryMode,
+                        enable_smart_clip: enableSmartClip,
+                        enable_broll: enableBroll,
+                        aspect_ratio: aspectRatio || undefined,
+                    }),
+                });
+                log('工作流状态已保存到数据库:', { sessionId, step: currentStep, mode: entryMode, enableSmartClip, enableBroll });
+            } catch (err) {
+                log('保存工作流状态失败（不影响关闭）:', err);
+            }
+            
+            // 通知父组件保存前端状态
+            if (onPause) {
+                onPause({
+                    sessionId,
+                    projectId,
+                    step: currentStep,
+                    mode: entryMode,
+                    aspectRatio: aspectRatio || undefined,
+                    enableSmartClip,
+                    enableBroll,
+                });
+            }
+        }
+        onClose();
+    };
+
+    // ★ 更新步骤并同步到后端（治本方案）
+    const updateStep = async (newStep: WorkflowStep, currentSessionId?: string, strategy?: ShotStrategy | null) => {
+        setCurrentStep(newStep);
+        
+        // ★★★ 如果传入了新的 sessionId，更新状态 ★★★
+        if (currentSessionId && currentSessionId !== sessionId) {
+            console.log('[Workflow] 更新 sessionId:', sessionId, '->', currentSessionId);
+            setSessionId(currentSessionId);
+        }
+        
+        // 同步到后端数据库（entry 步骤不需要保存）
+        const sid = currentSessionId || sessionId;
+        if (newStep !== 'entry' && sid) {
+            try {
+                const { authFetch } = await import('@/lib/supabase/session');
+                await authFetch(`/api/workspace/sessions/${sid}/workflow-step`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workflow_step: newStep,
+                        entry_mode: entryMode,
+                        enable_smart_clip: enableSmartClip,
+                        enable_broll: enableBroll,
+                        shot_strategy: strategy ?? shotStrategy,
+                        aspect_ratio: aspectRatio || undefined,
+                    }),
+                });
+                log('工作流步骤已同步到后端:', { sessionId: sid, step: newStep, enableSmartClip, enableBroll, shotStrategy: strategy ?? shotStrategy });
+            } catch (err) {
+                log('同步工作流步骤失败（不影响继续）:', err);
+            }
+        }
+    };
 
     // === Step 1: Upload 状态 ===
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -215,28 +377,81 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
     const [fillerSegments, setFillerSegments] = useState<FillerSegment[]>([]); // 所有口癖片段列表
     const [activeFillerSegment, setActiveFillerSegment] = useState<FillerSegment | null>(null); // 当前预览的片段
     const [isApplyingTrim, setIsApplyingTrim] = useState(false);
-    const [showBRollChoice, setShowBRollChoice] = useState(false); // 显示B-Roll选择弹窗
     const [assetId, setAssetId] = useState<string>(''); // 视频资源ID用于预览
     const [videoUrl, setVideoUrl] = useState<string>(''); // 视频URL用于预览
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [isVideoPlaying, setIsVideoPlaying] = useState(false);
     const [videoProgress, setVideoProgress] = useState(0);
+    const [currentTimeMs, setCurrentTimeMs] = useState(0); // Remotion Player 当前时间（毫秒）
+    // ★★★ 新增：用户选择的片段ID集合 ★★★
+    const [selectedSegmentIds, setSelectedSegmentIds] = useState<Set<string>>(new Set());
 
     // === Step Config: 分析配置选项 ===
-    const [configEnableBroll, setConfigEnableBroll] = useState(true);
-    const [configDetectFillers, setConfigDetectFillers] = useState(true);  // 识别口癖（含重复词）
-    const [configDetectBreaths, setConfigDetectBreaths] = useState(true);  // 识别换气
+    // ★★★ 两个主开关 ★★★
+    const [enableSmartClip, setEnableSmartClip] = useState(resumeData?.enableSmartClip ?? true);   // 智能剪辑总开关
+    const [enableBroll, setEnableBroll] = useState(resumeData?.enableBroll ?? false);           // B-Roll 总开关
+    // 注意: shotStrategy 已在上方 useEffect 之前定义
+    
+    // ★★★ 智能清理三选项（仅在 enableSmartClip 为 true 时显示）★★★
+    const [configCutSilences, setConfigCutSilences] = useState(true);       // 删除静音片段（换气/停顿/死寂）
+    const [configCutBadTakes, setConfigCutBadTakes] = useState(true);       // 删除NG/重复片段
+    const [configRemoveFillers, setConfigRemoveFillers] = useState(true);   // 删除口癖词（嗯/那个/就是）
+    
+    // ★★★ AI 视觉工作室配置（升级版 B-Roll）★★★
+    const [visualStudioConfig, setVisualStudioConfig] = useState<VisualStudioConfig>(DEFAULT_VISUAL_STUDIO_CONFIG);
+    
+    // ★★★ B-Roll 配置选项（保留兼容）★★★
+    const [brollConfig, setBrollConfig] = useState<BRollConfigState>(DEFAULT_BROLL_CONFIG);
+    const [mainVideoInfo, setMainVideoInfo] = useState<MainVideoInfo | undefined>(undefined);  // ★ 主视频信息
+    const [faceDetectionResult, setFaceDetectionResult] = useState<{
+        dominantRegion?: { x: number; y: number; width: number; height: number };
+        safePipPositions: string[];
+    } | undefined>(undefined);
 
-    // === Step 4: B-Roll Config 状态 ===
-    const [pipEnabled, setPipEnabled] = useState(true);
-    const [brollEnabled, setBrollEnabled] = useState(true);
-    const [clips, setClips] = useState<ClipSuggestion[]>([]);
-    const [activeClipId, setActiveClipId] = useState<string | null>(null);
-    const [isLoadingClips, setIsLoadingClips] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    // ★ V2: 智能分析阶段创建的 clips 和 Remotion 配置
+    const [createdClipsV2, setCreatedClipsV2] = useState<CreatedClipV2[]>([]);
+    const [brollComponentsV2, setBrollComponentsV2] = useState<BRollComponentV2[]>([]);
+    const [remotionConfigV2, setRemotionConfigV2] = useState<{
+        version: string;
+        total_duration_ms: number;
+        fps: number;
+        theme: string;
+        color_palette: string[];
+        font_family: string;
+        text_components: Array<{
+            id: string;
+            type: 'text';
+            start_ms: number;
+            end_ms: number;
+            text: string;
+            animation: string;  // main-subtitle, keyword-highlight, 等
+            position: string;   // subtitle-main, subtitle-keyword, 等
+            style: { 
+                fontSize: number; 
+                color: string; 
+                fontWeight?: string;
+                backgroundColor?: string;  // ★ keyword-highlight 需要
+            };
+            linkedSubtitleId?: string;  // ★ 可选：关联的主字幕 ID
+        }>;
+        broll_components: BRollComponentV2[];
+        chapter_components: Array<{
+            id: string;
+            type: 'chapter';
+            start_ms: number;
+            end_ms: number;
+            title: string;
+            subtitle?: string;
+            style: string;
+        }>;
+    } | null>(null);
 
     // === 通用状态 ===
     const [error, setError] = useState<string | null>(null);
+    
+    // === Remotion 渲染导出状态 ===
+    const [isRendering, setIsRendering] = useState(false);
+    const [renderProgress, setRenderProgress] = useState(0);
 
     // 恢复流程
     useEffect(() => {
@@ -245,20 +460,77 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
             setEntryMode(resumeData.mode);
             setSessionId(resumeData.sessionId);
             setProjectId(resumeData.projectId);
+            if (resumeData.aspectRatio) setAspectRatio(resumeData.aspectRatio);
 
             // 根据步骤加载数据
             if (resumeData.step === 'defiller') {
                 loadDefillerData(resumeData.sessionId);
-            } else if (resumeData.step === 'broll_config') {
-                loadBRollData(resumeData.sessionId);
             }
         }
     }, [resumeData]);
 
+    // ★★★ 选择文件后，自动提取主视频尺寸信息（用于 B-Roll 位置预览）★★★
+    useEffect(() => {
+        if (selectedFiles.length === 0) {
+            setMainVideoInfo(undefined);
+            return;
+        }
+
+        const file = selectedFiles[0];
+        const url = URL.createObjectURL(file);
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+
+        let videoDuration = 0;
+
+        video.onloadedmetadata = () => {
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            videoDuration = video.duration;
+
+            // 生成封面图
+            video.currentTime = 1; // 跳转到 1 秒处
+        };
+
+        video.onseeked = () => {
+            // 在 canvas 上绘制封面图
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(video, 0, 0);
+                const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.8);
+                
+                setMainVideoInfo({
+                    width: video.videoWidth,
+                    height: video.videoHeight,
+                    isVertical: video.videoHeight > video.videoWidth,
+                    thumbnailUrl,
+                    duration: videoDuration, // ★ 添加视频时长
+                });
+            }
+            URL.revokeObjectURL(url);
+        };
+
+        video.onerror = () => {
+            log('获取视频信息失败');
+            URL.revokeObjectURL(url);
+        };
+
+        video.src = url;
+
+        return () => {
+            URL.revokeObjectURL(url);
+        };
+    }, [selectedFiles]);
+
     // 加载口癖数据
     const loadDefillerData = async (sid: string, options?: {
-        detect_fillers?: boolean;
-        detect_breaths?: boolean;
+        // ★★★ 三选项参数 ★★★
+        cut_silences?: boolean;           // 删除静音片段
+        cut_bad_takes?: boolean;          // 删除NG/重复片段
+        remove_filler_words?: boolean;    // 删除口癖词
     }) => {
         try {
             const { detectFillers } = await import('@/features/editor/lib/workspace-api');
@@ -268,7 +540,17 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                 filler_words: result.filler_words?.length,
                 silence_segments: result.silence_segments?.length,
                 transcript_segments: result.transcript_segments?.length,
+                // ★ V2: 新增字段
+                clips_created: (result as { clips_created?: number }).clips_created,
+                filler_clips_count: (result as { filler_clips_count?: number }).filler_clips_count,
             });
+            
+            // ★ V2: 保存后端直接创建的 clips
+            const v2Result = result as { clips?: CreatedClipV2[] };
+            if (v2Result.clips && v2Result.clips.length > 0) {
+                log('[Defiller] ★ V2 模式：后端已创建 clips:', v2Result.clips.length);
+                setCreatedClipsV2(v2Result.clips);
+            }
             
             // ★ 后端 filler_words 包含 occurrences 数组，直接使用！
             interface ApiFillerWord {
@@ -334,6 +616,9 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
             log('[Defiller] 生成片段:', sortedSegments.length, sortedSegments.slice(0, 3));
             setFillerSegments(sortedSegments);
             
+            // ★★★ 初始化选中状态：默认全选所有片段 ★★★
+            setSelectedSegmentIds(new Set(sortedSegments.map(s => s.id)));
+            
             // 尝试从结果中获取 asset_id 用于视频预览
             const firstSegment = result.transcript_segments?.[0];
             if (firstSegment?.asset_id) {
@@ -344,54 +629,6 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
         } catch (err) {
             log('加载口癖数据失败:', err);
             setError('加载口癖数据失败');
-        }
-    };
-
-    // 加载 B-Roll 数据
-    const loadBRollData = async (sid: string) => {
-        setIsLoadingClips(true);
-        try {
-            const { authFetch } = await import('@/lib/supabase/session');
-            const response = await authFetch(`/api/workspace/sessions/${sid}/clip-suggestions`, {
-                method: 'POST',
-            });
-            if (!response.ok) throw new Error('获取片段建议失败');
-            const data = await response.json();
-            setClips(data.clips?.map((clip: { clip_id: string; clip_number: number; text: string; time_range: { start: number; end: number }; suggested_assets?: { id: string; thumbnail_url: string; video_url: string; source: string; duration: number; width: number; height: number; relevance_score?: number }[]; selected_asset_id?: string }) => ({
-                clipId: clip.clip_id,
-                clipNumber: clip.clip_number,
-                text: clip.text,
-                timeRange: clip.time_range,
-                suggestedAssets: (clip.suggested_assets || []).map((asset: { id: string; thumbnail_url: string; video_url: string; source: string; duration: number; width: number; height: number; relevance_score?: number }) => ({
-                    id: asset.id,
-                    thumbnailUrl: asset.thumbnail_url,
-                    videoUrl: asset.video_url,
-                    source: asset.source,
-                    duration: asset.duration,
-                    width: asset.width,
-                    height: asset.height,
-                    relevanceScore: asset.relevance_score,
-                })),
-                selectedAssetId: clip.selected_asset_id,
-            })) || []);
-        } catch (err) {
-            log('加载 B-Roll 数据失败:', err);
-        } finally {
-            setIsLoadingClips(false);
-        }
-    };
-
-    // 更新后端步骤状态
-    const updateWorkflowStep = async (sid: string, step: WorkflowStep) => {
-        try {
-            const { authFetch } = await import('@/lib/supabase/session');
-            await authFetch(`/api/workspace/sessions/${sid}/workflow-step`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ workflow_step: step, entry_mode: entryMode }),
-            });
-        } catch (err) {
-            log('更新工作流步骤失败:', err);
         }
     };
 
@@ -435,6 +672,11 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
     const handleUpload = async () => {
         if (selectedFiles.length === 0) return;
 
+        // ★ 验证用户已选择比例
+        if (!requireAspectRatio()) {
+            return;
+        }
+
         setIsUploading(true);
         setError(null);
         setUploadProgress(0);
@@ -469,6 +711,7 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                 source_type: 'local',
                 task_type: 'voice-extract',
                 files: filesInfo,
+                aspect_ratio: aspectRatio!,  // ★ 传递用户选择的目标比例
             });
 
             setSessionId(sessionResponse.session_id);
@@ -492,13 +735,61 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
             // 完成上传
             await finalizeUpload(sessionResponse.session_id);
 
-            // ★ 口播精修模式：进入配置步骤；AI模式：直接处理
+            // ★★★ 保存 B-Roll 配置到后端（如果启用）★★★
+            if (entryMode === 'refine' && brollConfig.enabled) {
+                try {
+                    const { authFetch } = await import('@/lib/supabase/session');
+                    await authFetch(`/api/workspace/sessions/${sessionResponse.session_id}/workflow-config`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            broll_enabled: brollConfig.enabled,
+                            broll_display_mode: brollConfig.displayMode,
+                            broll_pip_config: brollConfig.displayMode !== 'fullscreen' ? {
+                                size: brollConfig.pipConfig.size,
+                                default_position: brollConfig.pipConfig.defaultPosition,
+                                face_avoidance: brollConfig.pipConfig.faceAvoidance,
+                                margin: brollConfig.pipConfig.margin,
+                                border_radius: brollConfig.pipConfig.borderRadius,
+                            } : null,
+                            broll_mixed_config: brollConfig.displayMode === 'mixed' ? {
+                                fullscreen_min_duration: brollConfig.mixedConfig.fullscreenMinDuration,
+                                pip_min_duration: brollConfig.mixedConfig.pipMinDuration,
+                                pip_ratio: brollConfig.mixedConfig.pipRatio,
+                            } : null,
+                        }),
+                    });
+                    log('[BRollConfig] 配置已保存:', brollConfig);
+                } catch (configErr) {
+                    log('[BRollConfig] 保存配置失败（非致命）:', configErr);
+                }
+            }
+
+            // ★★★ 根据开关状态决定下一步 ★★★
             if (entryMode === 'refine') {
-                setCurrentStep('config');
+                if (!enableSmartClip && !enableBroll) {
+                    // 两个都关：直接进编辑器
+                    log('[Workflow] 智能剪辑关 + B-Roll关 → 直接进编辑器');
+                    router.push(`/editor?project=${sessionResponse.project_id}`);
+                } else if (!enableSmartClip && enableBroll) {
+                    // 智能剪辑关，B-Roll开：直接进入 AI 视觉工作室
+                    log('[Workflow] 智能剪辑关 + B-Roll开 → AI视觉工作室');
+                    // ★★★ 直接跳转，避免 React 状态更新的竞态条件 ★★★
+                    const strategy = shotStrategy || 'scene';
+                    router.push(`/visual-editor?project=${sessionResponse.project_id}&session=${sessionResponse.session_id}&strategy=${strategy}`);
+                } else {
+                    // 智能剪辑开：进入分析步骤
+                    log('[Workflow] 智能剪辑开 → 智能分析');
+                    await updateStep('processing', sessionResponse.session_id);
+                    await startProcessing(sessionResponse.session_id, {
+                        cut_silences: configCutSilences,
+                        cut_bad_takes: configCutBadTakes,
+                        remove_filler_words: configRemoveFillers,
+                    });
+                }
             } else {
-                // 更新步骤状态
-                await updateWorkflowStep(sessionResponse.session_id, 'processing');
-                setCurrentStep('processing');
+                // AI 模式保持原样
+                await updateStep('processing', sessionResponse.session_id);
                 await startProcessing(sessionResponse.session_id);
             }
 
@@ -515,8 +806,10 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
     // Step 2: Processing
     // ==========================================
     const startProcessing = async (sid: string, analysisOptions?: {
-        detect_fillers?: boolean;
-        detect_breaths?: boolean;
+        // ★★★ 三选项参数 ★★★
+        cut_silences?: boolean;           // 删除静音片段
+        cut_bad_takes?: boolean;          // 删除NG/重复片段
+        remove_filler_words?: boolean;    // 删除口癖词
     }) => {
         setProcessingStatus('正在转写音频...');
         
@@ -528,9 +821,8 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                 // 直接调用 loadDefillerData 来加载所有数据，传递配置选项
                 await loadDefillerData(sid, analysisOptions);
 
-                // 更新步骤状态并进入 defiller
-                await updateWorkflowStep(sid, 'defiller');
-                setCurrentStep('defiller');
+                // 进入 defiller 步骤
+                await updateStep('defiller', sid);
             } else {
                 // AI 智能播报：调用 startAIProcessing
                 setProcessingStatus('AI 正在处理...');
@@ -561,6 +853,37 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
         setFillerWords(prev => prev.map(f => ({ ...f, checked: !allChecked })));
     };
 
+    // ★★★ 新增：片段级别的选择函数 ★★★
+    const toggleSegmentSelection = (segmentId: string) => {
+        setSelectedSegmentIds(prev => {
+            const next = new Set(prev);
+            if (next.has(segmentId)) {
+                next.delete(segmentId);
+            } else {
+                next.add(segmentId);
+            }
+            return next;
+        });
+    };
+
+    // ★★★ 新增：全选/取消全选当前显示的片段 ★★★
+    const toggleAllSegments = (displaySegments: FillerSegment[]) => {
+        const displayIds = displaySegments.map(s => s.id);
+        const allSelected = displayIds.every(id => selectedSegmentIds.has(id));
+        
+        setSelectedSegmentIds(prev => {
+            const next = new Set(prev);
+            displayIds.forEach(id => {
+                if (allSelected) {
+                    next.delete(id);
+                } else {
+                    next.add(id);
+                }
+            });
+            return next;
+        });
+    };
+
     const formatDuration = (ms: number) => {
         if (ms < 1000) return `${Math.round(ms)}ms`;
         const totalSec = ms / 1000;
@@ -579,15 +902,12 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
     };
 
     const getFillerStats = () => {
-        const checkedFillers = fillerWords.filter(f => f.checked);
-        // 统计对应的 fillerSegments（使用精确匹配）
-        const checkedSegments = fillerSegments.filter(seg => 
-            checkedFillers.some(f => seg.word === f.word)
-        );
+        // ★★★ 使用 selectedSegmentIds 计算统计 ★★★
+        const selectedSegments = fillerSegments.filter(seg => selectedSegmentIds.has(seg.id));
         return {
-            totalCount: checkedFillers.reduce((sum, f) => sum + f.count, 0),
-            totalDuration: checkedFillers.reduce((sum, f) => sum + (f.totalDuration || 0), 0),
-            segmentCount: checkedSegments.length,
+            totalCount: selectedSegments.length,
+            totalDuration: selectedSegments.reduce((sum, seg) => sum + seg.duration, 0),
+            segmentCount: selectedSegments.length,
         };
     };
 
@@ -618,15 +938,25 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
         }
     };
 
-    // 监听视频播放进度，到 end + 2s 时停止
+
+    // 监听视频播放进度（defiller 步骤）
     useEffect(() => {
         const video = videoRef.current;
-        if (!video || !activeFillerSegment) return;
+        if (!video) return;
+        
+        // 获取当前预览的时间范围
+        let previewStart = 0;
+        let previewEnd = 0;
+        
+        if (currentStep === 'defiller' && activeFillerSegment) {
+            previewStart = Math.max(0, activeFillerSegment.start - CONTEXT_DURATION);
+            previewEnd = activeFillerSegment.end + CONTEXT_DURATION;
+        }
+        
+        if (previewEnd === 0) return;
 
         const handleTimeUpdate = () => {
             const currentMs = video.currentTime * 1000;
-            const previewStart = Math.max(0, activeFillerSegment.start - CONTEXT_DURATION);
-            const previewEnd = activeFillerSegment.end + CONTEXT_DURATION;
             const totalDuration = previewEnd - previewStart;
             
             // 计算进度
@@ -642,28 +972,90 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
 
         video.addEventListener('timeupdate', handleTimeUpdate);
         return () => video.removeEventListener('timeupdate', handleTimeUpdate);
-    }, [activeFillerSegment]);
+    }, [activeFillerSegment, currentStep]);
 
     const handleApplyTrim = async () => {
         setIsApplyingTrim(true);
         setError(null);
 
         try {
-            const removedFillers = fillerWords.filter(f => f.checked).map(f => f.word);
-            const { applyTrimming } = await import('@/features/editor/lib/workspace-api');
-            await applyTrimming(sessionId, {
-                removed_fillers: removedFillers,
-                create_clips_from_segments: true,
-            });
-
-            // 根据 config 步骤的 configEnableBroll 状态决定下一步
-            if (configEnableBroll) {
-                // 进入 B-Roll 配置
-                await updateWorkflowStep(sessionId, 'broll_config');
-                setCurrentStep('broll_config');
-                await loadBRollData(sessionId);
+            // ★★★ 获取用户选中的片段 ★★★
+            const selectedSegments = fillerSegments.filter(seg => selectedSegmentIds.has(seg.id));
+            log('[Trim] 用户选中的片段:', selectedSegments.length, selectedSegments.map(s => s.id));
+            
+            // ★ V2: 检查是否有后端创建的 clips（智能分析阶段已创建）
+            if (createdClipsV2.length > 0) {
+                log('[V2] 使用 applyTrimmingV2，已有 clips:', createdClipsV2.length);
+                
+                // ★★★ V2: 基于 selectedSegmentIds 收集需要隐藏的 clip IDs ★★★
+                // 需要根据时间匹配 fillerSegments 和 createdClipsV2
+                const clipIdsToHide = createdClipsV2
+                    .filter(clip => {
+                        if (!clip.is_filler) return false;
+                        // 查找对应的 fillerSegment
+                        const matchingSegment = fillerSegments.find(seg => 
+                            Math.abs(seg.start - clip.start_time) < 100 && 
+                            Math.abs(seg.end - clip.end_time) < 100
+                        );
+                        // 只有用户选中的片段才隐藏
+                        return matchingSegment && selectedSegmentIds.has(matchingSegment.id);
+                    })
+                    .map(clip => clip.id);
+                
+                log('[V2] 需要隐藏的 clips:', clipIdsToHide.length, clipIdsToHide.slice(0, 5));
+                
+                const { applyTrimmingV2 } = await import('@/features/editor/lib/workspace-api');
+                await applyTrimmingV2(sessionId, {
+                    clip_ids_to_hide: clipIdsToHide,
+                });
             } else {
-                // 直接进入编辑器
+                // ★ V1 兼容：旧流程（后端未返回 clips）
+                log('[V1] 使用 applyTrimming 兼容模式');
+                
+                // ★★★ 基于 selectedSegmentIds 构建 trim_segments ★★★
+                const trimSegments: Array<{ start: number; end: number }> = selectedSegments.map(seg => ({
+                    start: seg.start,
+                    end: seg.end,
+                }));
+                
+                // 为了兼容性，还需要传递 removed_fillers（词汇列表）
+                const removedFillerWords = Array.from(new Set(selectedSegments.map(seg => seg.word)));
+                
+                log('应用修剪:', { removedFillerWords, trimSegmentsCount: trimSegments.length, trimSegments });
+                
+                if (trimSegments.length === 0) {
+                    log('无需修剪的片段，直接进入编辑器');
+                }
+                
+                // ★ 将 transcriptSegments 传递给后端
+                const transcriptSegmentsForApi = transcriptSegments.map(seg => ({
+                    id: seg.id,
+                    text: seg.text,
+                    start: seg.start,
+                    end: seg.end,
+                    asset_id: seg.assetId || '',  // 后端用 snake_case
+                }));
+                
+                const { applyTrimming } = await import('@/features/editor/lib/workspace-api');
+                await applyTrimming(sessionId, {
+                    removed_fillers: removedFillerWords,
+                    trim_segments: trimSegments,
+                    transcript_segments: transcriptSegmentsForApi,
+                    create_clips_from_segments: true,
+                    // ★★★ 新增：直接传递选中的片段 ID ★★★
+                    segment_ids_to_remove: Array.from(selectedSegmentIds),
+                });
+            }
+
+            // ★★★ 根据 B-Roll 开关决定下一步 ★★★
+            if (enableBroll) {
+                // B-Roll 开启：进入 AI 视觉工作室
+                log('[Workflow] 口癖修剪完成 + B-Roll开 → AI视觉工作室');
+                const strategy = shotStrategy || 'scene';
+                router.push(`/visual-editor?project=${projectId}&session=${sessionId}&strategy=${strategy}`);
+            } else {
+                // B-Roll 关闭：直接进入编辑器
+                log('[Workflow] 口癖修剪完成 + B-Roll关 → 直接进编辑器');
                 router.push(`/editor?project=${projectId}`);
             }
 
@@ -676,82 +1068,6 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
         }
     };
 
-    // 选择配置 B-Roll（保留兼容）
-    const handleChooseBRoll = async () => {
-        setShowBRollChoice(false);
-        await updateWorkflowStep(sessionId, 'broll_config');
-        setCurrentStep('broll_config');
-        await loadBRollData(sessionId);
-    };
-
-    // 跳过 B-Roll 直接进入编辑器
-    const handleSkipBRollToEditor = () => {
-        router.push(`/editor?project=${projectId}`);
-    };
-
-    // ==========================================
-    // Step 4: B-Roll Config handlers
-    // ==========================================
-    const handleSelectAsset = (clipId: string, assetId: string) => {
-        setClips(prev => prev.map(clip =>
-            clip.clipId === clipId ? { ...clip, selectedAssetId: assetId } : clip
-        ));
-    };
-
-    const handleRefreshClips = async () => {
-        await loadBRollData(sessionId);
-    };
-
-    const handleConfirmBRoll = async () => {
-        setIsSubmitting(true);
-        setError(null);
-
-        try {
-            // ★ 保存工作流配置到后端（编辑器将读取并应用）
-            const { authFetch } = await import('@/lib/supabase/session');
-            
-            // 构建 B-Roll 选择数据
-            const brollSelections = clips
-                .filter(c => c.selectedAssetId)
-                .map(c => ({
-                    clip_id: c.clipId,
-                    selected_asset_id: c.selectedAssetId,
-                    time_range: c.timeRange,
-                    text: c.text,
-                }));
-            
-            const configResponse = await authFetch(`/api/workspace/sessions/${sessionId}/workflow-config`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    pip_enabled: pipEnabled,
-                    pip_position: 'bottom-right',  // TODO: 让用户选择位置
-                    pip_size: 'medium',
-                    broll_enabled: brollEnabled,
-                    broll_selections: brollSelections,
-                }),
-            });
-            
-            if (!configResponse.ok) {
-                throw new Error('保存配置失败');
-            }
-            
-            log('✅ 工作流配置已保存:', { pipEnabled, brollEnabled, brollSelections });
-
-            // 进入编辑器
-            router.push(`/editor?project=${projectId}`);
-        } catch (err: unknown) {
-            log('保存配置失败:', err);
-            const error = err as { message?: string };
-            setError(error.message || '保存配置失败');
-            setIsSubmitting(false);
-        }
-    };
-
-    const handleSkipBRoll = () => {
-        router.push(`/editor?project=${projectId}`);
-    };
-
     // ==========================================
     // Navigation
     // ==========================================
@@ -759,38 +1075,29 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
         if (currentStep === 'upload') {
             setCurrentStep('entry');
             setSelectedFiles([]);
-        } else if (currentStep === 'config') {
-            // 从配置返回上传
-            setCurrentStep('upload');
         } else if (currentStep === 'processing') {
             // 处理中不允许返回
         } else if (currentStep === 'defiller') {
-            // ★ 允许返回到配置步骤
-            setCurrentStep('config');
-        } else if (currentStep === 'broll_config') {
-            setCurrentStep('defiller');
+            // ★ 从修剪返回会重新上传，清理状态
+            setCurrentStep('upload');
+        } else if (currentStep === 'visual-studio') {
+            // ★ 从 AI 视觉工作室返回
+            if (enableSmartClip) {
+                // 如果智能剪辑开启，返回到口癖修剪
+                setCurrentStep('defiller');
+            } else {
+                // 否则返回到上传
+                setCurrentStep('upload');
+            }
         }
     };
 
-    // ==========================================
-    // Config Step: 开始分析
-    // ==========================================
-    const handleStartAnalysis = async () => {
-        try {
-            // 更新步骤状态
-            await updateWorkflowStep(sessionId, 'processing');
-            setCurrentStep('processing');
-            
-            // 启动处理，传递配置选项
-            await startProcessing(sessionId, {
-                detect_fillers: configDetectFillers,
-                detect_breaths: configDetectBreaths,
-            });
-        } catch (err: unknown) {
-            log('启动分析失败:', err);
-            const error = err as { message?: string };
-            setError(error.message || '启动分析失败');
+    const requireAspectRatio = () => {
+        if (!aspectRatio) {
+            setAspectRatioError('请选择视频比例（仅支持 9:16 或 16:9）');
+            return false;
         }
+        return true;
     };
 
     if (!isOpen) return null;
@@ -889,7 +1196,7 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                 <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh] animate-in zoom-in-95 duration-200">
                     {/* Step Indicator - 在弹窗内部，带圆角 */}
                     <div className="rounded-t-2xl overflow-hidden">
-                        <StepIndicator currentStep={currentStep} mode={entryMode} />
+                        <StepIndicator currentStep={currentStep} mode={entryMode} enableSmartClip={enableSmartClip} enableBroll={enableBroll} />
                     </div>
 
                     {/* Header */}
@@ -910,8 +1217,9 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                             </div>
                         </div>
                         <button
-                            onClick={onClose}
+                            onClick={handlePause}
                             className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition-colors"
+                            title="暂时关闭"
                         >
                             <X size={20} />
                         </button>
@@ -1008,6 +1316,267 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                                 </div>
                             </div>
                         )}
+                        
+                        {/* ★★★ 视频比例选择 ★★★ */}
+                        {!isUploading && (
+                            <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-bold text-gray-900">选择视频比例</p>
+                                        <p className="text-xs text-gray-500 mt-0.5">仅支持 9:16 或 16:9</p>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setAspectRatio('9:16');
+                                                setAspectRatioError(null);
+                                            }}
+                                            className={cn(
+                                                "px-4 py-2 rounded-lg text-sm font-bold border transition-all",
+                                                aspectRatio === '9:16'
+                                                    ? "bg-gray-900 text-white border-gray-900"
+                                                    : "bg-white text-gray-700 border-gray-200 hover:border-gray-400"
+                                            )}
+                                        >
+                                            9:16 竖屏
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setAspectRatio('16:9');
+                                                setAspectRatioError(null);
+                                            }}
+                                            className={cn(
+                                                "px-4 py-2 rounded-lg text-sm font-bold border transition-all",
+                                                aspectRatio === '16:9'
+                                                    ? "bg-gray-900 text-white border-gray-900"
+                                                    : "bg-white text-gray-700 border-gray-200 hover:border-gray-400"
+                                            )}
+                                        >
+                                            16:9 横屏
+                                        </button>
+                                    </div>
+                                </div>
+                                {aspectRatioError && (
+                                    <p className="text-xs text-red-500 mt-2">{aspectRatioError}</p>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* ★★★ 功能配置区域（两个主开关）★★★ */}
+                        {entryMode === 'refine' && !isUploading && (
+                            <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
+                                {/* 主开关1: 智能剪辑 */}
+                                <div>
+                                    <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-9 h-9 bg-gray-900 rounded-lg flex items-center justify-center">
+                                                <Sparkles size={18} className="text-white" />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-gray-900">智能剪辑</p>
+                                                <p className="text-xs text-gray-400">AI 识别并删除废话、静音、NG 片段</p>
+                                            </div>
+                                        </div>
+                                        <div className={cn(
+                                            "w-11 h-6 rounded-full transition-colors relative",
+                                            enableSmartClip ? "bg-gray-900" : "bg-gray-300"
+                                        )}>
+                                            <div className={cn(
+                                                "w-5 h-5 bg-white rounded-full shadow absolute top-0.5 transition-transform",
+                                                enableSmartClip ? "translate-x-[22px]" : "translate-x-0.5"
+                                            )} />
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            checked={enableSmartClip}
+                                            onChange={(e) => setEnableSmartClip(e.target.checked)}
+                                            className="sr-only"
+                                        />
+                                    </label>
+                                    
+                                    {/* 智能剪辑子选项（仅当开启时显示）*/}
+                                    {enableSmartClip && (
+                                        <div className="ml-4 mt-2 pl-4 border-l-2 border-gray-200 space-y-2">
+                                            {/* 子选项1: 删除静音 */}
+                                            <label className="flex items-center justify-between p-2.5 bg-white rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                                                <div className="flex items-center gap-2.5">
+                                                    <Volume2 size={16} className="text-gray-500" />
+                                                    <span className="text-sm text-gray-700">删除静音片段</span>
+                                                </div>
+                                                <div className={cn(
+                                                    "w-9 h-5 rounded-full transition-colors relative",
+                                                    configCutSilences ? "bg-gray-900" : "bg-gray-300"
+                                                )}>
+                                                    <div className={cn(
+                                                        "w-4 h-4 bg-white rounded-full shadow absolute top-0.5 transition-transform",
+                                                        configCutSilences ? "translate-x-[18px]" : "translate-x-0.5"
+                                                    )} />
+                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={configCutSilences}
+                                                    onChange={(e) => setConfigCutSilences(e.target.checked)}
+                                                    className="sr-only"
+                                                />
+                                            </label>
+                                            
+                                            {/* 子选项2: 删除NG */}
+                                            <label className="flex items-center justify-between p-2.5 bg-white rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                                                <div className="flex items-center gap-2.5">
+                                                    <RefreshCw size={16} className="text-gray-500" />
+                                                    <span className="text-sm text-gray-700">删除重复/NG片段</span>
+                                                </div>
+                                                <div className={cn(
+                                                    "w-9 h-5 rounded-full transition-colors relative",
+                                                    configCutBadTakes ? "bg-gray-900" : "bg-gray-300"
+                                                )}>
+                                                    <div className={cn(
+                                                        "w-4 h-4 bg-white rounded-full shadow absolute top-0.5 transition-transform",
+                                                        configCutBadTakes ? "translate-x-[18px]" : "translate-x-0.5"
+                                                    )} />
+                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={configCutBadTakes}
+                                                    onChange={(e) => setConfigCutBadTakes(e.target.checked)}
+                                                    className="sr-only"
+                                                />
+                                            </label>
+                                            
+                                            {/* 子选项3: 删除口癖 */}
+                                            <label className="flex items-center justify-between p-2.5 bg-white rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                                                <div className="flex items-center gap-2.5">
+                                                    <MessageSquare size={16} className="text-gray-500" />
+                                                    <span className="text-sm text-gray-700">删除口癖词</span>
+                                                </div>
+                                                <div className={cn(
+                                                    "w-9 h-5 rounded-full transition-colors relative",
+                                                    configRemoveFillers ? "bg-gray-900" : "bg-gray-300"
+                                                )}>
+                                                    <div className={cn(
+                                                        "w-4 h-4 bg-white rounded-full shadow absolute top-0.5 transition-transform",
+                                                        configRemoveFillers ? "translate-x-[18px]" : "translate-x-0.5"
+                                                    )} />
+                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={configRemoveFillers}
+                                                    onChange={(e) => setConfigRemoveFillers(e.target.checked)}
+                                                    className="sr-only"
+                                                />
+                                            </label>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* 主开关2: AI 视觉 / 分镜策略选择 */}
+                                <div className="bg-gray-50 rounded-xl overflow-hidden">
+                                    {/* 总开关 */}
+                                    <label className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-100 transition-colors">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-9 h-9 bg-gray-900 rounded-lg flex items-center justify-center">
+                                                <Film size={18} className="text-white" />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-gray-900">AI 视觉工作室</p>
+                                                <p className="text-xs text-gray-400">智能分镜 + 背景替换 + B-Roll</p>
+                                            </div>
+                                        </div>
+                                        <div className={cn(
+                                            "w-11 h-6 rounded-full transition-colors relative",
+                                            enableBroll ? "bg-gray-900" : "bg-gray-300"
+                                        )}>
+                                            <div className={cn(
+                                                "w-5 h-5 bg-white rounded-full shadow absolute top-0.5 transition-transform",
+                                                enableBroll ? "translate-x-[22px]" : "translate-x-0.5"
+                                            )} />
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            checked={enableBroll}
+                                            onChange={(e) => {
+                                                setEnableBroll(e.target.checked);
+                                                // 默认选择场景拆分
+                                                if (e.target.checked && !shotStrategy) {
+                                                    setShotStrategy('scene');
+                                                }
+                                            }}
+                                            className="sr-only"
+                                        />
+                                    </label>
+                                    
+                                    {/* 分镜策略选择 - 开启时显示 */}
+                                    {enableBroll && (
+                                        <div className="px-3 pb-3 pt-1 border-t border-gray-100">
+                                            <p className="text-xs text-gray-500 mb-2 pl-1">选择分镜拆分策略</p>
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {/* 场景拆分 */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShotStrategy('scene')}
+                                                    className={cn(
+                                                        "p-2.5 rounded-lg border text-left transition-all",
+                                                        shotStrategy === 'scene'
+                                                            ? "bg-gray-900 border-gray-900 text-white"
+                                                            : "bg-white border-gray-200 hover:border-gray-400"
+                                                    )}
+                                                >
+                                                    <Film size={16} className={shotStrategy === 'scene' ? "text-white mb-1" : "text-gray-500 mb-1"} />
+                                                    <p className={cn("text-xs font-bold", shotStrategy === 'scene' ? "text-white" : "text-gray-900")}>
+                                                        场景拆分
+                                                    </p>
+                                                    <p className={cn("text-[10px] mt-0.5", shotStrategy === 'scene' ? "text-gray-300" : "text-gray-400")}>
+                                                        画面变化检测
+                                                    </p>
+                                                </button>
+                                                
+                                                {/* 按句拆分 */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShotStrategy('sentence')}
+                                                    className={cn(
+                                                        "p-2.5 rounded-lg border text-left transition-all",
+                                                        shotStrategy === 'sentence'
+                                                            ? "bg-gray-900 border-gray-900 text-white"
+                                                            : "bg-white border-gray-200 hover:border-gray-400"
+                                                    )}
+                                                >
+                                                    <MessageSquare size={16} className={shotStrategy === 'sentence' ? "text-white mb-1" : "text-gray-500 mb-1"} />
+                                                    <p className={cn("text-xs font-bold", shotStrategy === 'sentence' ? "text-white" : "text-gray-900")}>
+                                                        按句拆分
+                                                    </p>
+                                                    <p className={cn("text-[10px] mt-0.5", shotStrategy === 'sentence' ? "text-gray-300" : "text-gray-400")}>
+                                                        每句话一分镜
+                                                    </p>
+                                                </button>
+                                                
+                                                {/* 按段落拆分 */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShotStrategy('paragraph')}
+                                                    className={cn(
+                                                        "p-2.5 rounded-lg border text-left transition-all",
+                                                        shotStrategy === 'paragraph'
+                                                            ? "bg-gray-900 border-gray-900 text-white"
+                                                            : "bg-white border-gray-200 hover:border-gray-400"
+                                                    )}
+                                                >
+                                                    <FileText size={16} className={shotStrategy === 'paragraph' ? "text-white mb-1" : "text-gray-500 mb-1"} />
+                                                    <p className={cn("text-xs font-bold", shotStrategy === 'paragraph' ? "text-white" : "text-gray-900")}>
+                                                        段落拆分
+                                                    </p>
+                                                    <p className={cn("text-[10px] mt-0.5", shotStrategy === 'paragraph' ? "text-gray-300" : "text-gray-400")}>
+                                                        按主题分组
+                                                    </p>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Footer */}
@@ -1022,7 +1591,7 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                             onClick={handleUpload}
                             disabled={selectedFiles.length === 0 || isUploading}
                             className={cn(
-                                "w-full h-10 text-sm font-bold text-white rounded-xl shadow-lg transition-all flex items-center justify-center",
+                                "w-full h-10 text-sm font-bold text-white rounded-xl shadow-lg transition-all flex items-center justify-center gap-2",
                                 selectedFiles.length > 0 && !isUploading
                                     ? "bg-gray-900 hover:bg-gray-800"
                                     : "bg-gray-300 cursor-not-allowed"
@@ -1030,15 +1599,15 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                         >
                             {isUploading ? (
                                 <>
-                                    <Loader2 size={16} className="mr-2 animate-spin" />
+                                    <Loader2 size={16} className="animate-spin" />
                                     {uploadPhase === 'uploading' && '上传中...'}
                                     {uploadPhase === 'processing' && '处理中...'}
                                     {uploadPhase === 'ready' && '准备就绪'}
                                 </>
                             ) : (
                                 <>
-                                    <Upload size={16} className="mr-2" />
-                                    上传视频
+                                    <Sparkles size={16} />
+                                    {!enableSmartClip && !enableBroll ? '上传并进入编辑器' : '上传并开始处理'}
                                 </>
                             )}
                         </button>
@@ -1046,120 +1615,6 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                         <p className="text-[10px] text-gray-400 text-center mt-3">
                             上传视频不消耗积分，AI 处理时消耗
                         </p>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    // ==========================================
-    // Render Config Step (分析配置)
-    // ==========================================
-    if (currentStep === 'config') {
-        return (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh] animate-in zoom-in-95 duration-200">
-                    {/* Step Indicator */}
-                    <div className="rounded-t-2xl overflow-hidden">
-                        <StepIndicator currentStep={currentStep} mode={entryMode} />
-                    </div>
-
-                    {/* Header */}
-                    <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-4">
-                        <button
-                            onClick={handleBack}
-                            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors"
-                        >
-                            <ArrowLeft size={20} />
-                        </button>
-                        <div className="w-11 h-11 bg-gray-800 rounded-xl flex items-center justify-center">
-                            <Palette size={22} className="text-white" />
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-bold text-gray-900">分析配置</h3>
-                            <p className="text-gray-500 text-sm">选择您需要的智能分析功能</p>
-                        </div>
-                    </div>
-
-                    {/* Content */}
-                    <div className="p-6 space-y-4">
-                        {/* B-Roll 素材 */}
-                        <label className="flex items-center justify-between p-4 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-                                    <Film size={20} className="text-purple-600" />
-                                </div>
-                                <div>
-                                    <p className="font-medium text-gray-900">启用 B-Roll</p>
-                                    <p className="text-xs text-gray-500">AI 推荐相关画面素材</p>
-                                </div>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={configEnableBroll}
-                                onChange={(e) => setConfigEnableBroll(e.target.checked)}
-                                className="w-5 h-5 accent-gray-900 rounded"
-                            />
-                        </label>
-
-                        {/* 分隔线 */}
-                        <div className="border-t border-gray-100 pt-2">
-                            <p className="text-xs text-gray-400 mb-3 px-1">语义清理选项</p>
-                        </div>
-
-                        {/* 识别口癖（含重复词） */}
-                        <label className="flex items-center justify-between p-4 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                                    <Scissors size={20} className="text-blue-600" />
-                                </div>
-                                <div>
-                                    <p className="font-medium text-gray-900">识别口癖</p>
-                                    <p className="text-xs text-gray-500">嗯、啊、那个、重复词等</p>
-                                </div>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={configDetectFillers}
-                                onChange={(e) => setConfigDetectFillers(e.target.checked)}
-                                className="w-5 h-5 accent-gray-900 rounded"
-                            />
-                        </label>
-
-                        {/* 识别换气 */}
-                        <label className="flex items-center justify-between p-4 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                                    <Wind size={20} className="text-green-600" />
-                                </div>
-                                <div>
-                                    <p className="font-medium text-gray-900">识别换气</p>
-                                    <p className="text-xs text-gray-500">长时间停顿和吸气声</p>
-                                </div>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={configDetectBreaths}
-                                onChange={(e) => setConfigDetectBreaths(e.target.checked)}
-                                className="w-5 h-5 accent-gray-900 rounded"
-                            />
-                        </label>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="px-6 pb-6">
-                        {error && (
-                            <div className="mb-3 p-2.5 bg-red-50 border border-red-100 text-red-600 text-xs rounded-lg">
-                                ⚠️ {error}
-                            </div>
-                        )}
-                        <button
-                            onClick={handleStartAnalysis}
-                            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white text-sm font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
-                        >
-                            <Sparkles size={16} />
-                            开始智能分析
-                        </button>
                     </div>
                 </div>
             </div>
@@ -1175,7 +1630,7 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                 <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh] animate-in zoom-in-95 duration-200">
                     {/* Step Indicator */}
                     <div className="rounded-t-2xl overflow-hidden">
-                        <StepIndicator currentStep={currentStep} mode={entryMode} />
+                        <StepIndicator currentStep={currentStep} mode={entryMode} enableSmartClip={enableSmartClip} enableBroll={enableBroll} />
                     </div>
 
                     {/* Content */}
@@ -1222,7 +1677,7 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                 <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh] animate-in zoom-in-95 duration-200">
                     {/* Step Indicator */}
                     <div className="rounded-t-2xl overflow-hidden flex-shrink-0">
-                        <StepIndicator currentStep={currentStep} mode={entryMode} />
+                        <StepIndicator currentStep={currentStep} mode={entryMode} enableSmartClip={enableSmartClip} enableBroll={enableBroll} />
                     </div>
 
                     {/* Header - 带返回按钮 */}
@@ -1248,8 +1703,9 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                             </div>
                         </div>
                         <button
-                            onClick={onClose}
+                            onClick={handlePause}
                             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                            title="暂时关闭"
                         >
                             <X size={20} className="text-gray-500" />
                         </button>
@@ -1387,13 +1843,19 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                                         <Trash2 size={16} className="text-red-500" />
                                     </div>
                                     <div>
-                                        <span className="text-sm font-bold text-gray-800">待删除片段</span>
-                                        <span className="text-xs text-gray-400 ml-2">({displaySegments.length})</span>
+                                        <span className="text-sm font-bold text-gray-800">检测到的片段</span>
+                                        <span className="text-xs text-gray-400 ml-2">
+                                            (已选 {displaySegments.filter(s => selectedSegmentIds.has(s.id)).length}/{displaySegments.length})
+                                        </span>
                                     </div>
                                 </div>
-                                <div className="text-sm text-gray-500 font-medium">
-                                    {formatDuration(stats.totalDuration)}
-                                </div>
+                                {/* ★★★ 全选/取消全选按钮 ★★★ */}
+                                <button
+                                    onClick={() => toggleAllSegments(displaySegments)}
+                                    className="text-xs text-gray-500 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-100"
+                                >
+                                    {displaySegments.every(s => selectedSegmentIds.has(s.id)) ? '取消全选' : '全选'}
+                                </button>
                             </div>
                             
                             <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1406,30 +1868,60 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                                 ) : (
                                     displaySegments.map((seg, idx) => {
                                         const isActive = activeFillerSegment?.id === seg.id;
+                                        const isSelected = selectedSegmentIds.has(seg.id);
                                         return (
                                             <div
                                                 key={seg.id}
-                                                onClick={() => handlePreviewSegment(isActive ? null : seg)}
+                                                onClick={() => toggleSegmentSelection(seg.id)}
                                                 className={cn(
-                                                    "p-4 rounded-xl border-2 cursor-pointer transition-all",
+                                                    "p-4 rounded-xl border-2 transition-all cursor-pointer",
                                                     isActive
                                                         ? "bg-gray-50 border-gray-800 shadow-lg"
-                                                        : "bg-white border-gray-100 hover:border-gray-300 hover:shadow-md"
+                                                        : isSelected
+                                                            ? "bg-white border-red-200 hover:border-red-300"
+                                                            : "bg-gray-50 border-gray-100 hover:border-gray-200"
                                                 )}
                                             >
-                                                <div className="flex items-start gap-4">
+                                                <div className="flex items-start gap-3">
+                                                    {/* ★★★ 勾选框 ★★★ */}
+                                                    <div
+                                                        className={cn(
+                                                            "w-6 h-6 rounded-md border-2 flex items-center justify-center flex-shrink-0 mt-1 transition-all",
+                                                            isSelected
+                                                                ? "bg-red-500 border-red-500 text-white"
+                                                                : "border-gray-300"
+                                                        )}
+                                                    >
+                                                        {isSelected && <Check size={14} />}
+                                                    </div>
+                                                    
                                                     {/* 序号 */}
-                                                    <div className={cn(
-                                                        "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0",
-                                                        isActive ? "bg-gray-800 text-white" : "bg-red-100 text-red-600"
-                                                    )}>
+                                                    <div 
+                                                        className={cn(
+                                                            "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 cursor-pointer",
+                                                            isActive ? "bg-gray-800 text-white" : "bg-red-100 text-red-600"
+                                                        )}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handlePreviewSegment(isActive ? null : seg);
+                                                        }}
+                                                    >
                                                         {idx + 1}
                                                     </div>
                                                     
-                                                    <div className="flex-1 min-w-0">
+                                                    <div 
+                                                        className="flex-1 min-w-0 cursor-pointer"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handlePreviewSegment(isActive ? null : seg);
+                                                        }}
+                                                    >
                                                         {/* 口癖词标签 + 时长 */}
                                                         <div className="flex items-center gap-2 mb-2">
-                                                            <span className="px-2 py-1 bg-red-100 text-red-600 text-xs rounded-md font-bold">
+                                                            <span className={cn(
+                                                                "px-2 py-1 text-xs rounded-md font-bold",
+                                                                isSelected ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"
+                                                            )}>
                                                                 {seg.word}
                                                             </span>
                                                             <span className="text-sm text-gray-500 font-medium">
@@ -1439,7 +1931,10 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                                                         
                                                         {/* 文字内容 */}
                                                         {seg.text && (
-                                                            <p className="text-sm text-gray-600 mb-2 line-clamp-2">
+                                                            <p className={cn(
+                                                                "text-sm mb-2 line-clamp-2",
+                                                                isSelected ? "text-gray-600" : "text-gray-400"
+                                                            )}>
                                                                 "{seg.text}"
                                                             </p>
                                                         )}
@@ -1480,15 +1975,20 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
                         {/* 右侧：操作按钮 */}
                         <div className="flex items-center gap-3">
                             <button
-                                onClick={handleSkipBRollToEditor}
-                                disabled={isApplyingTrim}
+                                onClick={() => {
+                                    // 跳过修剪，直接去编辑器
+                                    if (projectId) {
+                                        router.push(`/editor?project=${projectId}`);
+                                    }
+                                }}
+                                disabled={isApplyingTrim || !projectId}
                                 className="px-5 py-2.5 text-gray-500 hover:text-gray-900 text-sm font-medium transition-colors"
                             >
                                 跳过，直接编辑
                             </button>
                             <button
                                 onClick={handleApplyTrim}
-                                disabled={isApplyingTrim || stats.totalCount === 0}
+                                disabled={isApplyingTrim}
                                 className="px-6 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 shadow-lg transition-all"
                             >
                                 {isApplyingTrim ? (
@@ -1516,279 +2016,15 @@ export function WorkflowModal({ isOpen, onClose, resumeData }: WorkflowModalProp
     }
 
     // ==========================================
-    // Render B-Roll Config Step
+    // Render AI Visual Studio Step
     // ==========================================
-    if (currentStep === 'broll_config') {
+    if (currentStep === 'visual-studio') {
+        // 策略已在上传时选好，显示加载状态，useEffect 会处理跳转
         return (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh] animate-in zoom-in-95 duration-200">
-                    {/* Step Indicator */}
-                    <div className="rounded-t-2xl overflow-hidden flex-shrink-0">
-                        <StepIndicator currentStep={currentStep} mode={entryMode} />
-                    </div>
-
-                    {/* Header - 带返回按钮 */}
-                    <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
-                        <div className="flex items-center gap-4">
-                            {/* 返回按钮 */}
-                            <button
-                                onClick={handleBack}
-                                className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors"
-                                title="返回上一步"
-                            >
-                                <ArrowLeft size={20} />
-                            </button>
-                            <div className="w-11 h-11 bg-gray-800 rounded-xl flex items-center justify-center">
-                                <Film size={22} className="text-white" />
-                            </div>
-                            <div>
-                                <h3 className="text-lg font-bold text-gray-900">B-Roll 智能配置</h3>
-                                <p className="text-gray-500 text-sm">
-                                    共 <span className="font-bold text-gray-700">{clips.length}</span> 个片段，
-                                    已选 <span className="font-bold text-gray-700">{clips.filter(c => c.selectedAssetId).length}</span> 个素材
-                                </p>
-                            </div>
-                        </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            <X size={20} className="text-gray-500" />
-                        </button>
-                    </div>
-
-                    {/* Content - 左宽右窄布局 */}
-                    <div className="flex-1 flex overflow-hidden min-h-0">
-                        {/* 左侧：预览画布 + 配置开关 (60%) */}
-                        <div className="w-[60%] border-r border-gray-200 flex flex-col bg-gray-900 flex-shrink-0">
-                            {/* 预览区域 */}
-                            <div className="flex-1 relative flex items-center justify-center">
-                                <div className="relative w-full max-w-lg aspect-video bg-gradient-to-br from-gray-800 via-gray-700 to-gray-800 rounded-xl overflow-hidden mx-6 border border-gray-600 shadow-2xl">
-                                    <div className="absolute inset-0 flex items-center justify-center">
-                                        <div className="text-7xl font-black text-gray-600 tracking-tighter">AI</div>
-                                    </div>
-                                    {pipEnabled && (
-                                        <div className="absolute bottom-4 right-4 w-16 h-16 bg-gray-500 rounded-full border-3 border-gray-400 flex items-center justify-center shadow-lg">
-                                            <span className="text-3xl">😊</span>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* 配置开关区域 - 底部白色区域 */}
-                            <div className="p-4 bg-white border-t border-gray-200 space-y-3">
-                                {/* 两个主要开关 */}
-                                <div className="grid grid-cols-2 gap-3">
-                                    {/* PiP 开关 */}
-                                    <button
-                                        onClick={() => setPipEnabled(!pipEnabled)}
-                                        className={cn(
-                                            "flex items-center gap-3 p-3 rounded-xl transition-all text-left",
-                                            pipEnabled 
-                                                ? "bg-gray-100 border border-gray-300" 
-                                                : "bg-gray-50 border border-gray-200"
-                                        )}
-                                    >
-                                        <div className={cn(
-                                            "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0",
-                                            pipEnabled ? "bg-gray-800" : "bg-gray-200"
-                                        )}>
-                                            <User size={18} className={pipEnabled ? "text-white" : "text-gray-500"} />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-medium text-gray-800 truncate">挂角人像</p>
-                                            <p className="text-xs text-gray-500">
-                                                {pipEnabled ? '已开启' : '已关闭'}
-                                            </p>
-                                        </div>
-                                        <div className={cn(
-                                            "w-10 h-6 rounded-full transition-colors flex-shrink-0",
-                                            pipEnabled ? "bg-gray-800" : "bg-gray-300"
-                                        )}>
-                                            <span className={cn(
-                                                "block w-4 h-4 mt-1 rounded-full bg-white shadow transition-transform",
-                                                pipEnabled ? "translate-x-5" : "translate-x-1"
-                                            )} />
-                                        </div>
-                                    </button>
-
-                                    {/* 背景定制按钮 */}
-                                    <button className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 border border-gray-200 hover:bg-gray-100 transition-all text-left">
-                                        <div className="w-9 h-9 bg-gray-700 rounded-lg flex items-center justify-center flex-shrink-0">
-                                            <Palette size={18} className="text-white" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-medium text-gray-800 truncate">背景定制</p>
-                                            <p className="text-xs text-gray-500">配置画布</p>
-                                        </div>
-                                    </button>
-                                </div>
-
-                                {/* B-Roll 增强开关 */}
-                                <button
-                                    onClick={() => setBrollEnabled(!brollEnabled)}
-                                    className={cn(
-                                        "w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left",
-                                        brollEnabled 
-                                            ? "bg-gray-100 border border-gray-400" 
-                                            : "bg-gray-50 border border-gray-200"
-                                    )}
-                                >
-                                    <div className={cn(
-                                        "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0",
-                                        brollEnabled ? "bg-gray-800" : "bg-gray-200"
-                                    )}>
-                                        <Sparkles size={18} className={brollEnabled ? "text-white" : "text-gray-500"} />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-gray-800">智能 B-Roll 增强</p>
-                                        <p className="text-xs text-gray-500">AI 自动匹配场景素材</p>
-                                    </div>
-                                    <div className={cn(
-                                        "w-10 h-6 rounded-full transition-colors flex-shrink-0",
-                                        brollEnabled ? "bg-gray-800" : "bg-gray-300"
-                                    )}>
-                                        <span className={cn(
-                                            "block w-4 h-4 mt-1 rounded-full bg-white shadow transition-transform",
-                                            brollEnabled ? "translate-x-5" : "translate-x-1"
-                                        )} />
-                                    </div>
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* 右侧：字幕片段 + AI B-Roll 建议列表 */}
-                        <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
-                            {/* 列表头部 */}
-                            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-white flex-shrink-0">
-                                <div className="flex items-center gap-2">
-                                    <Sparkles size={16} className="text-gray-600" />
-                                    <span className="text-sm font-bold text-gray-800">AI 片段建议</span>
-                                </div>
-                                <button
-                                    onClick={handleRefreshClips}
-                                    disabled={isLoadingClips}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                    <RefreshCw size={12} className={isLoadingClips ? 'animate-spin' : ''} />
-                                    刷新
-                                </button>
-                            </div>
-
-                            {/* 片段列表 */}
-                            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                                {isLoadingClips ? (
-                                    <div className="flex flex-col items-center justify-center py-12">
-                                        <Loader2 size={28} className="text-gray-400 animate-spin mb-3" />
-                                        <p className="text-gray-500 text-sm">生成建议中...</p>
-                                    </div>
-                                ) : clips.length === 0 ? (
-                                    <div className="flex flex-col items-center justify-center py-12">
-                                        <Film size={40} className="text-gray-300 mb-3" />
-                                        <p className="text-gray-500 text-sm">暂无片段建议</p>
-                                    </div>
-                                ) : (
-                                    clips.map(clip => {
-                                        const isActive = activeClipId === clip.clipId;
-                                        return (
-                                            <div
-                                                key={clip.clipId}
-                                                onClick={() => setActiveClipId(isActive ? null : clip.clipId)}
-                                                className={cn(
-                                                    "p-3 rounded-xl border cursor-pointer transition-all",
-                                                    isActive
-                                                        ? "bg-white border-gray-400 shadow-md"
-                                                        : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"
-                                                )}
-                                            >
-                                                {/* 片段标题 */}
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                                                        SLOT {clip.clipNumber}
-                                                    </span>
-                                                    {clip.selectedAssetId && (
-                                                        <span className="text-[10px] text-green-600 font-medium">✓ 已选</span>
-                                                    )}
-                                                </div>
-                                                
-                                                {/* 字幕文本 */}
-                                                <p className="text-sm text-gray-700 leading-relaxed mb-2 line-clamp-2">
-                                                    "{clip.text}"
-                                                </p>
-                                                
-                                                {/* 素材选择 */}
-                                                <div className="flex gap-1.5 flex-wrap">
-                                                    {clip.suggestedAssets.slice(0, 3).map((asset) => (
-                                                        <button
-                                                            key={asset.id}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                handleSelectAsset(clip.clipId, asset.id);
-                                                            }}
-                                                            className={cn(
-                                                                "relative w-14 h-10 rounded-lg overflow-hidden border-2 transition-all flex-shrink-0",
-                                                                clip.selectedAssetId === asset.id
-                                                                    ? "border-gray-800"
-                                                                    : "border-gray-200 hover:border-gray-400"
-                                                            )}
-                                                        >
-                                                            <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
-                                                                <ImageIcon size={14} className="text-gray-400" />
-                                                            </div>
-                                                            {clip.selectedAssetId === asset.id && (
-                                                                <div className="absolute inset-0 bg-gray-800/30 flex items-center justify-center">
-                                                                    <Check size={12} className="text-white" />
-                                                                </div>
-                                                            )}
-                                                        </button>
-                                                    ))}
-                                                    <button className="w-14 h-10 rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-400 flex items-center justify-center text-gray-400 hover:text-gray-500 transition-colors flex-shrink-0">
-                                                        <Plus size={14} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="px-5 py-3 border-t border-gray-200 bg-white flex items-center justify-between flex-shrink-0">
-                        {error && (
-                            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">
-                                ⚠️ {error}
-                            </div>
-                        )}
-                        <div className="flex-1" />
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={handleSkipBRoll}
-                                disabled={isSubmitting}
-                                className="px-4 py-2 text-gray-500 hover:text-gray-800 font-medium text-sm transition-colors disabled:opacity-50"
-                            >
-                                跳过
-                            </button>
-                            <button
-                                onClick={handleConfirmBRoll}
-                                disabled={isSubmitting}
-                                className="px-5 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-xl font-medium text-sm transition-all flex items-center gap-2 disabled:opacity-50"
-                            >
-                                {isSubmitting ? (
-                                    <>
-                                        <Loader2 size={16} className="animate-spin" />
-                                        保存中...
-                                    </>
-                                ) : (
-                                    <>
-                                        进入编辑器
-                                        <ChevronRight size={16} />
-                                    </>
-                                )}
-                            </button>
-                        </div>
-                    </div>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black">
+                <div className="text-center">
+                    <Loader2 className="w-8 h-8 text-white animate-spin mx-auto mb-4" />
+                    <p className="text-white/60">正在进入视觉编辑器...</p>
                 </div>
             </div>
         );

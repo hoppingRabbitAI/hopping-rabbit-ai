@@ -48,11 +48,15 @@ class Clip(BaseModel):
     """片段模型
     
     核心概念：所有类型的内容都是 Clip
-    - video: 视频片段
+    
+    类型层级关系：
+    - video: 主视频片段（必须连续，不允许有间隙）
+    - broll: B-Roll 覆盖视频（video 的子类型，可以有间隙）
     - audio: 音频片段
-    - subtitle: 字幕片段
-    - text: 文案片段 (可被AI切分)
-    - voice: 配音片段 (TTS/录制)
+    - text: 文案片段（可被AI切分）
+    - subtitle: 字幕片段（text 的子类型，可以有间隙）
+    - voice: 配音片段（TTS/录制）
+    - image: 图片片段
     - effect: 特效片段
     - filter: 滤镜片段
     - sticker: 贴纸片段

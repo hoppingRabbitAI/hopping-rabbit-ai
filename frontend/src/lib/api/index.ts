@@ -19,12 +19,13 @@ export * from './types';
 export { ApiClient, API_BASE_URL, getAuthToken, handleAuthExpired } from './client';
 
 // 媒体代理
-export { getAssetStreamUrl, getProxyUrl, needsProxy } from './media-proxy';
+export { getAssetStreamUrl, getProxyUrl, needsProxy, getAssetThumbnailUrl, fetchAssetThumbnailUrl, getCloudflareThumbnailUrl } from './media-proxy';
 
 // 模块化 API
 export { projectApi, ProjectApi } from './projects';
 export { assetApi, AssetApi, uploadVideo } from './assets';
 export { clipsApi, ClipsApi } from './clips';
+export { tracksApi, TracksApi } from './tracks';
 export { taskApi, TaskApi, transcribeVideo } from './tasks';
 export { exportApi, ExportApi, exportVideo } from './export';
 export { smartApi, SmartApi } from './smart';

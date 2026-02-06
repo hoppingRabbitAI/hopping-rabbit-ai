@@ -106,6 +106,9 @@ celery_app.conf.update(
         
         # 智能清洗：低优先级，CPU
         "app.tasks.smart_clean.*": {"queue": "cpu_low"},
+        
+        # ★ B-roll 下载：CPU 任务，使用 cpu 队列
+        "app.tasks.broll_download.*": {"queue": "cpu"},
     },
     
     # 队列定义
@@ -114,6 +117,10 @@ celery_app.conf.update(
         Queue("gpu_high", routing_key="gpu.high"),
         # GPU 中优先级队列
         Queue("gpu_medium", routing_key="gpu.medium"),
+        # GPU 队列（通用）
+        Queue("gpu", routing_key="gpu"),
+        # CPU 队列（通用）
+        Queue("cpu", routing_key="cpu"),
         # CPU 中优先级队列
         Queue("cpu_medium", routing_key="cpu.medium"),
         # CPU 低优先级队列

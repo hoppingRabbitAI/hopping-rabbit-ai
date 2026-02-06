@@ -314,6 +314,147 @@ class LLMService:
         clear_session_history(session_id)
     
     # ============================================
+    # JSON 结构化输出
+    # ============================================
+    
+    async def generate_json(
+        self,
+        user_prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+    ) -> Dict[str, Any]:
+        """
+        生成 JSON 结构化输出
+        
+        Args:
+            user_prompt: 用户提示
+            system_prompt: 系统提示（应包含 JSON 格式要求）
+            temperature: 温度参数（建议较低以获得稳定输出）
+            
+        Returns:
+            解析后的 JSON 字典
+        """
+        import json
+        import re
+        
+        messages = []
+        
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        
+        messages.append(HumanMessage(content=user_prompt))
+        
+        llm = get_llm(
+            provider=self.provider,
+            model=self.model,
+            temperature=temperature,
+        )
+        
+        response = await llm.ainvoke(messages)
+        content = response.content
+        
+        # 尝试提取 JSON
+        # 1. 尝试直接解析
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+        
+        # 2. 尝试提取 ```json ... ``` 代码块
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # 3. 尝试提取 { ... } 
+        brace_match = re.search(r'\{[\s\S]*\}', content)
+        if brace_match:
+            try:
+                return json.loads(brace_match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        # 解析失败，返回原始内容
+        logger.warning(f"[LLMService] JSON 解析失败，原始内容: {content[:200]}")
+        raise ValueError(f"无法解析 JSON 输出: {content[:100]}")
+    
+    # ============================================
+    # 多模态分析（图片+文字）
+    # ============================================
+    
+    async def analyze_image(
+        self,
+        image_base64: str,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        多模态分析：图片 + 文字
+        
+        使用 doubao-seed-1-8 模型分析图片内容
+        
+        Args:
+            image_base64: 图片的 base64 编码（不含 data:image/xxx;base64, 前缀）
+            prompt: 分析提示词
+            system_prompt: 系统提示（可选）
+            
+        Returns:
+            分析结果文本
+        """
+        import httpx
+        
+        api_key = settings.volcengine_ark_api_key
+        model = settings.doubao_seed_1_8_endpoint
+        base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        
+        # 构建多模态消息
+        content = []
+        
+        # 添加图片
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{image_base64}"
+            }
+        })
+        
+        # 添加文字
+        content.append({
+            "type": "text",
+            "text": prompt
+        })
+        
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": content})
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 1000,
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            result = data["choices"][0]["message"]["content"]
+            logger.info(f"[LLMService] 多模态分析完成: {result[:100]}...")
+            return result
+
+    # ============================================
     # 图像 Prompt 增强
     # ============================================
     

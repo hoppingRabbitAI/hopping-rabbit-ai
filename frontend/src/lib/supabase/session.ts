@@ -84,7 +84,7 @@ export async function createAuthHeaders(contentType?: string): Promise<HeadersIn
  */
 export async function authFetch(
   url: string,
-  options: RequestInit = {}
+  options: RequestInit & { timeout?: number; retries?: number } = {}
 ): Promise<Response> {
   const session = await getSessionSafe();
   
@@ -94,8 +94,47 @@ export async function authFetch(
     headers.set('Authorization', `Bearer ${session.access_token}`);
   }
   
-  return fetch(url, {
-    ...options,
-    headers,
-  });
+  // 支持超时控制，默认 180 秒（3分钟），适配长时间 LLM + B-Roll 搜索请求
+  // 支持重试机制，默认 2 次重试，处理 socket hang up / ECONNRESET
+  const { timeout = 180000, retries = 2, ...fetchOptions } = options;
+  
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+      const response = await fetch(url, {
+        ...fetchOptions,
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error as Error;
+      
+      // 检查是否是可重试的网络错误（socket hang up, ECONNRESET, 连接超时等）
+      const isRetryableError = 
+        error instanceof TypeError || // 网络错误通常是 TypeError
+        (error as Error).name === 'AbortError' ||
+        (error as Error).message?.includes('socket') ||
+        (error as Error).message?.includes('network') ||
+        (error as Error).message?.includes('ECONNRESET');
+      
+      if (isRetryableError && attempt < retries) {
+        // 指数退避：500ms, 1000ms
+        const delay = 500 * Math.pow(2, attempt);
+        console.warn(`[authFetch] 请求失败，${delay}ms 后重试 (${attempt + 1}/${retries}):`, (error as Error).message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      throw error;
+    }
+  }
+  
+  throw lastError;
 }

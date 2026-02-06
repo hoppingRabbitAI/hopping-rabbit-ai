@@ -21,11 +21,10 @@ import { getClipTransformAtOffset } from '../lib/keyframe-interpolation';
 import type { Clip } from '../types/clip';
 import type { KeyframeProperty, CompoundValue } from '../types';
 
-// 画布比例预设 - 青色框的固定比例选项
-const CANVAS_ASPECT_PRESETS: { label: '16:9' | '9:16' | '1:1' }[] = [
+// 画布比例预设 - 青色框的固定比例选项（仅支持 16:9 和 9:16）
+const CANVAS_ASPECT_PRESETS: { label: '16:9' | '9:16' }[] = [
   { label: '16:9' },
   { label: '9:16' },
-  { label: '1:1' },
 ];
 
 /**
@@ -115,8 +114,7 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
     }
     if (targetClip.aspectRatio === '16:9') return 16/9;
     if (targetClip.aspectRatio === '9:16') return 9/16;
-    if (targetClip.aspectRatio === '1:1') return 1;
-    return 9/16;
+    return 9/16;  // 默认竖屏
   }, [targetClip?.assetId, targetClip?.aspectRatio, assets]);
 
   // 获取当前 clip 的关键帧 Map
@@ -215,7 +213,7 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
   }, [targetClipId, targetClip, currentTransform, updateClip, saveToHistory, isInRange, currentOffset, getPropertyKeyframes, addKeyframe, updateKeyframe]);
 
   // 选择画面比例 - ★ 修改画布比例，而非 clip 的 cropRect
-  const handleAspectSelect = useCallback((ratioLabel: '16:9' | '9:16' | '1:1') => {
+  const handleAspectSelect = useCallback((ratioLabel: '16:9' | '9:16') => {
     setCanvasAspectRatio(ratioLabel);
   }, [setCanvasAspectRatio]);
 
@@ -551,7 +549,7 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
             <button
               onClick={() => {
                 if (!targetClipId) return;
-                saveToHistory('更新显示模式');
+                saveToHistory();
                 updateClip(targetClipId, {
                   metadata: {
                     ...targetClip?.metadata,
@@ -571,7 +569,7 @@ export function TransformPanel({ onClose }: TransformPanelProps) {
             <button
               onClick={() => {
                 if (!targetClipId) return;
-                saveToHistory('更新显示模式');
+                saveToHistory();
                 updateClip(targetClipId, {
                   metadata: {
                     ...targetClip?.metadata,

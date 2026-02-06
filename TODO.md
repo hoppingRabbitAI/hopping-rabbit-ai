@@ -122,7 +122,37 @@ celery -A app.celery_config worker --loglevel=info
 - 切分后自动选中所有新片段
 - 支持批量撤销切分操作
 
-### 6. 数据管理
+### 6. B-Roll 智能生成优化
+
+#### 已完成 ✅ (2026-02-01)
+- [x] **宽高比匹配** - B-Roll 自动匹配主视频宽高比
+  - 9:16 竖屏主视频 → 搜索 portrait 方向的 B-Roll
+  - 16:9 横屏主视频 → 搜索 landscape 方向的 B-Roll
+  - 工具函数: `backend/app/services/video_utils.py`
+  
+- [x] **裁剪信息记录** - clip.metadata 中存储裁剪参数
+  - `crop_info.needs_crop` - 是否需要裁剪
+  - `crop_info.crop_area` - 裁剪区域 {x, y, width, height}
+  - `crop_info.ffmpeg_filter` - FFmpeg 裁剪命令
+  
+- [x] **display_mode 默认值** - 全局覆盖 (fullscreen) 作为默认
+  - `fullscreen` - B-Roll 全屏覆盖主画面（90% 场景）
+  - `pip` - B-Roll 作为小窗显示（特殊场景）
+
+#### 待完成
+- [ ] **局部 B-Roll (pip 模式)** - 前端渲染支持 B-Roll 小窗
+  - 需要实现 Picture-in-Picture 布局
+  - 可配置 pip 位置（左上/右上/左下/右下）
+  
+- [ ] **实时裁剪预览** - 编辑器中预览裁剪效果
+  - 显示裁剪框
+  - 支持手动调整裁剪区域
+
+- [ ] **B-Roll 替换** - 用户可替换自动选择的 B-Roll
+  - 搜索同方向的替代素材
+  - 保留时间和裁剪配置
+
+### 7. 数据管理
 - [x] 删除改为软删除 ✅ (transcript segments 已实现 is_deleted)
   - ~~projects/tracks/clips/assets 添加 `is_deleted` 字段~~
   - ~~删除操作改为更新 `is_deleted = true`~~
@@ -130,7 +160,7 @@ celery -A app.celery_config worker --loglevel=info
   - [ ] 支持回收站功能（待实现）
   - 注：clips/tracks 使用硬删除，transcript segments 使用软删除
 
-### 7. 状态持久化优化
+### 8. 状态持久化优化
 - [x] localStorage 备份机制 ✅ (2026-01-12)
   - 操作后立即保存到 localStorage（pendingSync: true）
   - 刷新时优先恢复未同步的本地数据
@@ -164,6 +194,7 @@ celery -A app.celery_config worker --loglevel=info
 - [x] 阻塞性加载弹窗（视频未加载时禁止操作）✅ (2026-01-12)
 - [x] Crop/删除操作刷新后持久化 ✅ (2026-01-12)
 - [x] 前端开发规范文档 ✅ (2026-01-12) → `frontend/docs/DEVELOPMENT_STANDARDS.md`
+- [x] B-Roll 宽高比自动匹配 ✅ (2026-02-01)
 
 ---
 
@@ -174,4 +205,4 @@ celery -A app.celery_config worker --loglevel=info
 
 ---
 
-*最后更新：2026-01-13*
+*最后更新：2026-02-01*

@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
-import { X, Search, Film, Download, Loader2, Sparkles, Check, AlertCircle } from 'lucide-react';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { X, Search, Film, Download, Loader2, Sparkles, Check, AlertCircle, Target, Wand2, RefreshCw } from 'lucide-react';
 import { RabbitLoader } from '@/components/common/RabbitLoader';
 import { useEditorStore } from '../store/editor-store';
 import { toast } from '@/lib/stores/toast-store';
 import { brollApi, type BRollVideo, type KlingTask } from '@/lib/api/broll';
+import { generateBRollClips, getSessionByProject } from '../lib/workspace-api';
+import { clipsApi } from '@/lib/api';
 
 interface BRollPanelProps {
   onClose: () => void;
@@ -31,7 +33,153 @@ export function BRollPanel({ onClose }: BRollPanelProps) {
   const [klingTasks, setKlingTasks] = useState<KlingTask[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   
+  // AI 生成 B-Roll 相关状态
+  const [isGeneratingBRoll, setIsGeneratingBRoll] = useState(false);
+  
   const projectId = useEditorStore((s) => s.projectId);
+  const loadClips = useEditorStore((s) => s.loadClips);
+  
+  // B-Roll placeholder 相关状态
+  const brollInitialKeywords = useEditorStore((s) => s.brollInitialKeywords);
+  const activeBrollPlaceholderId = useEditorStore((s) => s.activeBrollPlaceholderId);
+  const setBrollInitialKeywords = useEditorStore((s) => s.setBrollInitialKeywords);
+  const setActiveBrollPlaceholderId = useEditorStore((s) => s.setActiveBrollPlaceholderId);
+  const updateClip = useEditorStore((s) => s.updateClip);
+  const clips = useEditorStore((s) => s.clips);
+  
+  // 获取当前激活的 placeholder clip
+  const activePlaceholderClip = activeBrollPlaceholderId 
+    ? clips.find(c => c.id === activeBrollPlaceholderId) 
+    : null;
+  
+  // 初始化搜索关键词（从 placeholder 点击传入）
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    if (brollInitialKeywords.length > 0 && !initializedRef.current) {
+      const query = brollInitialKeywords.join(' ');
+      setSearchQuery(query);
+      // 自动触发搜索
+      searchBRoll(query, activeSource, 1);
+      initializedRef.current = true;
+    }
+  }, [brollInitialKeywords, activeSource]);
+  
+  // 面板关闭时清理状态
+  const handleClose = useCallback(() => {
+    setBrollInitialKeywords([]);
+    setActiveBrollPlaceholderId(null);
+    initializedRef.current = false;
+    onClose();
+  }, [onClose, setBrollInitialKeywords, setActiveBrollPlaceholderId]);
+
+  // 获取 loadAssets 用于刷新素材列表
+  const loadAssets = useEditorStore((s) => s.loadAssets);
+  
+  // ★ 获取 loadTracks 用于刷新轨道列表（确保新建的 B-Roll track 同步）
+  const loadTracks = useEditorStore((s) => s.loadTracks);
+
+  // ★★★ AI 自动生成 B-Roll ★★★
+  const handleGenerateBRoll = useCallback(async () => {
+    if (!projectId) {
+      toast.error('请先打开一个项目');
+      return;
+    }
+    
+    setIsGeneratingBRoll(true);
+    toast.info('🎬 正在 AI 分析视频内容，生成 B-Roll...');
+    
+    try {
+      // 1. 获取 sessionId
+      const sessionInfo = await getSessionByProject(projectId);
+      const sessionId = sessionInfo.session_id;
+      
+      if (!sessionId) {
+        throw new Error('未找到关联的会话');
+      }
+      
+      console.log('[BRollPanel] 获取到 sessionId:', sessionId);
+      
+      // 2. 调用生成 B-Roll API
+      const result = await generateBRollClips(sessionId);
+      
+      console.log('[BRollPanel] B-Roll 生成结果:', result);
+      
+      // ★ 后端返回 status: "completed"，不是 "success"
+      if ((result.status === 'completed' || result.status === 'success') && result.broll_clips_created > 0) {
+        toast.success(`✅ 成功启动 ${result.broll_clips_created} 个 B-Roll 下载任务，请在素材面板查看进度`);
+        
+        // ★ 立即刷新一次 assets，让用户看到正在下载的素材
+        await loadAssets?.();
+        
+        // 3. 启动轮询检测新 B-Roll clips
+        // ★★★ 优化：轮询期间只通过 API 检查 clips 数量，不更新 store ★★★
+        // 避免频繁刷新导致视频播放器重新初始化
+        let pollCount = 0;
+        const maxPolls = 60;
+        let lastBrollCount = 0;
+        
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          console.log(`[BRollPanel] 轮询 B-Roll 创建状态 (${pollCount}/${maxPolls})...`);
+          
+          try {
+            // ★★★ 通过 API 直接查询 clips，不更新 store ★★★
+            // 这样不会触发视频播放器重新初始化
+            const response = await clipsApi.getClipsByProject(projectId!);
+            const allClips = response.data || [];
+            
+            // 计算 B-Roll clips 数量
+            const brollClips = allClips.filter(
+              c => c.clipType === 'video' && c.metadata?.is_broll === true
+            );
+            
+            const currentBrollCount = brollClips.length;
+            console.log(`[BRollPanel] 当前 B-Roll clips: ${currentBrollCount}`);
+            
+            // 检测是否有新的 B-Roll 添加
+            if (currentBrollCount > lastBrollCount) {
+              console.log(`[BRollPanel] ✅ 新增 ${currentBrollCount - lastBrollCount} 个 B-Roll`);
+              lastBrollCount = currentBrollCount;
+              // ★ 只刷新 assets 面板，让用户看到下载进度
+              await loadAssets?.();
+            }
+            
+            // 检查是否所有任务都完成（当前 broll 数量 >= 启动的任务数）
+            if (currentBrollCount >= result.broll_clips_created) {
+              clearInterval(pollInterval);
+              // ★★★ 所有下载完成后，一次性刷新 clips 和 tracks ★★★
+              await Promise.all([loadClips?.(), loadTracks?.()]);
+              toast.success(`✅ 所有 ${currentBrollCount} 个 B-Roll 下载完成！`);
+              console.log('[BRollPanel] ✅ 所有 B-Roll 下载完成，停止轮询');
+              return;
+            }
+            
+            // 超时检查
+            if (pollCount >= maxPolls) {
+              clearInterval(pollInterval);
+              // ★ 超时也要刷新一次 clips 和 tracks
+              await Promise.all([loadClips?.(), loadTracks?.()]);
+              toast.warning(`已创建 ${currentBrollCount}/${result.broll_clips_created} 个 B-Roll，部分仍在下载中`);
+              console.log('[BRollPanel] ⏱️ 轮询超时，停止');
+            }
+          } catch (pollError) {
+            console.error('[BRollPanel] 轮询失败:', pollError);
+          }
+        }, 3000);
+        
+      } else if (result.broll_clips_created === 0) {
+        toast.info('AI 分析后未找到适合插入 B-Roll 的位置');
+      } else {
+        toast.warning(result.message || 'B-Roll 生成完成');
+      }
+      
+    } catch (error) {
+      console.error('[BRollPanel] 生成 B-Roll 失败:', error);
+      toast.error('生成 B-Roll 失败: ' + (error instanceof Error ? error.message : '未知错误'));
+    } finally {
+      setIsGeneratingBRoll(false);
+    }
+  }, [projectId, loadClips, loadAssets, loadTracks]);
 
   // 搜索 B roll
   const searchBRoll = useCallback(async (query: string, source: SourceType, pageNum: number = 1) => {
@@ -160,13 +308,11 @@ export function BRollPanel({ onClose }: BRollPanelProps) {
           updated_at: string;
         };
         
-        // 计算宽高比
-        let aspectRatio: '16:9' | '9:16' | '1:1' | undefined;
+        // 计算宽高比（仅支持 16:9 和 9:16，其他比例归类到最接近的）
+        let aspectRatio: '16:9' | '9:16' | undefined;
         if (asset.width && asset.height) {
           const ratio = asset.width / asset.height;
-          if (ratio > 1.5) aspectRatio = '16:9';
-          else if (ratio < 0.7) aspectRatio = '9:16';
-          else aspectRatio = '1:1';
+          aspectRatio = ratio > 1 ? '16:9' : '9:16';
         }
         
         // 使用后端代理 URL（和正常上传一样，避免 CORS 问题）
@@ -208,13 +354,38 @@ export function BRollPanel({ onClose }: BRollPanelProps) {
         
         console.log('[BRollPanel] ✅ B-roll asset 已添加到资源库:', assetId);
         
+        // ★★★ 如果有激活的 placeholder，自动替换素材 ★★★
+        if (activeBrollPlaceholderId && activePlaceholderClip) {
+          console.log('[BRollPanel] 🔄 替换 placeholder clip:', activeBrollPlaceholderId);
+          updateClip(activeBrollPlaceholderId, {
+            assetId: assetId,
+            mediaUrl: assetUrl,
+            thumbnail: video.image,
+            name: `B-Roll: ${video.user.name}`,
+            metadata: {
+              ...activePlaceholderClip.metadata,
+              is_placeholder: false,  // 不再是占位符
+              source: activeSource,
+              sourceId: video.id,
+              photographer: video.user.name,
+            },
+          });
+          
+          // 清理 placeholder 状态
+          setActiveBrollPlaceholderId(null);
+          setBrollInitialKeywords([]);
+          
+          toast.success('B-Roll 素材已替换！');
+        } else {
+          toast.success('视频已添加到资源库！可拖拽到时间线使用');
+        }
+        
         setDownloadingIds(prev => {
           const next = new Set(prev);
           next.delete(video.id);
           return next;
         });
         setDownloadedIds(prev => new Set(prev).add(video.id));
-        toast.success('视频已添加到资源库！可拖拽到时间线使用');
         
       } catch (pollError) {
         console.error('[BRollPanel] 轮询下载状态失败:', pollError);
@@ -230,7 +401,7 @@ export function BRollPanel({ onClose }: BRollPanelProps) {
         return next;
       });
     }
-  }, [downloadingIds, downloadedIds, projectId, activeSource]);
+  }, [downloadingIds, downloadedIds, projectId, activeSource, activeBrollPlaceholderId, activePlaceholderClip, updateClip, setActiveBrollPlaceholderId, setBrollInitialKeywords]);
 
   // Kling AI 生成视频
   const handleKlingGenerate = useCallback(async () => {
@@ -348,14 +519,50 @@ export function BRollPanel({ onClose }: BRollPanelProps) {
           <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
             <Film className="w-5 h-5" />
             B-roll 素材库
+            {activePlaceholderClip && (
+              <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full flex items-center gap-1">
+                <Target size={12} />
+                替换模式
+              </span>
+            )}
           </h3>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* ★ AI 生成 B-Roll 按钮 */}
+            <button
+              onClick={handleGenerateBRoll}
+              disabled={isGeneratingBRoll}
+              className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 text-white text-sm font-medium rounded-lg hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+              title="AI 自动分析视频内容并生成 B-Roll"
+            >
+              {isGeneratingBRoll ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  生成中...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="w-4 h-4" />
+                  AI 生成
+                </>
+              )}
+            </button>
+            <button
+              onClick={handleClose}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
+        
+        {/* 替换模式提示 */}
+        {activePlaceholderClip && (
+          <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+            <span className="font-medium">正在为 B-Roll 选择素材</span>
+            <span className="mx-1">•</span>
+            <span>选择素材后将自动替换到时间线</span>
+          </div>
+        )}
 
         {/* 来源选择器 */}
         <div className="flex gap-2 mb-4">
@@ -523,7 +730,6 @@ function KlingAIInterface({
               >
                 <option value="16:9">16:9 横屏</option>
                 <option value="9:16">9:16 竖屏</option>
-                <option value="1:1">1:1 方形</option>
               </select>
             </div>
           </div>

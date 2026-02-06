@@ -49,6 +49,49 @@ export function getCloudflareThumbnailUrl(uid: string, timestamp: number = 1): s
   return `https://${CLOUDFLARE_DELIVERY_DOMAIN}/${uid}/thumbnails/thumbnail.jpg?time=${timestamp}s`;
 }
 
+// ============================================
+// ★★★ 统一封面图 API ★★★
+// ============================================
+
+/**
+ * 获取 asset 封面图 URL（统一入口）
+ * 
+ * 现在后端 API 统一返回 thumbnail_url 字段，前端直接使用即可
+ * 这个函数主要用于：
+ * 1. 直接使用 API 返回的 thumbnail_url
+ * 2. 如果没有 thumbnail_url 但有 assetId，回退到 thumbnail API
+ * 
+ * @param options - 获取封面图的参数
+ * @returns 封面图 URL 或 null
+ */
+export interface GetThumbnailOptions {
+  assetId?: string;           // Asset ID（用于后端 API）
+  thumbnailUrl?: string;      // API 返回的 thumbnail_url（直接使用）
+}
+
+export function getAssetThumbnailUrl(options: GetThumbnailOptions): string | null {
+  const { assetId, thumbnailUrl } = options;
+  
+  // 1. 优先使用 API 返回的 thumbnail_url
+  if (thumbnailUrl) {
+    return thumbnailUrl;
+  }
+  
+  // 2. 回退到 thumbnail API
+  if (assetId) {
+    return `${API_BASE_URL}/assets/${assetId}/thumbnail`;
+  }
+  
+  return null;
+}
+
+/**
+ * 异步获取 asset 封面图（通过 thumbnail API）
+ */
+export async function fetchAssetThumbnailUrl(assetId: string): Promise<string | null> {
+  return `${API_BASE_URL}/assets/${assetId}/thumbnail`;
+}
+
 /**
  * 将媒体 URL 转换为代理 URL（用于解决 CORS 问题）
  * 
@@ -130,6 +173,12 @@ export function getSmartVideoUrl(assetId: string, _preferProxy: boolean = true):
 export function getHlsPlaylistUrl(assetId: string): string {
   return `${API_BASE_URL}/assets/hls/${assetId}/playlist.m3u8`;
 }
+
+/**
+ * 获取 HLS 播放 URL（别名，用于视频资源层分流）
+ * @param assetId - 资源 ID
+ */
+export const getAssetHlsUrl = getHlsPlaylistUrl;
 
 /**
  * 获取 HLS 状态检查 URL

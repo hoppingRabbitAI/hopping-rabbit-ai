@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     volcengine_access_key: Optional[str] = None
     volcengine_secret_key: Optional[str] = None
     doubao_model_endpoint: str = "doubao-seed-1-6-flash-250828"  # Flash 模型（速度快）
+    doubao_seed_1_8_endpoint: str = "doubao-seed-1-8-251228"  # Seed-1.8 模型（更强推理能力）
     
     # LLM (Google Gemini)
     # 获取 API Key: https://aistudio.google.com/app/apikey
@@ -48,6 +49,11 @@ class Settings(BaseSettings):
     
     # Storage
     cache_dir: str = "/tmp/hoppingrabbit_cache"
+    
+    # Backend URL (用于生成完整的静态文件 URL)
+    # 本地开发: http://localhost:8000
+    # 生产环境: https://api.hoppingrabbit.ai
+    backend_url: str = "http://localhost:8000"
     
     # Callback URL (可灵AI回调地址)
     # 生产环境需设置为公网可访问的地址，如 https://api.example.com

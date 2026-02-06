@@ -25,6 +25,10 @@ from .upload import router as upload_router  # 文件上传
 from .cloudflare import router as cloudflare_router  # Cloudflare Stream
 from .video_gen import router as video_gen_router  # 统一视频生成（多模型）
 from .materials import router as materials_router  # 用户素材库
+from .benchmark import router as benchmark_router  # 标杆视频分析
+from .shot_segmentation import router as shot_segmentation_router  # 分镜策略
+from .ai_capabilities import router as ai_capabilities_router  # AI 能力（换背景等）
+from .background_replace import router as background_replace_router  # 背景替换 Agent Workflow
 
 # 创建主路由器
 api_router = APIRouter()
@@ -50,6 +54,10 @@ api_router.include_router(broll_router)  # B-roll 素材库
 api_router.include_router(upload_router)  # 文件上传
 api_router.include_router(cloudflare_router)  # Cloudflare Stream
 api_router.include_router(materials_router)  # 用户素材库
+api_router.include_router(benchmark_router)  # 标杆视频分析
+api_router.include_router(shot_segmentation_router)  # 分镜策略
+api_router.include_router(ai_capabilities_router)  # AI 能力（换背景等）
+api_router.include_router(background_replace_router)  # 背景替换 Agent Workflow
 
 # 导出
 __all__ = [

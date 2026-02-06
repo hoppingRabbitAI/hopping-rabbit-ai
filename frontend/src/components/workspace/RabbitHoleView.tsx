@@ -425,7 +425,7 @@ function OtherFeatureDetail({ feature, onBack }: FeatureDetailProps) {
             prompt: formData.prompt,
             negative_prompt: formData.negativePrompt,
             duration: (formData.duration || '5') as '5' | '10',
-            aspect_ratio: (formData.aspectRatio || '16:9') as '16:9' | '9:16' | '1:1',
+            aspect_ratio: (formData.aspectRatio || '16:9') as '16:9' | '9:16',
           });
           taskId = response.task_id;
           break;
@@ -1117,7 +1117,6 @@ function TextToVideoForm({ formData, updateForm }: FormProps) {
         options={[
           { value: '16:9', label: '16:9 横屏' },
           { value: '9:16', label: '9:16 竖屏' },
-          { value: '1:1', label: '1:1 方形' },
         ]}
       />
     </div>

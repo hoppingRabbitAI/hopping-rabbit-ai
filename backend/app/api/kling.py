@@ -854,20 +854,23 @@ class AddToProjectRequest(BaseModel):
     project_id: Optional[str] = Field(None, description="目标项目 ID（为空则创建新项目）")
     name: Optional[str] = Field(None, description="素材名称（可选，默认使用任务类型）")
     create_clip: bool = Field(True, description="是否自动创建 clip 添加到轨道")
-    track_type: str = Field("video", description="轨道类型: video/audio/image")
+    clip_type: str = Field("video", description="Clip 类型: video/audio/image")
 
 
-def _get_or_create_track(supabase, project_id: str, track_type: str, user_id: str) -> str:
+def _get_or_create_track(supabase, project_id: str, clip_type: str, user_id: str) -> str:
     """获取或创建轨道，返回 track_id
     
+    注意：Track 没有 type 字段，所有轨道都是通用的
+    这里通过 clip_type 来查找已有相同类型 clip 所在的轨道，仅用于素材归类
+    
     逻辑：
-    1. 优先找已有同类型 clip 所在的 track（通过 clips.clip_type 判断）
+    1. 优先找已有同类型 clip 所在的 track
     2. 找不到则创建新轨道
     """
     now = datetime.utcnow().isoformat()
     
     # 1. 查找已有同类型 clip 所在的 track
-    existing_clip = supabase.table("clips").select("track_id, tracks!inner(project_id)").eq("clip_type", track_type).eq("tracks.project_id", project_id).order("created_at", desc=True).limit(1).execute()
+    existing_clip = supabase.table("clips").select("track_id, tracks!inner(project_id)").eq("clip_type", clip_type).eq("tracks.project_id", project_id).order("created_at", desc=True).limit(1).execute()
     
     if existing_clip.data:
         return existing_clip.data[0]["track_id"]
@@ -882,7 +885,7 @@ def _get_or_create_track(supabase, project_id: str, track_type: str, user_id: st
     track_data = {
         "id": track_id,
         "project_id": project_id,
-        "name": f"AI {track_type.capitalize()} Track",
+        "name": f"AI {clip_type.capitalize()} Track",  # 轨道名称仅用于显示，不表示类型
         "order_index": order_index,
         "is_muted": False,
         "is_locked": False,

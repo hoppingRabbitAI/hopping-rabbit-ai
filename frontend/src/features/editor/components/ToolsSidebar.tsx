@@ -17,6 +17,7 @@ import {
   Gauge,
   X,
   Smile,
+  Wand2,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editor-store';
 import { TransformPanel } from './TransformPanel';
@@ -25,6 +26,7 @@ import { AudioPanel } from './AudioPanel';
 import { AIToolsPanel } from './AIToolsPanel';
 import { SpeedPanel } from './SpeedPanel';
 import { BeautyPanel } from './BeautyPanel';
+import { VisualAgentPanel } from './VisualAgentPanel';
 import { CLIP_TYPE_COLORS, createDefaultClip } from '../types/clip';
 import { DEFAULT_TEXT_STYLE } from '../types/text';
 
@@ -37,6 +39,7 @@ interface Tool {
 }
 
 const TOOLS: Tool[] = [
+  { id: 'visual-agent', name: 'Visual AI', icon: <Wand2 size={22} />, description: '智能视觉编排（知识类博主必备）' },
   { id: 'ai-tools', name: 'AI tools', icon: <Sparkles size={22} />, description: '智能剪辑助手' },
   { id: 'beauty', name: 'Beauty', icon: <Smile size={22} />, description: '美颜美体' },
   { id: 'transform', name: 'Transform', icon: <Move size={22} />, description: '变换与动画（支持关键帧）' },
@@ -155,6 +158,12 @@ export function ToolsSidebar({ onToolClick, onUploadClick }: ToolsSidebarProps) 
   const handleToolClick = (tool: Tool) => {
     if (tool.disabled) return;
 
+    // Visual Agent 智能视觉编排
+    if (tool.id === 'visual-agent') {
+      setActiveSidebarPanel(activeSidebarPanel === 'visual-agent' ? null : 'visual-agent');
+      return;
+    }
+
     // AI Tools 需要选中视频 clip 才能使用
     if (tool.id === 'ai-tools') {
       if (!selectedVideoClip) return; // 没选中视频则不响应
@@ -253,6 +262,11 @@ export function ToolsSidebar({ onToolClick, onUploadClick }: ToolsSidebarProps) 
       {/* 美颜美体面板 */}
       {activeSidebarPanel === 'beauty' && (
         <BeautyPanel onClose={closePanel} />
+      )}
+
+      {/* 智能视觉编排面板 */}
+      {activeSidebarPanel === 'visual-agent' && (
+        <VisualAgentPanel onClose={closePanel} />
       )}
 
       {/* 工具列表 */}

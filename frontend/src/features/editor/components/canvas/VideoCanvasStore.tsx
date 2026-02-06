@@ -46,12 +46,11 @@ const bufferLog = (...args: unknown[]) => { if (DEBUG_VIDEO_BUFFER) console.log(
 // 预热日志（仅在 development 模式下打印）
 const preheatLog = (...args: unknown[]) => { if (DEBUG_ENABLED) console.log('[Preheat]', ...args); };
 
-type AspectRatio = '16:9' | '9:16' | '1:1';
+type AspectRatio = '16:9' | '9:16';
 
 const ASPECT_RATIOS: Record<AspectRatio, number> = {
   '16:9': 16 / 9,
   '9:16': 9 / 16,
-  '1:1': 1,
 };
 
 const MIN_ZOOM = 0.25;
@@ -59,8 +58,19 @@ const MAX_ZOOM = 3;
 const ZOOM_STEP = 0.25;
 const SEEK_THRESHOLD = 0.05;        // seek 阈值（秒）- 50ms 精度
 const AUDIO_DRIFT_THRESHOLD = 0.08; // 音频漂移阈值（秒）- 80ms 精度
-const SEEK_DEBOUNCE_MS = 100;       // seek 防抖间隔（毫秒）
+const SEEK_DEBOUNCE_MS = 250;       // ★★★ seek 防抖间隔（毫秒）- 从 100ms 增加到 250ms
+const SCRUBBING_FRAME_SKIP = 5;     // ★★★ 拖动时每 N 帧才真正 seek 一次
 const STORE_UPDATE_INTERVAL = 33;   // 30fps 节流 store 更新
+
+// ★★★ 治本修复：Seek 节流配置 ★★★
+const RENDER_SEEK_THRESHOLD = 0.5;      // 渲染时 seek 阈值（秒）- 500ms，只有大漂移才 seek
+const RAF_SEEK_THRESHOLD = 0.3;         // RAF循环中 seek 阈值（秒）- 300ms
+const BROLL_SEEK_THRESHOLD = 0.8;       // B-Roll seek 阈值（秒）- 800ms，更宽容
+const SEEK_COOLDOWN_MS = 300;           // seek 冷却时间（毫秒）- 同一视频 300ms 内不重复 seek
+const CLIP_SWITCH_WAIT_MS = 100;        // clip 切换等待时间（毫秒）- 等待视频就绪
+
+// ★★★ Seek 时间戳记录：避免频繁 seek 同一视频 ★★★
+const lastSeekTimestamps = new Map<string, number>(); // clipId -> timestamp
 
 // ★ 音量转换：clip.volume 范围 0-2，但 HTMLMediaElement.volume 只支持 0-1
 // 超过 1 的部分需要通过 Web Audio API 的 GainNode 实现，暂时先限制到 1
@@ -207,7 +217,8 @@ function needsAIBodyProcessing(clip: { effectParams?: unknown }): boolean {
 // 1. 增大缓冲区：maxBufferLength 从 30s 增加到 120s，支持长视频顺畅播放
 // 2. 增加分片加载超时：fragLoadingTimeOut 从 20s 增加到 60s，适应慢网络
 // 3. 增加重试次数：fragLoadingMaxRetry 从 6 增加到 8，提高容错能力
-// 4. 提前缓冲策略：backBufferLength 保留 30s 已播放内容用于回看
+// 4. 提前缓冲策略：backBufferLength 保留已播放内容用于回看
+// 5. ★★★ seek 时保留缓存：避免拖动播放头时重复请求 ts 文件 ★★★
 const HLS_CONFIG: Partial<HlsConfig> = {
   // ★ 前向缓冲 - 支持长视频
   maxBufferLength: 120,          // 最大缓冲 120 秒（原 30s）
@@ -215,8 +226,8 @@ const HLS_CONFIG: Partial<HlsConfig> = {
   maxBufferSize: 200 * 1000 * 1000, // 200MB 缓冲上限（原 60MB）
   maxBufferHole: 0.5,            // 允许的缓冲空洞
   
-  // ★ 后向缓冲 - 支持快速回看
-  backBufferLength: 60,          // 保留 60 秒已播放内容（新增）
+  // ★★★ 后向缓冲 - 大幅增加以支持快速回看（关键优化）★★★
+  backBufferLength: 180,         // ★ 保留 180 秒已播放内容（从 60s 增加）
   
   // ★ 加载超时配置 - 增强网络容错
   manifestLoadingTimeOut: 15000,  // playlist 加载超时 15s（原 10s）
@@ -229,6 +240,10 @@ const HLS_CONFIG: Partial<HlsConfig> = {
   // ★ 预加载策略 - 主动缓冲
   startFragPrefetch: true,       // 预加载起始分片（新增）
   testBandwidth: true,           // 带宽测试以选择最佳质量（新增）
+  
+  // ★★★ Seek 优化：保持已加载的 segment 不被清除 ★★★
+  liveSyncDuration: 0,           // 非直播模式
+  liveBackBufferLength: Infinity, // 后向缓冲无限（非直播）
   
   // ★ 其他配置
   lowLatencyMode: false,
@@ -288,7 +303,8 @@ async function getHlsSource(assetId: string): Promise<HlsSourceInfo> {
     try {
       bufferLog('  ↳ 调用 checkHlsAvailable...');
       const status = await checkHlsAvailable(assetId);
-      bufferLog('  ↳ HLS 状态:', status.available ? 'ready' : status.cloudflareStatus || status.hlsStatus || 'processing');
+      bufferLog('  ↳ HLS 状态:', status.available ? 'ready' : status.cloudflareStatus || status.hlsStatus || 'processing',
+        '| canPlayMp4:', status.canPlayMp4, '| needsTranscode:', status.needsTranscode);
       
       let info: HlsSourceInfo;
     
@@ -298,7 +314,7 @@ async function getHlsSource(assetId: string): Promise<HlsSourceInfo> {
       
       // 相对路径加上 API 基础 URL
       if (playlistUrl.startsWith('/')) {
-        playlistUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${playlistUrl}`;
+        playlistUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${playlistUrl}`;
       }
       
       info = { 
@@ -308,8 +324,19 @@ async function getHlsSource(assetId: string): Promise<HlsSourceInfo> {
         needsTranscode: false,
         hlsStatus: 'ready',
       };
+    } else if (status.canPlayMp4) {
+      // ★★★ 关键修复：如果可以播放 MP4，直接用 MP4 代理 ★★★
+      // 不需要转码的视频（如 B-Roll 的 H.264）可以直接播放
+      bufferLog('  ↳ 不需要 HLS，使用 MP4 代理');
+      info = { 
+        url: getAssetProxyUrl(assetId), 
+        type: 'mp4', 
+        checked: true,
+        needsTranscode: false,
+        hlsStatus: status.hlsStatus || 'not-needed',
+      };
     } else {
-      // ★ HLS 未就绪，显示处理中
+      // ★ 需要转码但 HLS 未就绪，显示处理中
       info = { 
         url: '', 
         type: 'transcoding', 
@@ -322,9 +349,20 @@ async function getHlsSource(assetId: string): Promise<HlsSourceInfo> {
     hlsSourceCache.set(assetId, info);
     return info;
   } catch (error) {
-    // ★★★ 不再静默回退到 MP4，直接抛出异常 ★★★
-    bufferLog('  ❌ getHlsSource 失败:', error);
-    throw error;
+    // ★★★ 记录详细错误，但不抛异常，回退到 MP4 代理 ★★★
+    console.error(`[VideoBuffer] ❌ getHlsSource 失败 (assetId=${assetId}):`, error);
+    bufferLog('  ❌ getHlsSource 失败，回退到 MP4 代理:', assetId.slice(-8));
+    
+    // ★ 失败时回退到 MP4 代理，不阻塞播放
+    const fallbackInfo: HlsSourceInfo = { 
+      url: getAssetProxyUrl(assetId), 
+      type: 'mp4', 
+      checked: true,
+      needsTranscode: false,
+      hlsStatus: 'fallback',
+    };
+    hlsSourceCache.set(assetId, fallbackInfo);
+    return fallbackInfo;
   } finally {
     // ★ 请求完成后清理 Promise 缓存
     hlsSourcePromises.delete(assetId);
@@ -441,7 +479,13 @@ async function doPreheatVideo(assetId: string): Promise<boolean> {
           video.load();
         } else if (Hls.isSupported()) {
           bufferLog('  → HLS.js 模式');
-          hlsInstance = new Hls(HLS_CONFIG);
+          // ★★★ 预热缓冲 30s，确保播放流畅 ★★★
+          hlsInstance = new Hls({
+            ...HLS_CONFIG,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 45,
+            startFragPrefetch: true,
+          });
           
           // ★★★ 关键：监听 HLS.js 的 MANIFEST_PARSED 事件 ★★★
           hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -1514,7 +1558,7 @@ export function VideoCanvasNew() {
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
   const videoAreaRef = useRef<HTMLDivElement>(null);
-  const videoRefInternal = useRef<HTMLVideoElement | null>(null);
+  // ★★★ 【已删除】videoRefInternal - 死代码，所有视频通过 mountedVideosRef 管理 ★★★
   const videoContainerRef = useRef<HTMLDivElement | null>(null);  // ★ 视频容器 ref（可变）
   const progressRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -1556,12 +1600,7 @@ export function VideoCanvasNew() {
     }
   }, []);
   
-  // 使用 state 追踪 video 元素，确保 ref 设置后 useEffect 重新运行
-  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
-  const videoRef = useCallback((node: HTMLVideoElement | null) => {
-    videoRefInternal.current = node;
-    setVideoElement(node);
-  }, []);
+  // ★★★ 【已删除】videoRef callback - 死代码 ★★★
 
   // 分离视频、音频和图片 clips
   const { videoClips, audioClips, imageClips } = useMemo(() => {
@@ -1636,7 +1675,11 @@ export function VideoCanvasNew() {
     return videoClips.map(c => c.assetId || '').join(',');
   }, [videoClips]);
   
-  // ★★★ 核心修复：项目加载时，为所有 clip 预先创建并加载视频元素（使用 HLS）★★★
+  // ★★★ 核心优化：只预热前几个 clip，其他按需加载 ★★★
+  // 避免 20 个 clip 同时预热导致 500+ 请求
+  // ★★★ 治本：增加初始预热数量到 5，覆盖更多初始播放场景 ★★★
+  const PREHEAT_LIMIT = 5;
+  
   useEffect(() => {
     if (videoClips.length === 0) {
       // 没有视频 clip 时直接完成
@@ -1645,33 +1688,37 @@ export function VideoCanvasNew() {
       return;
     }
     
+    // ★★★ 只预热前 N 个 clip ★★★
+    const clipsToPreload = videoClips.slice(0, PREHEAT_LIMIT);
+    const totalToPreload = clipsToPreload.length;
+    
     // 重置状态
     setIsPreheatComplete(false);
     setIsInitialLoading(true);
-    setPreheatProgress({ done: 0, total: videoClips.length });
+    setPreheatProgress({ done: 0, total: totalToPreload });
     
-    preheatLog('🚀 开始预热视频，共', videoClips.length, '个 clips');
+    preheatLog('🚀 开始预热视频，预热前', totalToPreload, '个 clips（共', videoClips.length, '个）');
     
     // 为每个 clip 创建预加载的视频元素（使用 HLS 流式加载）
     const preloadClipVideos = async () => {
-      const totalClips = videoClips.length;
       let completedCount = 0;
       let firstClipReady = false;
       
-      // ★★★ 并行预热所有 clip，但限制并发数避免网络拥塞 ★★★
-      const CONCURRENT_LIMIT = 3;
-      const queue = [...videoClips];
+      // ★★★ 串行预热，避免并发请求过多 ★★★
+      // 原来是 3 并发预热所有 clip，现在改为串行预热前 3 个
+      const CONCURRENT_LIMIT = 1; // 改为串行
+      const queue = [...clipsToPreload];
       const inProgress: Promise<void>[] = [];
       
       const preloadOneClip = async (clip: typeof videoClips[0], index: number) => {
-        const clipLabel = `[${index + 1}/${totalClips}] ${clip.id.slice(-8)}`;
+        const clipLabel = `[${index + 1}/${totalToPreload}] ${clip.id.slice(-8)}`;
         const assetId = clip.assetId;
         
         // 如果已经挂载了这个 clip，跳过
         if (mountedVideosRef.current.has(clip.id)) {
           preheatLog(`  ✓ ${clipLabel} 已挂载，跳过`);
           completedCount++;
-          setPreheatProgress({ done: completedCount, total: totalClips });
+          setPreheatProgress({ done: completedCount, total: totalToPreload });
           
           // ★★★ 第一个 clip 就绪后立即解除阻塞 ★★★
           if (index === 0 && !firstClipReady) {
@@ -1686,7 +1733,7 @@ export function VideoCanvasNew() {
         if (!assetId) {
           preheatLog(`  ⚠️ ${clipLabel} 无 assetId，跳过`);
           completedCount++;
-          setPreheatProgress({ done: completedCount, total: totalClips });
+          setPreheatProgress({ done: completedCount, total: totalToPreload });
           return;
         }
         
@@ -1713,7 +1760,7 @@ export function VideoCanvasNew() {
           if (sourceInfo.type === 'transcoding') {
             preheatLog(`  ⏳ ${clipLabel} 视频转码中，跳过预热`);
             completedCount++;
-            setPreheatProgress({ done: completedCount, total: totalClips });
+            setPreheatProgress({ done: completedCount, total: totalToPreload });
             return;
           }
           
@@ -1743,11 +1790,13 @@ export function VideoCanvasNew() {
           // 4. 根据源类型初始化
           if (sourceInfo.type === 'hls' && Hls.isSupported()) {
             // ★★★ 关键：为每个 clip 创建独立的 HLS 实例 ★★★
+            // ★★★ 优化：预热前 3 个 clip，每个缓冲 30 秒保证流畅 ★★★
             hlsInstance = new Hls({
               ...HLS_CONFIG,
-              // 预热时使用更激进的缓冲策略
-              maxBufferLength: 60,  // 预热时缓冲 60s
-              startFragPrefetch: true,
+              // ★ 预热缓冲 30s，确保播放流畅不卡顿
+              maxBufferLength: 30,
+              maxMaxBufferLength: 45,
+              startFragPrefetch: true, // 启用预取
             });
             
             // ★★★ 修复：等待视频真正可以播放（canplay），而不仅仅是 manifest 解析 ★★★
@@ -1924,14 +1973,14 @@ export function VideoCanvasNew() {
           }
           
           completedCount++;
-          setPreheatProgress({ done: completedCount, total: totalClips });
+          setPreheatProgress({ done: completedCount, total: totalToPreload });
           
           // ★★★ 最终状态日志 ★★★
           const finalReady = video.readyState >= 2;
           const info = mountedVideosRef.current.get(clip.id);
           if (info) info.isReady = finalReady;
           
-          preheatLog(`  ${finalReady ? '✅' : '⚠️'} ${clipLabel} 预热${finalReady ? '完成' : '未完全就绪'} (${completedCount}/${totalClips})`,
+          preheatLog(`  ${finalReady ? '✅' : '⚠️'} ${clipLabel} 预热${finalReady ? '完成' : '未完全就绪'} (${completedCount}/${totalToPreload})`,
             '| 源类型:', sourceInfo.type,
             '| readyState:', video.readyState,
             '| isReady:', finalReady);
@@ -1946,8 +1995,8 @@ export function VideoCanvasNew() {
             
         } catch (error) {
           completedCount++;
-          setPreheatProgress({ done: completedCount, total: totalClips });
-          preheatLog(`  ❌ ${clipLabel} 预热失败 (${completedCount}/${totalClips}):`, error);
+          setPreheatProgress({ done: completedCount, total: totalToPreload });
+          preheatLog(`  ❌ ${clipLabel} 预热失败 (${completedCount}/${totalToPreload}):`, error);
         }
       };
       
@@ -1971,8 +2020,8 @@ export function VideoCanvasNew() {
         }
       }
       
-      // ★★★ 治本：检查是否所有视频都真正就绪 ★★★
-      const notReadyClips = videoClips.filter(clip => {
+      // ★★★ 治本：检查预热的视频是否都真正就绪 ★★★
+      const notReadyClips = clipsToPreload.filter(clip => {
         const info = mountedVideosRef.current.get(clip.id);
         return !info || !info.isReady || info.element.readyState < 2;
       });
@@ -2040,12 +2089,19 @@ export function VideoCanvasNew() {
       }
       
       // 最终状态日志
-      const readyCount = videoClips.filter(clip => {
+      const readyCount = clipsToPreload.filter(clip => {
         const info = mountedVideosRef.current.get(clip.id);
         return info?.isReady;
       }).length;
       
-      preheatLog('🎉 预热完成！', readyCount, '/', totalClips, '个视频就绪');
+      // ★★★ 详细调试日志：预热完成时的池子状态 ★★★
+      const poolStatus = Array.from(mountedVideosRef.current.entries()).map(([k, v]) => 
+        `${k.slice(-8)}:${v.isReady ? '✅' : '❌'}(rs=${v.element.readyState})`
+      );
+      preheatLog('🎉 预热完成！', readyCount, '/', totalToPreload, '个视频就绪');
+      preheatLog('📦 mountedVideosRef 状态:', poolStatus.join(' | '));
+      preheatLog('📋 全部 videoClips:', videoClips.map(c => c.id.slice(-8)).join(','));
+      
       setIsPreheatComplete(true);
       setIsInitialLoading(false);
       setIsVideoReady(readyCount > 0);
@@ -2060,11 +2116,208 @@ export function VideoCanvasNew() {
     
     // ★★★ 依赖说明 ★★★
     // - videoClips.length: clip 数量变化（添加/删除/切分）
-    // - assets: 素材库变化（添加新素材）
-    // - videoClipAssetIds: clip 的 assetId 变化（替换素材）
-  }, [videoClips.length, assets, videoClipAssetIds]);
+    // - videoClipAssetIds: clip 的 assetId 变化（替换素材 / 添加新 clip）
+    // ★ 移除 assets 依赖：assets 是对象数组，每次 load 时引用都会变化
+    //   导致预热 useEffect 频繁重新执行，造成 HLS 重复请求
+    //   videoClipAssetIds 已经足够检测 clip 素材变化
+  }, [videoClips.length, videoClipAssetIds]);
+  
+  // ★★★ 动态预热：检测即将可见的所有 clips（包括叠加的 B-Roll） ★★★
+  // 每当 currentTime 变化，检查接下来 15 秒内会变为可见的 clips
+  // ★ 使用 ref 追踪正在预热的 clipId，防止重复预热
+  const preheatInProgressRef = useRef(new Set<string>());
+  
+  // ★★★ 治本：使用节流的预热检测，避免每帧都检测 ★★★
+  const lastPreheatCheckRef = useRef(0);
+  const PREHEAT_CHECK_INTERVAL = 500; // 每500ms检测一次
+  
+  useEffect(() => {
+    // ★★★ 节流：避免每帧都执行预热检测 ★★★
+    const now = performance.now();
+    if (now - lastPreheatCheckRef.current < PREHEAT_CHECK_INTERVAL) return;
+    lastPreheatCheckRef.current = now;
+    
+    // ★★★ 治本：增加预热窗口到 15 秒，确保有足够时间加载 HLS ★★★
+    const lookaheadTime = currentTime + 15000; // 提前 15 秒
+    
+    // ★★★ 详细日志：当前池子状态（减少日志频率）★★★
+    const mountedKeys = Array.from(mountedVideosRef.current.keys()).map(k => k.slice(-8));
+    const inProgressKeys = Array.from(preheatInProgressRef.current).map(k => k.slice(-8));
+    
+    const upcomingClips = videoClips.filter(clip => {
+      // ★ 已经在挂载池的跳过
+      if (mountedVideosRef.current.has(clip.id)) return false;
+      // ★ 正在预热中的跳过
+      if (preheatInProgressRef.current.has(clip.id)) return false;
+      // ★ 没有 assetId 的跳过
+      if (!clip.assetId) return false;
+      // ★★★ 治本：删除 videoPreloadPool 检查 ★★★
+      // 播放用的是 mountedVideosRef，所以只检查 mountedVideosRef
+      // 时间范围检查：clip 会在 lookahead 时间内开始
+      const willBeVisible = clip.start >= currentTime && clip.start <= lookaheadTime;
+      // 或者当前时间已经在 clip 范围内（应该立即可见）
+      const shouldBeVisibleNow = currentTime >= clip.start && currentTime < clip.start + clip.duration;
+      return willBeVisible || shouldBeVisibleNow;
+    });
+    
+    // ★★★ 更详细的日志 ★★★
+    if (upcomingClips.length > 0) {
+      preheatLog('🔮 动态预热检测:', {
+        currentTime: (currentTime / 1000).toFixed(1) + 's',
+        mountedKeys: mountedKeys.join(',') || '(空)',
+        inProgressKeys: inProgressKeys.join(',') || '(空)',
+        upcoming: upcomingClips.map(c => `${c.id.slice(-8)}@${(c.start/1000).toFixed(1)}s`).join(','),
+      });
+    }
+    
+    if (upcomingClips.length === 0) return;
+    
+    // 串行预热，避免并发
+    upcomingClips.forEach(async (clip) => {
+      // ★ 再次检查是否已被预热（可能被其他逻辑预热了）
+      if (mountedVideosRef.current.has(clip.id)) return;
+      if (preheatInProgressRef.current.has(clip.id)) return;
+      
+      const assetId = clip.assetId!;
+      
+      // ★★★ 治本：删除 videoPreloadPool 检查，只看 mountedVideosRef ★★★
+      // 全局 videoPreloadPool 是按 assetId 存的，但播放用的是按 clip.id 的 mountedVideosRef
+      // 这两个池子 key 不同，检查 videoPreloadPool 不代表 mountedVideosRef 有值
+      
+      // ★ 标记为正在预热
+      preheatInProgressRef.current.add(clip.id);
+      preloadingAssets.add(assetId);
+      
+      const clipLabel = clip.metadata?.is_broll ? 'B-Roll' : 'Video';
+      preheatLog(`  ⚡ 动态预热 ${clipLabel}:`, clip.id.slice(-8), '| assetId:', assetId.slice(-8));
+      
+      try {
+        const sourceInfo = await getHlsSource(assetId);
+        if (sourceInfo.type === 'transcoding') {
+          preheatLog(`    ⏳ ${clipLabel} 正在转码，跳过`);
+          preheatInProgressRef.current.delete(clip.id);
+          preloadingAssets.delete(assetId);
+          return;
+        }
+        
+        const video = document.createElement('video');
+        video.preload = 'auto';
+        video.playsInline = true;
+        video.muted = true;
+        video.dataset.clipId = clip.id;
+        video.dataset.assetId = assetId;
+        video.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:320px;height:240px;opacity:0';
+        document.body.appendChild(video);
+        
+        let hlsInst: Hls | null = null;
+        
+        if (sourceInfo.type === 'hls' && Hls.isSupported()) {
+          hlsInst = new Hls({
+            ...HLS_CONFIG,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 45,
+            startFragPrefetch: true,
+          });
+          hlsInst.loadSource(sourceInfo.url);
+          hlsInst.attachMedia(video);
+        } else {
+          video.src = sourceInfo.url || getAssetProxyUrl(assetId);
+        }
+        
+        // 加入挂载池
+        mountedVideosRef.current.set(clip.id, {
+          element: video,
+          hlsInstance: hlsInst,
+          isReady: false,
+        });
+        
+        // ★ 从"正在预热"状态移除
+        preheatInProgressRef.current.delete(clip.id);
+        
+        // ★★★ 治本修复：优化预热流程，避免频繁seek导致readyState降级 ★★★
+        // 策略：先等待canplay，然后一次性seek到目标位置，等待seeked+数据加载
+        const clipSourceStart = (clip.sourceStart || 0) / 1000;
+        let seekCompleted = false;
+        
+        const markReady = () => {
+          const info = mountedVideosRef.current.get(clip.id);
+          if (info && !info.isReady) {
+            info.isReady = true;
+            preloadingAssets.delete(assetId);
+            video.removeEventListener('canplay', onCanPlay);
+            video.removeEventListener('canplaythrough', onCanPlayThrough);
+            // 记录预热完成时的位置，后续seek时参考
+            (video as HTMLVideoElement & { __preheatedTime?: number }).__preheatedTime = video.currentTime;
+            preheatLog(`    ✅ ${clipLabel} 就绪:`, clip.id.slice(-8), 
+              `| currentTime: ${video.currentTime.toFixed(2)}s | readyState: ${video.readyState}`);
+          }
+        };
+        
+        // ★★★ 等待canplaythrough而非canplay，确保有足够缓冲 ★★★
+        const onCanPlayThrough = () => {
+          if (seekCompleted) {
+            markReady();
+          }
+        };
+        
+        const onCanPlay = () => {
+          const info = mountedVideosRef.current.get(clip.id);
+          // 已就绪则直接移除监听器
+          if (info?.isReady) {
+            video.removeEventListener('canplay', onCanPlay);
+            return;
+          }
+          
+          // 检查是否需要 seek 到 sourceStart
+          if (Math.abs(video.currentTime - clipSourceStart) > 0.5) {
+            preheatLog(`    🎯 ${clipLabel} seek:`, clip.id.slice(-8), 
+              `| ${video.currentTime.toFixed(2)}s -> ${clipSourceStart.toFixed(2)}s`);
+            
+            // ★★★ 关键：seek后等待seeked+canplaythrough，确保数据已加载 ★★★
+            const onSeeked = () => {
+              seekCompleted = true;
+              // 如果readyState已经足够，直接标记就绪
+              if (video.readyState >= 3) {
+                markReady();
+              }
+              // 否则等待canplaythrough
+            };
+            video.addEventListener('seeked', onSeeked, { once: true });
+            video.currentTime = clipSourceStart;
+          } else {
+            // 不需要 seek，直接标记就绪
+            seekCompleted = true;
+            markReady();
+          }
+        };
+        
+        video.addEventListener('canplay', onCanPlay);
+        video.addEventListener('canplaythrough', onCanPlayThrough);
+        
+        // ★ 如果已经 canplay（readyState >= 3），立即触发
+        if (video.readyState >= 3) {
+          onCanPlay();
+        }
+        
+        // ★ 错误处理
+        video.addEventListener('error', () => {
+          video.removeEventListener('canplay', onCanPlay);
+          video.removeEventListener('canplaythrough', onCanPlayThrough);
+          preheatInProgressRef.current.delete(clip.id);
+          preloadingAssets.delete(assetId);
+          preheatLog(`    ❌ ${clipLabel} 加载错误:`, clip.id.slice(-8));
+        }, { once: true });
+        
+      } catch (error) {
+        preheatInProgressRef.current.delete(clip.id);
+        preloadingAssets.delete(assetId);
+        preheatLog(`    ❌ ${clipLabel} 预热失败:`, error);
+      }
+    });
+  }, [currentTime, videoClips]);
   
   // ★★★ 播放时动态预取：提前 3 秒预热下一个 clip 的视频 ★★★
+  // 注：此逻辑现在由上面的通用预热逻辑覆盖，保留仅作兼容
   useEffect(() => {
     if (!isPlaying || !currentVideoClip || videoClips.length <= 1) return;
     
@@ -2079,63 +2332,79 @@ export function VideoCanvasNew() {
     if (remainingTime > 5000) return;
     
     const nextClip = videoClips[currentIndex + 1];
-    if (!nextClip) return;
+    if (!nextClip || !nextClip.assetId) return;
     
-    // 检查下一个 clip 是否已在挂载池
-    const nextMounted = mountedVideosRef.current.get(nextClip.id);
+    // ★★★ 治本：只检查 mountedVideosRef ★★★
+    // 全局 videoPreloadPool 是按 assetId 存的，但播放用的是 clip.id 的 mountedVideosRef
+    if (mountedVideosRef.current.has(nextClip.id)) return;
+    if (preheatInProgressRef.current.has(nextClip.id)) return;
     
-    if (!nextMounted || nextMounted.element.readyState < 2) {
-      // 下一个 clip 未准备好，紧急预热
-      bufferLog('⚡ 紧急预热下一个 clip:', nextClip.id.slice(-8), 
-        '| 剩余时间:', (remainingTime / 1000).toFixed(1) + 's');
+    // 下一个 clip 未准备好，紧急预热
+    bufferLog('⚡ 紧急预热下一个 clip:', nextClip.id.slice(-8), 
+      '| 剩余时间:', (remainingTime / 1000).toFixed(1) + 's');
+    
+    // ★ 标记为正在预热
+    preheatInProgressRef.current.add(nextClip.id);
+    preloadingAssets.add(nextClip.assetId);
+    
+    getHlsSource(nextClip.assetId).then(async (sourceInfo) => {
+      if (sourceInfo.type === 'transcoding') {
+        preheatInProgressRef.current.delete(nextClip.id);
+        preloadingAssets.delete(nextClip.assetId!);
+        return;
+      }
       
-      // 如果挂载池没有，触发预热
-      if (!nextMounted && nextClip.assetId) {
-        getHlsSource(nextClip.assetId).then(async (sourceInfo) => {
-          if (sourceInfo.type === 'transcoding') return;
-          
-          const video = document.createElement('video');
-          video.preload = 'auto';
-          video.playsInline = true;
-          video.muted = true;
-          video.crossOrigin = 'anonymous';
-          video.style.cssText = 'position:absolute;visibility:hidden;width:1px;height:1px';
-          document.body.appendChild(video);
-          
-          let hlsInst: Hls | null = null;
-          
-          if (sourceInfo.type === 'hls' && Hls.isSupported()) {
-            hlsInst = new Hls(HLS_CONFIG);
-            hlsInst.loadSource(sourceInfo.url);
-            hlsInst.attachMedia(video);
-          } else {
-            video.src = sourceInfo.url || getAssetProxyUrl(nextClip.assetId!);
-          }
-          
-          mountedVideosRef.current.set(nextClip.id, {
-            element: video,
-            hlsInstance: hlsInst,
-            isReady: false,
-          });
+      const video = document.createElement('video');
+      video.preload = 'auto';
+      video.playsInline = true;
+      video.muted = true;
+      video.crossOrigin = 'anonymous';
+      video.style.cssText = 'position:absolute;visibility:hidden;width:1px;height:1px';
+      document.body.appendChild(video);
+      
+      let hlsInst: Hls | null = null;
+      
+      if (sourceInfo.type === 'hls' && Hls.isSupported()) {
+        // ★★★ 动态预热：缓冲 30s 确保流畅切换 ★★★
+        hlsInst = new Hls({
+          ...HLS_CONFIG,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 45,
+          startFragPrefetch: true,
         });
+        hlsInst.loadSource(sourceInfo.url);
+        hlsInst.attachMedia(video);
+      } else {
+        video.src = sourceInfo.url || getAssetProxyUrl(nextClip.assetId!);
       }
-    } else if (nextMounted.element.readyState >= 2) {
-      // 已准备好，确保缓冲足够
-      const buffered = nextMounted.element.buffered;
-      if (buffered.length > 0) {
-        const bufferedSeconds = buffered.end(buffered.length - 1);
-        if (bufferedSeconds < 5) {
-          bufferLog('⏳ 下一个 clip 缓冲不足:', bufferedSeconds.toFixed(1) + 's');
-          // HLS 会自动继续缓冲，这里只是记录日志
-        }
-      }
-    }
+      
+      mountedVideosRef.current.set(nextClip.id, {
+        element: video,
+        hlsInstance: hlsInst,
+        isReady: false,
+      });
+      
+      // ★ 从"正在预热"状态移除
+      preheatInProgressRef.current.delete(nextClip.id);
+      
+      video.addEventListener('canplay', () => {
+        preloadingAssets.delete(nextClip.assetId!);
+      }, { once: true });
+      
+      video.addEventListener('error', () => {
+        preheatInProgressRef.current.delete(nextClip.id);
+        preloadingAssets.delete(nextClip.assetId!);
+      }, { once: true });
+    }).catch(() => {
+      preheatInProgressRef.current.delete(nextClip.id);
+      preloadingAssets.delete(nextClip.assetId!);
+    });
   }, [currentTime, isPlaying, currentVideoClip?.id, videoClips]);
   
   // ★★★ HLS 状态管理 ★★★
   const [hlsSource, setHlsSource] = useState<HlsSourceInfo | null>(null);
   const [isHlsLoading, setIsHlsLoading] = useState(false);
-  const hlsRef = useRef<Hls | null>(null);
+  // ★★★ 【已删除】hlsRef - 死代码，HLS 实例由 mountedVideosRef 管理 ★★★
   const transcodePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // 当前资源 ID
@@ -2225,8 +2494,8 @@ export function VideoCanvasNew() {
     return currentVideoClip?.mediaUrl || null;
   }, [hlsSource, currentAssetId, currentVideoClip?.mediaUrl]);
   
-  // 视频源类型
-  const videoSourceType = hlsSource?.type || 'mp4';
+  // ★★★ 【已删除】videoSourceType - 死代码 ★★★
+  
   // 计算画布尺寸
   const canvasSize = useMemo(() => {
     if (containerSize.width < 100 || containerSize.height < 100) {
@@ -2354,8 +2623,6 @@ export function VideoCanvasNew() {
   // Seek 定位逻辑（带防抖）
   // ★★★ 关键修复：拖动播放头时必须暂停播放 ★★★
   const seekToTime = useCallback((timelineTimeMs: number, options?: { showIndicator?: boolean }) => {
-    const mainVideo = videoRefInternal.current;
-    
     // ★★★ 治本：拖动播放头时暂停播放 ★★★
     const wasPlaying = useEditorStore.getState().isPlaying;
     if (wasPlaying) {
@@ -2421,7 +2688,13 @@ export function VideoCanvasNew() {
             let hlsInst: Hls | null = null;
             
             if (sourceInfo.type === 'hls' && Hls.isSupported()) {
-              hlsInst = new Hls(HLS_CONFIG);
+              // ★★★ 紧急预热：缓冲 30s ★★★
+              hlsInst = new Hls({
+                ...HLS_CONFIG,
+                maxBufferLength: 30,
+                maxMaxBufferLength: 45,
+                startFragPrefetch: true,
+              });
               hlsInst.loadSource(sourceInfo.url);
               hlsInst.attachMedia(video);
             } else {
@@ -2493,6 +2766,9 @@ export function VideoCanvasNew() {
 
   // 音频同步
   const syncAudioClips = useCallback((timelineTimeMs: number, shouldPlay: boolean) => {
+    // ★★★ 重点排查：记录主视频时间用于对比 ★★★
+    const mainVideoTime = (window as unknown as { __mainVideoCurrentTime?: number }).__mainVideoCurrentTime;
+    
     audioClips.forEach(clip => {
       if (!clip.mediaUrl) return;
       
@@ -2506,17 +2782,19 @@ export function VideoCanvasNew() {
         const expectedTime = calcMediaTime(timelineTimeMs, clip);
         
         if (audioElement.readyState < 3) {
+          // 音频未就绪时只打印一次
+          console.log('[AUDIO] ⏳ 未就绪:', clip.id.slice(-8), 'rs:', audioElement.readyState);
+          
           audioElement.currentTime = Math.max(0, expectedTime);
-          // ★ 应用音量和静音设置
           audioElement.volume = clampVolume(clip.volume);
           audioElement.muted = clip.isMuted || false;
           
-          const clipId = clip.id; // 捕获 clip ID 避免闭包问题
+          const clipId = clip.id;
           const playWhenReady = () => {
             audioElement.removeEventListener('canplaythrough', playWhenReady);
             const state = useEditorStore.getState();
+            
             if (state.isPlaying) {
-              // 重新获取最新的 clip 数据
               const latestClip = state.clips.find(c => c.id === clipId);
               if (!latestClip) return;
               
@@ -2524,9 +2802,9 @@ export function VideoCanvasNew() {
               const newExpectedTime = calcMediaTime(currentMs, latestClip);
               const drift = Math.abs(audioElement.currentTime - newExpectedTime);
               if (drift > SEEK_THRESHOLD) {
+                console.log('[AUDIO] 🔄 就绪后sync:', clipId.slice(-8), 'drift:', drift.toFixed(3) + 's');
                 audioElement.currentTime = Math.max(0, newExpectedTime);
               }
-              // ★ 应用最新的音量设置
               audioElement.volume = clampVolume(latestClip.volume);
               audioElement.muted = latestClip.isMuted || false;
               audioElement.play().catch(() => {});
@@ -2539,11 +2817,33 @@ export function VideoCanvasNew() {
         }
         
         const drift = Math.abs(audioElement.currentTime - expectedTime);
+        const actualAudioTime = audioElement.currentTime;
         
+        // ★★★ 重点排查：音频与视频的时间差（用于排查不同步）★★★
+        // 计算音频相对于时间轴的实际位置
+        const audioTimelinePos = (actualAudioTime - (clip.sourceStart || 0) / 1000) * 1000 + clip.start;
+        const audioVideoGap = mainVideoTime !== undefined ? (audioTimelinePos - mainVideoTime) : null;
+        
+        // 检测音频不同步：与视频差距超过 100ms
+        if (audioVideoGap !== null && mainVideoTime !== undefined && Math.abs(audioVideoGap) > 100) {
+          console.warn('[AUDIO] ⚠️ 音视频不同步:', {
+            clipId: clip.id.slice(-8),
+            audioPos: (audioTimelinePos / 1000).toFixed(3) + 's',
+            videoPos: (mainVideoTime / 1000).toFixed(3) + 's',
+            gap: audioVideoGap.toFixed(0) + 'ms',
+            audioDrift: drift.toFixed(3) + 's',
+          });
+        }
+        
+        // 音频需要 seek
         if (drift > AUDIO_DRIFT_THRESHOLD) {
+          console.log('[AUDIO] 🔄 sync:', clip.id.slice(-8), 
+            'drift:', drift.toFixed(3) + 's',
+            'from:', actualAudioTime.toFixed(3),
+            'to:', expectedTime.toFixed(3));
           audioElement.currentTime = Math.max(0, expectedTime);
         }
-        // ★ 应用音量和静音设置
+        
         audioElement.volume = clampVolume(clip.volume);
         audioElement.muted = clip.isMuted || false;
         if (audioElement.paused) {
@@ -2608,546 +2908,17 @@ export function VideoCanvasNew() {
     });
   }, [videoClips, audioClips]);
 
-  // 视频 URL 变化时缓存主视频元素
-  useEffect(() => {
-    if (videoRefInternal.current && videoUrl) {
-      cachedMediaRef.current.set(videoUrl, videoRefInternal.current);
-      if (isVideoCached(videoUrl)) {
-        setIsVideoReady(true);
-      }
-    }
-  }, [videoUrl, setIsVideoReady]);
+  // ★★★ 【已删除】视频 URL 缓存和 HLS 初始化 ★★★
+  // 旧架构使用 videoRefInternal 初始化 HLS，新架构由 mountedVideosRef 和预热系统管理
 
-  // ★★★ HLS 初始化 ★★★
-  // 注意：当使用预热池/挂载池时，此逻辑由 asset 切换 useEffect 处理
-  useEffect(() => {
-    const video = videoRefInternal.current;
-    
-    // ★ 修复：如果没有视频元素，提前返回
-    if (!video) {
-      bufferLog('⚠️ HLS 初始化：视频元素未就绪');
-      return;
-    }
-    
-    // ★ 修复：如果没有 videoUrl，检查是否可以从 assetId 生成
-    const assetId = currentVideoClip?.assetId;
-    const effectiveUrl = videoUrl || (assetId ? getAssetProxyUrl(assetId) : null);
-    
-    if (!effectiveUrl) {
-      bufferLog('⚠️ HLS 初始化：无有效 URL, assetId=', assetId?.slice(-8), 'videoUrl=', videoUrl?.slice(-30));
-      return;
-    }
-    
-    // ★★★ 关键：如果当前 clip 已通过挂载池管理，跳过此初始化 ★★★
-    // 挂载池中的视频已经设置好了 src，不需要重复设置
-    const currentClipId = currentVideoClip?.id;
-    if (currentClipId && mountedVideosRef.current.has(currentClipId)) {
-      bufferLog('🔄 跳过 HLS 初始化：视频由挂载池管理');
-      return;
-    }
-    
-    // ★ 修复：如果 hlsSource 还在加载中，先使用代理 URL
-    if (!hlsSource) {
-      bufferLog('⚠️ HLS 源未就绪，使用代理 URL:', effectiveUrl.slice(-50));
-      if (video.src !== effectiveUrl) {
-        video.src = effectiveUrl;
-      }
-      return;
-    }
+  // ★★★ 【已删除】缓冲进度订阅 - 死代码（videoRefInternal.current 永远是 null）★★★
+  // ★★★ 【已删除】暂停时同步位置 - 死代码（被多视频播放控制取代）★★★
 
-    // 如果是 MP4，直接设置 src
-    if (videoSourceType === 'mp4') {
-      if (video.src !== effectiveUrl) {
-        bufferLog('🎬 设置 MP4 源:', effectiveUrl.slice(-50));
-        video.src = effectiveUrl;
-      }
-      return;
-    }
+  // ★★★ 【已删除】旧播放/暂停控制代码 - 被新架构的多视频播放控制取代 ★★★
+  // 新架构通过 mountedVideosRef 管理所有视频元素，见下方 "多视频播放控制" useEffect
 
-    // HLS 模式
-    // 检查浏览器是否原生支持 HLS (Safari)
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      if (video.src !== effectiveUrl) {
-        bufferLog('🎬 Safari 原生 HLS:', effectiveUrl.slice(-50));
-        video.src = effectiveUrl;
-      }
-      return;
-    }
-
-    // 使用 hls.js
-    if (!Hls.isSupported()) {
-      debugError('浏览器不支持 HLS');
-      // 回退到 MP4
-      video.src = effectiveUrl;
-      return;
-    }
-
-    // 检查是否已有 HLS 实例
-    if (hlsRef.current) {
-      // 如果 URL 没变，不重新初始化
-      const currentHlsSrc = (hlsRef.current as Hls & { url?: string }).url;
-      if (currentHlsSrc === effectiveUrl) {
-        return;
-      }
-      // 销毁旧实例
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
-
-    bufferLog('🎬 初始化 hls.js:', effectiveUrl.slice(-50));
-    
-    const hls = new Hls(HLS_CONFIG);
-    hlsRef.current = hls;
-    (hls as Hls & { url?: string }).url = effectiveUrl;
-    
-    // ★ 错误恢复计数器
-    let networkErrorRetries = 0;
-    let mediaErrorRetries = 0;
-    const MAX_NETWORK_RETRIES = 5;
-    const MAX_MEDIA_RETRIES = 3;
-
-    // 绑定事件
-    hls.on(Events.MANIFEST_PARSED, () => {
-      bufferLog('✅ HLS Manifest 解析完成');
-      setIsVideoReady(true);
-      // 重置错误计数
-      networkErrorRetries = 0;
-      mediaErrorRetries = 0;
-    });
-    
-    // ★ 分片加载成功时重置网络错误计数
-    hls.on(Events.FRAG_LOADED, () => {
-      networkErrorRetries = 0;
-    });
-
-    hls.on(Events.FRAG_BUFFERED, () => {
-      // 更新缓冲进度
-      if (video.buffered.length > 0) {
-        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-        const percent = video.duration > 0 
-          ? Math.round((bufferedEnd / video.duration) * 100) 
-          : 0;
-        setBufferProgress(percent);
-      }
-    });
-
-    hls.on(Events.ERROR, (event, data) => {
-      // ★ 非致命错误只记录日志，HLS.js 会自动处理
-      if (!data.fatal) {
-        bufferLog('[HLS] 非致命错误（自动恢复）:', data.type, data.details);
-        return;
-      }
-      
-      debugError('[HLS] 致命错误:', data.type, data.details);
-      
-      switch (data.type) {
-        case ErrorTypes.NETWORK_ERROR:
-          networkErrorRetries++;
-          bufferLog(`⚠️ HLS 网络错误，尝试恢复... (${networkErrorRetries}/${MAX_NETWORK_RETRIES})`);
-          
-          if (networkErrorRetries <= MAX_NETWORK_RETRIES) {
-            // ★ 延迟重试，给网络恢复时间
-            setTimeout(() => {
-              if (hlsRef.current === hls) {
-                hls.startLoad();
-              }
-            }, 1000 * networkErrorRetries); // 递增延迟
-          } else {
-            debugError('[HLS] 网络错误超过重试次数，回退到 MP4');
-            hls.destroy();
-            hlsRef.current = null;
-            video.src = getAssetProxyUrl(currentAssetId || '');
-          }
-          break;
-          
-        case ErrorTypes.MEDIA_ERROR:
-          mediaErrorRetries++;
-          bufferLog(`⚠️ HLS 媒体错误，尝试恢复... (${mediaErrorRetries}/${MAX_MEDIA_RETRIES})`);
-          
-          if (mediaErrorRetries <= MAX_MEDIA_RETRIES) {
-            if (mediaErrorRetries === 1) {
-              hls.recoverMediaError();
-            } else {
-              // 第二次及以后尝试 swap audio codec
-              hls.swapAudioCodec();
-              hls.recoverMediaError();
-            }
-          } else {
-            debugError('[HLS] 媒体错误超过重试次数，回退到 MP4');
-            hls.destroy();
-            hlsRef.current = null;
-            video.src = getAssetProxyUrl(currentAssetId || '');
-          }
-          break;
-          
-        default:
-          debugError('[HLS] 其他致命错误，回退到 MP4');
-          hls.destroy();
-          hlsRef.current = null;
-          video.src = getAssetProxyUrl(currentAssetId || '');
-          break;
-      }
-    });
-
-    // 加载 HLS 源
-    hls.loadSource(effectiveUrl);
-    hls.attachMedia(video);
-
-    return () => {
-      // 组件卸载时清理
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-    };
-  }, [videoUrl, hlsSource, videoSourceType, currentAssetId, currentVideoClip?.assetId, setIsVideoReady]);
-
-  // 订阅缓冲进度（仅 MP4 模式需要）
-  useEffect(() => {
-    if (!videoUrl) return;
-    
-    const unsubscribe = subscribeBufferProgress(videoUrl, (progress) => {
-      setBufferProgress(progress);
-    });
-    
-    const mainVideo = videoRefInternal.current;
-    if (mainVideo) {
-      bufferVideoInBackground(videoUrl, mainVideo);
-    }
-    
-    return unsubscribe;
-  }, [videoUrl]);
-
-  // 暂停时同步视频位置
-  useEffect(() => {
-    if (isPlaying || !videoRefInternal.current || !currentVideoClip) return;
-    seekToTime(currentTime, { showIndicator: true });
-  }, [currentTime, isPlaying, currentVideoClip, seekToTime]);
-
-  // 播放/暂停控制
-  useEffect(() => {
-    const mainVideo = videoRefInternal.current;
-    if (!mainVideo || !videoUrl) return;
-    
-    const storeTime = useEditorStore.getState().currentTime;
-    const activeClip = findActiveClip(videoClips, storeTime);
-    
-    // ★ 调试日志：追踪播放状态
-    if (isPlaying && !activeClip && videoClips.length > 0) {
-      console.warn('[VideoCanvas] ⚠️ 播放中但找不到活跃 clip!', {
-        storeTime,
-        videoClipsCount: videoClips.length,
-        videoClipsRanges: videoClips.map(c => ({
-          id: c.id.slice(0, 8),
-          start: c.start,
-          end: c.start + c.duration,
-        })),
-      });
-    }
-    
-    if (isPlaying && activeClip) {
-      const mediaTimeSec = calcMediaTime(storeTime, activeClip);
-      // ★ 应用音量和静音设置
-      mainVideo.volume = clampVolume(activeClip.volume);
-      mainVideo.muted = activeClip.isMuted || false;
-      
-      const needsSeek = Math.abs(mainVideo.currentTime - mediaTimeSec) > SEEK_THRESHOLD;
-      
-      // ★ 缓冲相关日志
-      bufferLog('▶ 播放控制 | needsSeek:', needsSeek, 
-        '| 视频时间:', mainVideo.currentTime.toFixed(2) + 's',
-        '| 目标时间:', mediaTimeSec.toFixed(2) + 's',
-        '| readyState:', mainVideo.readyState,
-        '| 缓冲:', calculateBufferedPercent(mainVideo) + '%');
-      
-      if (needsSeek) {
-        setIsSeeking(true);
-        mainVideo.currentTime = Math.max(0, mediaTimeSec);
-        
-        const onCanPlay = () => {
-          bufferLog('  ✓ seek 后 canplay 触发');
-          mainVideo.removeEventListener('canplay', onCanPlay);
-          setIsSeeking(false);
-          if (useEditorStore.getState().isPlaying) {
-            mainVideo.play().catch((e) => bufferLog('  ✗ play() 失败:', e.message));
-            syncAudioClips(useEditorStore.getState().currentTime, true);
-          }
-        };
-        mainVideo.addEventListener('canplay', onCanPlay);
-        
-        if (mainVideo.readyState >= 3) {
-          mainVideo.removeEventListener('canplay', onCanPlay);
-          setIsSeeking(false);
-          mainVideo.play().catch((e) => bufferLog('  ✗ play() 失败:', e.message));
-          syncAudioClips(storeTime, true);
-        }
-      } else {
-        mainVideo.play().catch((err) => {
-          bufferLog('  ✗ play() 失败:', err.message);
-          if (err.name === 'NotAllowedError') {
-            mainVideo.muted = true;
-            mainVideo.play().catch(() => {});
-          }
-        });
-        syncAudioClips(storeTime, true);
-      }
-    } else if (isPlaying && !activeClip) {
-      // ★★★ 纯音频模式：没有视频 clip 但有音频 clip ★★★
-      // 视频暂停，但音频继续播放
-      mainVideo.pause();
-      // 检查是否有音频 clip 在当前时间范围内
-      const hasActiveAudio = audioClips.some(c => 
-        storeTime >= c.start && storeTime < c.start + c.duration
-      );
-      if (hasActiveAudio) {
-        bufferLog('♪ 纯音频模式 | 时间:', storeTime);
-        syncAudioClips(storeTime, true); // 继续播放音频
-      } else {
-        syncAudioClips(storeTime, false);
-      }
-    } else {
-      mainVideo.pause();
-      syncAudioClips(storeTime, false);
-    }
-  }, [isPlaying, videoUrl, videoClips, audioClips, syncAudioClips]);
-
-  // RAF 实现流畅播放 + 关键帧动画
-  useEffect(() => {
-    const mainVideo = videoRefInternal.current;
-    if (!mainVideo || !videoUrl || !currentVideoClip) return;
-
-    let lastStoreUpdateTime = 0;
-    const preloadedUrls = new Set<string>();
-    
-    // 追踪当前正在播放的 clip ID（防止重复切换）
-    let activeClipIdRef = currentVideoClip.id;
-
-    const updatePlayhead = () => {
-      if (!mainVideo || mainVideo.paused) return;
-      
-      const mediaTimeSec = mainVideo.currentTime;
-      const now = performance.now();
-      
-      // ★★★ 关键：实时获取当前状态 ★★★
-      const storeClips = useEditorStore.getState().clips;
-      const videoClipsNow = storeClips.filter(c => c.clipType === 'video' && c.mediaUrl);
-      
-      // 通过 ID 找到当前正在播放的 clip
-      let playingClip = videoClipsNow.find(c => c.id === activeClipIdRef);
-      
-      // 如果找不到（可能被删除了），用 currentVideoClip
-      if (!playingClip) {
-        playingClip = currentVideoClip;
-        activeClipIdRef = currentVideoClip.id;
-      }
-      
-      if (!playingClip) {
-        bufferLog('⚠️ 无法确定当前播放的 clip');
-        return;
-      }
-      
-      // 计算时间线位置
-      // 公式：timelineTime = (mediaTime - sourceStart) + clipStart
-      // 即：视频内相对位置 + clip在时间线的开始位置
-      const sourceStartMs = playingClip.sourceStart || 0;
-      const mediaTimeMs = secToMs(mediaTimeSec);
-      
-      // ★★★ 修复：如果视频时间小于 sourceStart，说明还未 seek 到正确位置，跳过此帧 ★★★
-      // 避免产生负数时间导致的错误
-      if (mediaTimeMs < sourceStartMs - 100) { // 100ms 容差
-        bufferLog('⚠️ 视频时间尚未到达 sourceStart，等待 seek 完成', {
-          mediaTimeMs,
-          sourceStartMs,
-          diff: sourceStartMs - mediaTimeMs,
-        });
-        return; // 跳过此帧，等待视频 seek 到正确位置
-      }
-      
-      const timelineTimeMs = Math.max(playingClip.start, mediaTimeMs + playingClip.start - sourceStartMs);
-      
-      // 调试日志（太频繁，默认关闭）
-      // bufferLog('🎬 RAF | clip:', playingClip.id.slice(-8), 
-      //   '| 视频时间:', mediaTimeSec.toFixed(2) + 's',
-      //   '| 时间线:', timelineTimeMs.toFixed(0) + 'ms',
-      //   '| clip范围:', playingClip.start + '-' + (playingClip.start + playingClip.duration) + 'ms');
-
-      // 边界检测：到达当前 clip 末尾
-      // ★★★ 修复：减少提前量到 10ms，避免明显的时间跳跃 ★★★
-      const clipEndMs = playingClip.start + playingClip.duration;
-      let didSwitchClip = false; // ★ 追踪是否切换了 clip
-      
-      if (timelineTimeMs >= clipEndMs - 10) { // 10ms 提前量（平衡响应速度和连续性）
-        // 检查是否有下一个 clip
-        // ★ 修复：使用 clipEnd 而不是 clipStart 来查找下一个 clip
-        const nextClip = videoClipsNow
-          .filter(c => c.id !== playingClip.id && c.start >= clipEndMs - 50) // 允许 50ms 重叠容差
-          .sort((a, b) => a.start - b.start)[0];
-        
-        if (nextClip && nextClip.id !== activeClipIdRef) {
-          const isSameVideo = nextClip.assetId === playingClip.assetId;
-          bufferLog('🔄 到达 clip 边界 | 下一个:', nextClip.id.slice(-8), 
-            '| 同视频:', isSameVideo,
-            '| assetId:', nextClip.assetId?.slice(-8));
-          
-          // 更新活跃 clip ID
-          activeClipIdRef = nextClip.id;
-          didSwitchClip = true; // ★ 标记已切换
-          
-          if (isSameVideo) {
-            // ★★★ 优化：检查是否连续播放（无需 seek）★★★
-            // 如果当前 clip 的 sourceEnd 和下一个 clip 的 sourceStart 接近（相差 < 50ms），
-            // 说明在原视频中是连续的，不需要 seek，避免卡顿
-            const currentSourceEnd = (playingClip.sourceStart || 0) + playingClip.duration;
-            const nextSourceStart = nextClip.sourceStart || 0;
-            const gap = Math.abs(nextSourceStart - currentSourceEnd);
-            
-            if (gap < 50) { // ★ 降低到 50ms，更严格判断连续性
-              // ★ 连续播放，无需 seek，直接更新时间线位置
-              bufferLog('  → 同视频连续播放（gap=' + gap + 'ms），无需 seek');
-              setCurrentTime(nextClip.start);
-              lastStoreUpdateTime = now; // ★ 重置 store 更新时间，避免重复更新
-            } else {
-              // ★ 非连续，需要 seek
-              const nextMediaTimeSec = nextSourceStart / 1000;
-              bufferLog('  → 同视频非连续 seek 到:', nextMediaTimeSec.toFixed(2) + 's', '(gap=' + gap + 'ms)');
-              mainVideo.currentTime = nextMediaTimeSec;
-              setCurrentTime(nextClip.start);
-              lastStoreUpdateTime = now; // ★ 重置 store 更新时间
-            }
-          } else {
-            // ★★★ 修复：不同视频文件，需要主动触发视频切换 ★★★
-            bufferLog('  → 切换到不同视频, assetId:', nextClip.assetId?.slice(-8));
-            // 先暂停当前视频
-            mainVideo.pause();
-            // 更新时间线位置，触发 React 重新渲染和视频切换
-            setCurrentTime(nextClip.start);
-            // ★★★ 必须 return，否则下面的代码会使用旧的 video 元素 ★★★
-            // React 会在下一帧处理视频切换，新的 RAF 循环会启动
-            return;
-          }
-        } else if (!nextClip) {
-          // 没有下一个 video clip，但需要检查是否到达整个项目的末尾
-          // ★★★ 修复：播放范围应该是所有 clip 中最长的，而不仅仅是 video clip ★★★
-          const totalDuration = storeClips.reduce((max, c) => 
-            Math.max(max, c.start + c.duration), 0);
-          
-          // 如果当前时间还没到项目末尾，继续播放（纯音频模式）
-          if (timelineTimeMs < totalDuration - 50) {
-            bufferLog('📼 Video clip 结束，但项目未结束，继续纯音频模式 | 当前:', timelineTimeMs, '总时长:', totalDuration);
-            // 暂停视频但继续更新时间线（音频会由 syncAudioClips 处理）
-            mainVideo.pause();
-            // 继续推进时间线
-            const nextTimeMs = Math.min(timelineTimeMs + 33, totalDuration); // 约 30fps 推进
-            setCurrentTime(nextTimeMs);
-            lastStoreUpdateTime = now;
-            // 不 return，让 RAF 继续运行
-          } else {
-            // 真正到达时间线末尾
-            bufferLog('⏹ 到达时间线末尾，停止播放 | 总时长:', totalDuration);
-            mainVideo.pause();
-            useEditorStore.getState().setIsPlaying(false);
-            useEditorStore.getState().setCurrentTime(totalDuration);
-            return;
-          }
-        }
-      }
-
-      // 30fps 节流 store 更新（如果刚切换了 clip，跳过本次更新）
-      if (!didSwitchClip && now - lastStoreUpdateTime >= STORE_UPDATE_INTERVAL) {
-        setCurrentTime(timelineTimeMs);
-        lastStoreUpdateTime = now;
-      }
-
-      // 直接更新 DOM（绕过 React）- 更新容器而不是 video 元素
-      const state = useEditorStore.getState();
-      const storeKeyframes = state.keyframes;
-
-      const activeClipForTransform = videoClipsNow
-        .find(c => timelineTimeMs >= c.start && timelineTimeMs < c.start + c.duration);
-
-      // ★ 更新视频容器的 transform，保持和暂停时 React 控制的一致
-      const container = videoContainerRef.current;
-      if (activeClipForTransform && container) {
-        const clipKeyframesMap = storeKeyframes.get(activeClipForTransform.id);
-        const { transform, opacity } = calcClipTransformStyle(
-          activeClipForTransform,
-          timelineTimeMs,
-          clipKeyframesMap
-        );
-        container.style.transform = transform;
-        container.style.opacity = String(opacity);
-        
-        // ★★★ 使用统一的 helper 函数构建 CSS filter ★★★
-        const rafBeautyFilter = buildFilterStyle(activeClipForTransform);
-        container.style.filter = rafBeautyFilter || 'none';
-      }
-
-      // 动态设置音量和静音状态
-      const activeClip = findActiveClip(videoClipsNow, timelineTimeMs);
-      if (activeClip) {
-        mainVideo.volume = clampVolume(activeClip.volume);
-        mainVideo.muted = activeClip.isMuted || false;
-      }
-
-      // 同步音频
-      syncAudioClips(timelineTimeMs, true);
-
-      // 更新 UI 元素（直接 DOM）- 使用实时计算的 totalDuration
-      const currentTotalDuration = storeClips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
-      if (timeDisplayRef.current) {
-        timeDisplayRef.current.textContent = formatTime(timelineTimeMs);
-      }
-      if (progressBarRef.current && currentTotalDuration > 0) {
-        const percent = Math.min(100, Math.max(0, (timelineTimeMs / currentTotalDuration) * 100));
-        progressBarRef.current.style.width = `${percent}%`;
-      }
-
-      // 预加载下一个 clip（70% 进度时）
-      if (activeClip) {
-        const clipProgress = (timelineTimeMs - activeClip.start) / activeClip.duration;
-        if (clipProgress > 0.7) {
-          const sortedVideoClips = [...videoClipsNow].sort((a, b) => a.start - b.start);
-          const currentIndex = sortedVideoClips.findIndex(c => c.id === activeClip.id);
-          const nextClip = sortedVideoClips[currentIndex + 1];
-
-          // ★★★ 使用新的预热系统 ★★★
-          if (nextClip?.assetId && !preloadedUrls.has(nextClip.assetId)) {
-            preloadedUrls.add(nextClip.assetId);
-            bufferLog('🔥 播放中预热下一个 clip:', nextClip.id.slice(-8), '| assetId:', nextClip.assetId.slice(-8));
-            preheatVideo(nextClip.assetId);
-          }
-        }
-      }
-
-      animationFrameRef.current = requestAnimationFrame(updatePlayhead);
-    };
-
-    const handlePlay = () => {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = requestAnimationFrame(updatePlayhead);
-    };
-
-    const handlePause = () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    };
-    
-    mainVideo.addEventListener('play', handlePlay);
-    mainVideo.addEventListener('pause', handlePause);
-    
-    if (!mainVideo.paused) handlePlay();
-    
-    return () => {
-      mainVideo.removeEventListener('play', handlePlay);
-      mainVideo.removeEventListener('pause', handlePause);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    };
-  }, [videoUrl, currentVideoClip, videoClips, duration, setCurrentTime, syncAudioClips, isVideoReady, videoElement]);
+  // ★★★ 【已删除】旧 RAF 循环 - 被新架构的 RAF 播放循环取代 ★★★
+  // 旧架构使用单个 videoRefInternal，新架构使用 mountedVideosRef 管理多视频
 
   // ★★★ 纯音频/字幕模式 RAF：当没有视频 clip 时驱动时间更新 ★★★
   useEffect(() => {
@@ -3245,122 +3016,9 @@ export function VideoCanvasNew() {
     };
   }, [isPlaying, videoClips, audioClips, syncAudioClips, setCurrentTime]);
 
-  // 视频生命周期事件
-  useEffect(() => {
-    const mainVideo = videoRefInternal.current;
-    if (!mainVideo || !videoUrl) return;
-    
-    const handleEnded = () => {
-      // ★ 多素材模式：检查是否还有下一个 clip
-      const state = useEditorStore.getState();
-      const currentTimeMs = state.currentTime;
-      const videoClipsNow = state.clips.filter(c => c.clipType === 'video' && c.mediaUrl);
-      // ★★★ 修复：使用所有 clips 计算总时长，而不仅仅是 video clips ★★★
-      const totalDuration = state.clips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
-      
-      // 只有到达时间轴末尾才真正停止
-      if (currentTimeMs >= totalDuration - 100) { // 100ms 容差
-        bufferLog('⏹ 视频 ended 事件，时间轴结束');
-        setIsPlaying(false);
-      } else {
-        bufferLog('⚠️ 视频 ended 事件，但时间轴未结束，继续播放');
-        // 可能是单个素材播放完毕，检查下一个 video clip
-        const nextVideoClip = videoClipsNow
-          .filter(c => c.start > currentTimeMs)
-          .sort((a, b) => a.start - b.start)[0];
-        
-        if (nextVideoClip) {
-          // 有下一个视频 clip，跳转到那里
-          setCurrentTime(nextVideoClip.start);
-        } else {
-          // 没有更多视频 clip，但可能还有音频/字幕，继续纯音频模式
-          // 不停止播放，让纯音频模式 RAF 接管
-          bufferLog('♪ 进入纯音频模式，继续播放直到时间线末尾');
-        }
-      }
-    };
-    
-    const handleCanPlay = () => {
-      // 已移除高频日志：canplay 事件
-      setIsVideoReady(true);
-    };
-    
-    const handleProgress = () => {
-      const bufferedPercent = calculateBufferedPercent(mainVideo);
-      updateBufferProgress(videoUrl, bufferedPercent);
-    };
-
-    const handleSeeking = () => {
-      if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
-      // ★ 只有在真正需要缓冲时才显示指示器
-      seekTimeoutRef.current = setTimeout(() => {
-        if (mainVideo.seeking && mainVideo.readyState < 3) {
-          setSeekingLabel('seeking');
-        }
-      }, 400); // 延长到 400ms，避免快速 seek 时闪烁
-    };
-
-    const handleSeeked = () => {
-      if (seekTimeoutRef.current) {
-        clearTimeout(seekTimeoutRef.current);
-        seekTimeoutRef.current = null;
-      }
-      setIsSeeking(false);
-      setSeekingLabel(null);
-    };
-
-    let waitingTimeoutId: ReturnType<typeof setTimeout> | null = null;
-    const handleWaiting = () => {
-      bufferLog('⏳ waiting 事件 | readyState:', mainVideo.readyState, '| paused:', mainVideo.paused);
-      if (waitingTimeoutId) clearTimeout(waitingTimeoutId);
-      // ★ 缩短等待时间到 150ms，让用户更快感知到缓冲状态
-      waitingTimeoutId = setTimeout(() => {
-        // ★ 只要视频真的在等待数据且正在播放就立即显示
-        if (mainVideo.readyState < 3 && !mainVideo.paused && mainVideo.networkState === 2) {
-          bufferLog('  → 真正需要缓冲，显示指示器');
-          setSeekingLabel('buffering');
-          setIsSeeking(true);
-        }
-      }, 150); // ★ 从 800ms 减少到 150ms
-    };
-
-    const handlePlaying = () => {
-      bufferLog('▶ playing 事件 | 缓冲恢复');
-      if (waitingTimeoutId) {
-        clearTimeout(waitingTimeoutId);
-        waitingTimeoutId = null;
-      }
-      setIsSeeking(false);
-      setSeekingLabel(null);
-    };
-    
-    mainVideo.addEventListener('ended', handleEnded);
-    mainVideo.addEventListener('canplay', handleCanPlay);
-    mainVideo.addEventListener('loadeddata', handleCanPlay);
-    mainVideo.addEventListener('progress', handleProgress);
-    mainVideo.addEventListener('seeking', handleSeeking);
-    mainVideo.addEventListener('seeked', handleSeeked);
-    mainVideo.addEventListener('waiting', handleWaiting);
-    mainVideo.addEventListener('playing', handlePlaying);
-
-    if (mainVideo.readyState >= 2) {
-      setIsVideoReady(true);
-    }
-    
-    return () => {
-      mainVideo.removeEventListener('ended', handleEnded);
-      mainVideo.removeEventListener('canplay', handleCanPlay);
-      mainVideo.removeEventListener('loadeddata', handleCanPlay);
-      mainVideo.removeEventListener('progress', handleProgress);
-      mainVideo.removeEventListener('seeking', handleSeeking);
-      mainVideo.removeEventListener('seeked', handleSeeked);
-      mainVideo.removeEventListener('waiting', handleWaiting);
-      mainVideo.removeEventListener('playing', handlePlaying);
-      
-      if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
-      if (waitingTimeoutId) clearTimeout(waitingTimeoutId);
-    };
-  }, [videoUrl, setIsPlaying, setIsVideoReady]);
+  // ★★★ 【已删除】旧视频生命周期事件 - 死代码 ★★★
+  // 旧架构使用 videoRefInternal 监听事件，但 videoRefInternal.current 永远是 null
+  // 新架构在 mountedVideosRef 的视频元素上处理事件
 
   // 全屏监听
   useEffect(() => {
@@ -3378,10 +3036,11 @@ export function VideoCanvasNew() {
     if (!isPlaying) {
       const state = useEditorStore.getState();
       const totalDuration = state.clips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
-      const activeClip = findActiveClip(videoClips, state.currentTime);
       
-      // 如果当前时间已到末尾或没有 clip，回到开头
-      if (state.currentTime >= totalDuration || !activeClip) {
+      // ★★★ 修复：只有播放到末尾时才回到开头 ★★★
+      // 不要因为某个 clip 加载失败就重置播放位置
+      if (totalDuration > 0 && state.currentTime >= totalDuration - 100) {
+        // 只有真的到末尾（100ms 容差）才重置
         setCurrentTime(0);
         seekToTime(0, { showIndicator: false });
       }
@@ -3396,7 +3055,7 @@ export function VideoCanvasNew() {
     }
     
     setIsPlaying(!isPlaying);
-  }, [isPlaying, setIsPlaying, videoClips, setCurrentTime, seekToTime]);
+  }, [isPlaying, setIsPlaying, setCurrentTime, seekToTime]);
 
   const handleSeek = useCallback((timeMs: number) => {
     debugLog('handleSeek called:', timeMs);
@@ -3615,7 +3274,11 @@ export function VideoCanvasNew() {
     // ★★★ 治本：isSeeking 时不处理播放，避免竞争 ★★★
     if (isSeeking) return;
     
-    // 获取当前可见的视频 clips（以 clip.id 为 key）
+    // ★★★ 治本修复：播放中不在此处同步，完全交给RAF处理 ★★★
+    // 此effect只处理暂停时的精确定位
+    if (isPlaying) return;
+    
+    // 获取当前可见的视频 clips（所有 clip 一视同仁）
     const visibleVideoClips = videoClips.filter(clip => {
       const inTimeRange = currentTime >= clip.start && currentTime < clip.start + clip.duration;
       return inTimeRange && (clip.mediaUrl || clip.assetId);
@@ -3636,22 +3299,18 @@ export function VideoCanvasNew() {
         return;
       }
       
-      // ★★★ 暂停状态：只同步时间，不启动播放 ★★★
-      if (!isPlaying) {
-        const clipMediaTime = calcMediaTime(currentTime, clip);
-        const drift = Math.abs(info.element.currentTime - clipMediaTime);
-        if (drift > 0.3 && info.element.readyState >= 2) {
-          info.element.currentTime = clipMediaTime;
-        }
-        if (!info.element.paused) {
-          info.element.pause();
-        }
-        return;
+      // ★★★ 暂停状态：精确同步时间 ★★★
+      const clipMediaTime = calcMediaTime(currentTime, clip);
+      const drift = Math.abs(info.element.currentTime - clipMediaTime);
+      const isBroll = clip.metadata?.is_broll;
+      const seekThreshold = isBroll ? BROLL_SEEK_THRESHOLD : 0.15; // 暂停时使用更精确的阈值
+      
+      if (drift > seekThreshold && info.element.readyState >= 2) {
+        info.element.currentTime = clipMediaTime;
       }
-      
-      // ★★★ 播放状态：由 RAF 控制，这里只处理暂停的视频 ★★★
-      // 不在这里启动播放，避免与 RAF 竞争
-      
+      if (!info.element.paused) {
+        info.element.pause();
+      }
     });
   }, [currentTime, isPlaying, isSeeking, videoClips]);
 
@@ -3674,7 +3333,7 @@ export function VideoCanvasNew() {
       const storeVideoClips = allClips.filter(c => c.clipType === 'video' && (c.mediaUrl || c.assetId));
       const storeAudioClips = allClips.filter(c => c.clipType === 'audio');
       
-      // 获取当前可见的主视频 clip
+      // 获取当前可见的视频 clips（所有 clip 一视同仁，包括 B-Roll）
       const visibleClips = storeVideoClips.filter(clip => {
         const inTimeRange = storeTime >= clip.start && storeTime < clip.start + clip.duration;
         return inTimeRange && (clip.mediaUrl || clip.assetId);
@@ -3695,137 +3354,197 @@ export function VideoCanvasNew() {
         return;
       }
       
-      // 视频模式：同步主视频时间（以 clip.id 为 key）
-      const mainClip = visibleClips[0];
-      const videoInfo = mountedVideosRef.current.get(mainClip.id); // ★★★ 用 clip.id 而不是 assetId ★★★
+      // ★★★ 治本：主视频（非 B-Roll）驱动时间轴，B-Roll 跟随同步 ★★★
+      // 从可见 clips 中找主视频（非 B-Roll），只有没有主视频时才用 B-Roll
+      const mainVideoClips = visibleClips.filter(c => !c.metadata?.is_broll);
+      const brollClips = visibleClips.filter(c => c.metadata?.is_broll);
       
-      // ★★★ 治本：视频未加载时，停止 RAF 等待视频准备好 ★★★
-      if (!videoInfo || videoInfo.element.readyState < 2) {
-        // 视频还未准备好，停止 RAF 循环，等待 canplay 事件再恢复
-        if (videoInfo) {
-          // 只在首次检测到未就绪时打印日志（避免刷屏）
-          if (!videoInfo.element.dataset.waitingForReady) {
-            videoInfo.element.dataset.waitingForReady = 'true';
-            bufferLog('⏳ 视频未就绪，暂停 RAF 等待:', mainClip.id.slice(-8), 
-              'readyState:', videoInfo.element.readyState);
-          }
-          
-          // 等待 canplay 后恢复 RAF
-          const onReady = () => {
-            videoInfo.element.removeEventListener('canplay', onReady);
-            delete videoInfo.element.dataset.waitingForReady;
-            bufferLog('✅ 视频就绪，恢复播放:', mainClip.id.slice(-8));
-            
-            if (useEditorStore.getState().isPlaying) {
-              const mediaTime = calcMediaTime(useEditorStore.getState().currentTime, mainClip);
-              videoInfo.element.currentTime = mediaTime;
-              videoInfo.element.play().catch(() => {});
-              // 恢复 RAF 循环
-              rafId = requestAnimationFrame(updatePlayhead);
-            }
-          };
-          videoInfo.element.addEventListener('canplay', onReady, { once: true });
-          // ★★★ 关键：不再继续 RAF，等待 canplay 事件触发后恢复 ★★★
-          return;
-        } else {
-          // 视频还没挂载，短暂等待后重试
-          setTimeout(() => {
-            if (useEditorStore.getState().isPlaying) {
-              rafId = requestAnimationFrame(updatePlayhead);
-            }
-          }, 100);
-          return;
-        }
+      // 主视频优先，按 start 排序（deterministic）
+      const candidateClips = mainVideoClips.length > 0 ? mainVideoClips : brollClips;
+      const sortedCandidates = [...candidateClips].sort((a, b) => {
+        const startDiff = a.start - b.start;
+        if (startDiff !== 0) return startDiff;
+        return a.id.localeCompare(b.id);
+      });
+      
+      const mainClip = sortedCandidates[0];
+      
+      // ★★★ 重点排查：时间跳变检测（用于排查重复播放）★★★
+      const prevStoreTime = (window as unknown as { __prevStoreTime?: number }).__prevStoreTime || 0;
+      const prevMainClipId = (window as unknown as { __prevMainClipId?: string }).__prevMainClipId;
+      const isClipSwitch = prevMainClipId && prevMainClipId !== mainClip.id;
+      const timeJump = storeTime - prevStoreTime;
+      
+      // 检测时间回跳（重复播放的根源）
+      if (timeJump < -50 && timeJump > -500) { // 回跳 50ms~500ms 是可疑的重复播放
+        console.warn('[TIME] ⚠️ 时间回跳检测（可能导致重复播放）:', {
+          from: (prevStoreTime / 1000).toFixed(3) + 's',
+          to: (storeTime / 1000).toFixed(3) + 's',
+          jump: timeJump.toFixed(0) + 'ms',
+          clipId: mainClip.id.slice(-8),
+          isClipSwitch,
+          delta: delta.toFixed(1) + 'ms',
+        });
       }
       
-      // 视频已就绪但暂停中，启动播放
-      if (videoInfo.element.paused) {
-        const clipMediaTime = calcMediaTime(storeTime, mainClip);
-        videoInfo.element.currentTime = clipMediaTime;
-        videoInfo.element.play().catch(() => {});
+      (window as unknown as { __prevStoreTime?: number }).__prevStoreTime = storeTime;
+      (window as unknown as { __prevMainClipId?: string }).__prevMainClipId = mainClip.id;
+      
+      if (isClipSwitch) {
+        console.log('[RAF] 🔄 CLIP切换:', mainClip.id.slice(-8), '@', (storeTime / 1000).toFixed(2) + 's');
+      }
+      
+      const videoInfo = mountedVideosRef.current.get(mainClip.id);
+      
+      // ★★★ 治本修复：readyState 判断使用更精确的阈值 ★★★
+      // readyState:
+      // 0 = HAVE_NOTHING, 1 = HAVE_METADATA, 2 = HAVE_CURRENT_DATA, 
+      // 3 = HAVE_FUTURE_DATA, 4 = HAVE_ENOUGH_DATA
+      // 只要有当前帧数据(>=2)就可以尝试播放，不必等到HAVE_ENOUGH_DATA(4)
+      const videoReady = videoInfo && videoInfo.element.readyState >= 2;
+      const videoPlaying = videoReady && !videoInfo.element.paused;
+      
+      if (!videoReady) {
+        // ★★★ 治本：视频未就绪时不要频繁seek，只在必要时触发加载 ★★★
+        const newTime = storeTime + delta;
+        const clipEnd = mainClip.start + mainClip.duration;
+        
+        // 只在 clip 切换时打印（减少日志噪音）
+        if (isClipSwitch) {
+          console.log('[RAF] ⚠️ 视频未就绪:', mainClip.id.slice(-8), 'rs:', videoInfo?.element.readyState ?? -1);
+        }
+        
+        if (newTime >= clipEnd) {
+          // 到达边界，设置到边界位置（不立即切换，等RAF下一帧处理）
+          storeState.setCurrentTime(clipEnd);
+        } else {
+          storeState.setCurrentTime(newTime);
+        }
+        
+        // ★★★ 关键优化：只在首次或大偏差时触发加载，避免频繁seek导致readyState降级 ★★★
+        if (videoInfo) {
+          const clipMediaTime = calcMediaTime(newTime, mainClip);
+          const currentTime = videoInfo.element.currentTime;
+          const drift = Math.abs(currentTime - clipMediaTime);
+          const lastSeekTime = lastSeekTimestamps.get(mainClip.id) || 0;
+          const now = performance.now();
+          const cooldownPassed = now - lastSeekTime > SEEK_COOLDOWN_MS * 3; // 未就绪时使用更长冷却
+          
+          // 只在以下情况seek：
+          // 1. 从未设置过时间（currentTime接近0）
+          // 2. 大偏差（>2秒）且冷却已过
+          if (currentTime < 0.5 || (drift > 2 && cooldownPassed)) {
+            videoInfo.element.currentTime = clipMediaTime;
+            lastSeekTimestamps.set(mainClip.id, now);
+          }
+        }
+        
         rafId = requestAnimationFrame(updatePlayhead);
         return;
       }
       
-      // 视频已准备好且正在播放：从视频元素同步时间
+      // ★★★ 视频已就绪但暂停中：启动播放 ★★★
+      if (!videoPlaying) {
+        const clipMediaTime = calcMediaTime(storeTime, mainClip);
+        const drift = Math.abs(videoInfo.element.currentTime - clipMediaTime);
+        const lastSeekTime = lastSeekTimestamps.get(mainClip.id) || 0;
+        const now = performance.now();
+        const cooldownPassed = now - lastSeekTime > SEEK_COOLDOWN_MS;
+        
+        // 只在需要 seek 且冷却已过时 seek
+        if (drift > RAF_SEEK_THRESHOLD && cooldownPassed) {
+          console.log('[RAF] ▶️ 启动播放+seek:', mainClip.id.slice(-8), 'drift:', drift.toFixed(3) + 's');
+          videoInfo.element.currentTime = clipMediaTime;
+          lastSeekTimestamps.set(mainClip.id, now);
+        }
+        videoInfo.element.play().catch((err) => {
+          console.error('[RAF] ❌ play() 失败:', err.name, err.message);
+        });
+        
+        // 用 delta 推进，不等待播放启动
+        const newTime = storeTime + delta;
+        storeState.setCurrentTime(Math.min(newTime, mainClip.start + mainClip.duration));
+        
+        rafId = requestAnimationFrame(updatePlayhead);
+        return;
+      }
+      
+      // ★★★ 视频正常播放：从视频 currentTime 同步时间 ★★★
       const mediaTime = videoInfo.element.currentTime; // 秒
       const sourceStart = (mainClip.sourceStart || 0) / 1000; // 毫秒转秒
       const timelineTime = (mediaTime - sourceStart) * 1000 + mainClip.start; // 转回毫秒
       
+      // ★★★ 重点排查：记录主视频的时间轴位置（供音频同步对比）★★★
+      (window as unknown as { __mainVideoCurrentTime?: number }).__mainVideoCurrentTime = timelineTime;
+      
       // 检查是否到达 clip 边界
       const clipEnd = mainClip.start + mainClip.duration;
       if (timelineTime >= clipEnd) {
-        // 检查是否有下一个 clip
-        const nextClip = storeVideoClips
-          .filter(c => c.start >= clipEnd && (c.mediaUrl || c.assetId))
-          .sort((a, b) => a.start - b.start)[0];
+        // ★★★ 检查是否有下一个主视频 clip（优先主视频，没有才用 B-Roll）★★★
+        const upcomingClips = storeVideoClips.filter(c => c.start >= clipEnd && (c.mediaUrl || c.assetId));
+        const upcomingMainClips = upcomingClips.filter(c => !c.metadata?.is_broll);
+        const upcomingBrollClips = upcomingClips.filter(c => c.metadata?.is_broll);
+        
+        // 主视频优先
+        const candidateNextClips = upcomingMainClips.length > 0 ? upcomingMainClips : upcomingBrollClips;
+        const nextClip = [...candidateNextClips].sort((a, b) => {
+          const startDiff = a.start - b.start;
+          if (startDiff !== 0) return startDiff;
+          return a.id.localeCompare(b.id);
+        })[0];
         
         if (nextClip) {
-          // ★★★ 治本：检查下一个 clip 是否准备好 ★★★
+          // ★★★ 治本修复：边界切换时等待下一个视频就绪 ★★★
           const nextVideoInfo = mountedVideosRef.current.get(nextClip.id);
+          const nextReady = nextVideoInfo && nextVideoInfo.element.readyState >= 3;
           
-          if (!nextVideoInfo || nextVideoInfo.element.readyState < 2) {
-            // 下一个 clip 未准备好，暂停当前视频并等待
-            console.log('[RAF] ⏳ 等待下一个 clip 准备:', nextClip.id.slice(-8));
-            videoInfo.element.pause();
-            
-            // 设置位置到边界，等待下一个 clip
-            storeState.setCurrentTime(clipEnd);
-            
-            // 如果已挂载但未就绪，等待 canplay
-            if (nextVideoInfo) {
-              const onReady = () => {
-                nextVideoInfo.element.removeEventListener('canplay', onReady);
-                nextVideoInfo.element.removeEventListener('loadeddata', onReady);
-                // 准备好后，设置时间并播放
-                if (useEditorStore.getState().isPlaying) {
-                  const mediaTime = calcMediaTime(nextClip.start, nextClip);
-                  nextVideoInfo.element.currentTime = mediaTime;
-                  nextVideoInfo.element.play().catch(() => {});
-                  console.log('[RAF] ✅ 下一个 clip 就绪，继续播放:', nextClip.id.slice(-8));
-                }
-              };
-              nextVideoInfo.element.addEventListener('canplay', onReady, { once: true });
-              nextVideoInfo.element.addEventListener('loadeddata', onReady, { once: true });
-            }
-            
-            rafId = requestAnimationFrame(updatePlayhead);
-            return;
-          }
-          
-          // 下一个 clip 已准备好，切换
-          console.log('[RAF] 🔄 Clip 边界切换:', mainClip.id.slice(-8), '->', nextClip.id.slice(-8));
+          console.log('[RAF] 🔄 边界切换:', mainClip.id.slice(-8), '->', nextClip.id.slice(-8),
+            '| next_rs:', nextVideoInfo?.element.readyState ?? -1, '| ready:', nextReady);
           
           // 暂停当前视频
           videoInfo.element.pause();
           
-          // 设置下一个视频的时间并播放
-          const nextMediaTime = calcMediaTime(nextClip.start, nextClip);
-          
-          // ★★★ 关键修复：等待 seek 完成后再继续 RAF ★★★
-          nextVideoInfo.element.currentTime = nextMediaTime;
-          storeState.setCurrentTime(nextClip.start);
-          
-          // 等待 seeked 事件后再播放，避免时间计算错误
-          const onSeeked = () => {
-            nextVideoInfo.element.removeEventListener('seeked', onSeeked);
-            if (useEditorStore.getState().isPlaying) {
-              nextVideoInfo.element.play().catch(() => {});
-              rafId = requestAnimationFrame(updatePlayhead);
+          if (nextReady) {
+            // ★★★ 下一个视频已就绪：立即切换 ★★★
+            const nextMediaTime = calcMediaTime(nextClip.start, nextClip);
+            const currentVideoTime = nextVideoInfo.element.currentTime;
+            const drift = Math.abs(currentVideoTime - nextMediaTime);
+            
+            // 只在需要 seek 时 seek
+            if (drift > RAF_SEEK_THRESHOLD) {
+              console.log('[RAF] ⏩ 边界seek:', nextClip.id.slice(-8), 'drift:', drift.toFixed(3) + 's');
+              nextVideoInfo.element.currentTime = nextMediaTime;
             }
-          };
-          nextVideoInfo.element.addEventListener('seeked', onSeeked, { once: true });
-          
-          // 超时保护：如果 seeked 事件没触发，100ms 后强制继续
-          setTimeout(() => {
-            if (useEditorStore.getState().isPlaying && nextVideoInfo.element.paused) {
-              nextVideoInfo.element.removeEventListener('seeked', onSeeked);
-              nextVideoInfo.element.play().catch(() => {});
-              rafId = requestAnimationFrame(updatePlayhead);
+            
+            // 设置时间到下一个 clip 的开始位置
+            storeState.setCurrentTime(nextClip.start);
+            
+            // 启动播放
+            nextVideoInfo.element.play().catch((err) => {
+              console.error('[RAF] ❌ 下一个视频 play() 失败:', err.name, err.message);
+            });
+            
+            // 清除当前视频的seek时间戳
+            lastSeekTimestamps.delete(mainClip.id);
+          } else {
+            // ★★★ 下一个视频未就绪：短暂等待，避免卡帧 ★★★
+            // 设置时间到边界位置（当前clip结束），但保持当前帧
+            storeState.setCurrentTime(clipEnd);
+            
+            // 尝试预加载下一个视频
+            if (nextVideoInfo && nextVideoInfo.element.readyState < 2) {
+              const nextMediaTime = calcMediaTime(nextClip.start, nextClip);
+              nextVideoInfo.element.currentTime = nextMediaTime;
+              // 触发加载
+              nextVideoInfo.element.load();
             }
-          }, 100);
+            
+            // 继续 RAF，等待下一个视频就绪
+            console.log('[RAF] ⏳ 等待下一视频就绪:', nextClip.id.slice(-8));
+          }
           
-          return; // 不在这里继续 RAF，等 seeked 或超时
+          rafId = requestAnimationFrame(updatePlayhead);
+          return;
         } else {
           // 没有更多 clip，停止播放
           storeState.setIsPlaying(false);
@@ -3833,8 +3552,70 @@ export function VideoCanvasNew() {
           return;
         }
       } else {
-        storeState.setCurrentTime(Math.max(mainClip.start, timelineTime));
+        // ★★★ 重点排查：时间同步中的回跳检测（重复播放根源）★★★
+        const proposedTime = Math.max(mainClip.start, timelineTime);
+        const timeDelta = proposedTime - storeTime;
+        
+        // 检测各种异常情况
+        if (timeDelta < -50) {
+          // 时间回跳 - 可能导致重复播放
+          console.warn('[TIME] ⚠️ 视频时间回跳:', {
+            jump: timeDelta.toFixed(0) + 'ms',
+            storeTime: (storeTime / 1000).toFixed(3) + 's',
+            proposedTime: (proposedTime / 1000).toFixed(3) + 's',
+            videoCurrentTime: mediaTime.toFixed(3) + 's',
+            clipId: mainClip.id.slice(-8),
+            sourceStart: ((mainClip.sourceStart || 0) / 1000).toFixed(3) + 's',
+          });
+          
+          if (timeDelta < -500) {
+            // 超过 500ms 的大回跳，跳过同步
+            console.warn('[TIME] 🚫 跳过大回跳同步');
+          } else {
+            // 小回跳（50-500ms）仍然同步，但记录下来
+            storeState.setCurrentTime(proposedTime);
+          }
+        } else if (timeDelta > 500) {
+          // 时间前跳过多 - 可能丢帧
+          console.warn('[TIME] ⏩ 时间前跳:', timeDelta.toFixed(0) + 'ms');
+          storeState.setCurrentTime(proposedTime);
+        } else {
+          storeState.setCurrentTime(proposedTime);
+        }
       }
+      
+      // ★★★ 治本修复：B-Roll 同步使用更宽容的阈值和节流 ★★★
+      visibleClips.forEach((clip, index) => {
+        if (index === 0) return; // 主视频已处理
+        
+        const overlayVideoInfo = mountedVideosRef.current.get(clip.id);
+        if (!overlayVideoInfo) return;
+        
+        const expectedMediaTime = calcMediaTime(storeTime, clip);
+        const actualMediaTime = overlayVideoInfo.element.currentTime;
+        const drift = Math.abs(actualMediaTime - expectedMediaTime);
+        
+        // ★★★ B-Roll 使用更宽容的阈值，避免频繁 seek ★★★
+        // B-Roll 通常是叠加层，小偏差不明显，可以容忍更大的漂移
+        const lastSeekTime = lastSeekTimestamps.get(clip.id) || 0;
+        const now = performance.now();
+        const cooldownPassed = now - lastSeekTime > SEEK_COOLDOWN_MS * 2; // B-Roll 冷却时间加倍
+        
+        // 只有在大偏差且冷却已过时才 seek
+        if (drift > BROLL_SEEK_THRESHOLD && overlayVideoInfo.element.readyState >= 2 && cooldownPassed) {
+          console.log('[SYNC] B-Roll sync:', clip.id.slice(-8), 'drift:', drift.toFixed(3) + 's');
+          overlayVideoInfo.element.currentTime = expectedMediaTime;
+          lastSeekTimestamps.set(clip.id, now);
+        }
+        
+        // 确保正在播放
+        if (overlayVideoInfo.element.paused && overlayVideoInfo.element.readyState >= 2) {
+          overlayVideoInfo.element.play().catch(() => {});
+        }
+      });
+      
+      // ★★★ 新增：同步音频 clips ★★★
+      syncAudioClips(storeTime, true);
       
       rafId = requestAnimationFrame(updatePlayhead);
     };
@@ -4007,6 +3788,14 @@ export function VideoCanvasNew() {
                         const clipKey = clip.id;
                         const existingInfo = mountedVideosRef.current.get(clipKey);
                         
+                        // ★★★ 调试日志：播放时查找视频 ★★★
+                        const poolKeys = Array.from(mountedVideosRef.current.keys()).map(k => k.slice(-8));
+                        bufferLog('🎬 渲染 clip:', clipKey.slice(-8), 
+                          '| 在 mountedVideosRef:', existingInfo ? '✅' : '❌',
+                          '| isReady:', existingInfo?.isReady,
+                          '| 池子大小:', mountedVideosRef.current.size,
+                          '| 池子keys:', poolKeys.join(','));
+                        
                         // ★★★ 核心：复用预热好的视频元素 ★★★
                         if (existingInfo?.element) {
                           const videoEl = existingInfo.element;
@@ -4021,7 +3810,7 @@ export function VideoCanvasNew() {
                             videoEl.style.height = '100%';
                             videoEl.style.transform = transformStyle.transform;
                             videoEl.style.opacity = String(transformStyle.opacity);
-                            videoEl.style.filter = beautyFilter || 'none'; // ★ 应用美颜滤镜
+                            videoEl.style.filter = beautyFilter || 'none';
                             videoEl.muted = clip.isMuted ?? false;
                             
                             // 移动到渲染容器
@@ -4030,17 +3819,36 @@ export function VideoCanvasNew() {
                             // 已经在容器里，只更新 transform 和 filter
                             videoEl.style.transform = transformStyle.transform;
                             videoEl.style.opacity = String(transformStyle.opacity);
-                            videoEl.style.filter = beautyFilter || 'none'; // ★ 应用美颜滤镜
+                            videoEl.style.filter = beautyFilter || 'none';
                           }
                           
-                          // 同步时间
+                          // ★★★ 治本修复：渲染时的seek节流 ★★★
+                          // 只在以下情况才seek：
+                          // 1. 不在播放中（暂停时需要精确定位）
+                          // 2. drift超过大阈值（播放中只处理大偏差）
+                          // 3. 冷却时间已过（防止频繁seek导致卡顿）
                           const storeState = useEditorStore.getState();
                           const clipMediaTime = calcMediaTime(storeState.currentTime, clip);
                           if (videoEl.readyState >= 1) {
                             const drift = Math.abs(videoEl.currentTime - clipMediaTime);
-                            if (drift > 0.1) {
+                            const isBroll = clip.metadata?.is_broll;
+                            const seekThreshold = isBroll ? BROLL_SEEK_THRESHOLD : RENDER_SEEK_THRESHOLD;
+                            const lastSeekTime = lastSeekTimestamps.get(clipKey) || 0;
+                            const now = performance.now();
+                            const cooldownPassed = now - lastSeekTime > SEEK_COOLDOWN_MS;
+                            
+                            // 只有在不播放、或大偏差且冷却已过时才seek
+                            if (!storeState.isPlaying && drift > 0.1) {
+                              // 暂停时精确同步
                               videoEl.currentTime = clipMediaTime;
+                              lastSeekTimestamps.set(clipKey, now);
+                            } else if (drift > seekThreshold && cooldownPassed) {
+                              // 播放时只处理大偏差
+                              console.log('[Render] seek:', clipKey.slice(-8), 'drift:', drift.toFixed(3) + 's');
+                              videoEl.currentTime = clipMediaTime;
+                              lastSeekTimestamps.set(clipKey, now);
                             }
+                            // 小偏差忽略，靠视频自然播放追赶
                           }
                           
                           // 同步播放状态
@@ -4060,7 +3868,10 @@ export function VideoCanvasNew() {
                         // 不再在此处创建新视频，避免重复请求和状态混乱
                         if (isPreheatComplete) {
                           // 预热已完成但没有这个 clip 的视频，说明预热失败
-                          bufferLog('⚠️ 预热完成但无可用视频:', clipKey.slice(-8));
+                          const allKeys = Array.from(mountedVideosRef.current.keys()).map(k => k.slice(-8));
+                          bufferLog('❌ 预热完成但无可用视频:', clipKey.slice(-8), 
+                            '| 池子keys:', allKeys.join(',') || '(空)',
+                            '| 全部clips:', videoClips.map(c => c.id.slice(-8)).join(','));
                           
                           // 显示一个占位提示
                           if (!containerEl.querySelector('.video-loading-placeholder')) {

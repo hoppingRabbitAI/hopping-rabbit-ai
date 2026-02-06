@@ -5,14 +5,21 @@
 
 /**
  * 内容块类型 - 所有类型都挂载在轨道上
+ * 
+ * 类型层级关系：
+ * - video: 主视频片段（必须连续，不允许有间隙）
+ * - broll: B-Roll 覆盖视频（video 的子类型，可以有间隙）
+ * - text: 文案片段
+ * - subtitle: 字幕片段（text 的子类型，可以有间隙）
  */
-export type ClipType = 'video' | 'image' | 'audio' | 'text' | 'subtitle' | 'voice' | 'effect' | 'filter' | 'transition' | 'sticker';
+export type ClipType = 'video' | 'broll' | 'image' | 'audio' | 'text' | 'subtitle' | 'voice' | 'effect' | 'filter' | 'transition' | 'sticker';
 
 /**
  * 素材类型颜色映射
  */
 export const CLIP_TYPE_COLORS: Record<ClipType, string> = {
   video: 'bg-transparent',  // 视频使用透明背景显示缩略图
+  broll: 'bg-blue-600',     // B-Roll 使用蓝色背景
   image: 'bg-violet-600',   // 图片使用紫色背景
   audio: 'bg-green-600',
   text: 'bg-purple-600',
@@ -171,7 +178,7 @@ export interface Clip {
   
   // ============ 播放控制 ============
   speed: number;
-  aspectRatio?: '16:9' | '9:16' | '1:1';
+  aspectRatio?: '16:9' | '9:16';  // ★ 仅支持 16:9 和 9:16
   
   // ============ 转写内容（ASR 结果）============
   /** 该 clip 的语音转写结果 */

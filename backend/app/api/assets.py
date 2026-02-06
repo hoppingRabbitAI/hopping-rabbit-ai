@@ -5,7 +5,7 @@ HoppingRabbit AI - 资源管理 API
 import logging
 import asyncio
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Response, Request, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from typing import Optional, Dict, Union
 from datetime import datetime
 from uuid import uuid4
@@ -59,7 +59,9 @@ async def list_assets(
         from ..services.supabase_client import get_file_urls_batch
         
         storage_paths = [a["storage_path"] for a in result.data if a.get("storage_path")]
-        thumbnail_paths = [a["thumbnail_path"] for a in result.data if a.get("thumbnail_path")]
+        # ★ 只有存储路径（非 URL）才需要生成签名 URL
+        thumbnail_paths = [a["thumbnail_path"] for a in result.data 
+                          if a.get("thumbnail_path") and not a["thumbnail_path"].startswith("http")]
         all_paths = list(set(storage_paths + thumbnail_paths))
         
         url_map = get_file_urls_batch("clips", all_paths) if all_paths else {}
@@ -67,10 +69,19 @@ async def list_assets(
         items = []
         for asset in result.data:
             asset_with_url = {**asset}
+            
             if asset.get("storage_path"):
                 asset_with_url["url"] = url_map.get(asset["storage_path"], "")
-            if asset.get("thumbnail_path"):
-                asset_with_url["thumbnail_url"] = url_map.get(asset["thumbnail_path"], "")
+            
+            # ★★★ 统一处理封面图 URL ★★★
+            thumbnail_path = asset.get("thumbnail_path")
+            if thumbnail_path:
+                if thumbnail_path.startswith("http"):
+                    # Cloudflare 等外部 URL，直接用
+                    asset_with_url["thumbnail_url"] = thumbnail_path
+                else:
+                    # 存储路径，需要生成签名 URL
+                    asset_with_url["thumbnail_url"] = url_map.get(thumbnail_path, "")
             
             # 字段映射：确保前端期望的字段存在
             # 前端期望 name 字段，但数据库是 original_filename
@@ -180,12 +191,21 @@ async def get_asset(
             raise HTTPException(status_code=404, detail="资源不存在")
         
         asset = result.data
+        storage_path = asset.get("storage_path", "")
         
         # 生成签名 URL
-        if asset.get("storage_path"):
-            asset["url"] = get_file_url("clips", asset["storage_path"])
-        if asset.get("thumbnail_path"):
-            asset["thumbnail_url"] = get_file_url("clips", asset["thumbnail_path"])
+        if storage_path:
+            asset["url"] = get_file_url("clips", storage_path)
+        
+        # ★★★ 统一处理封面图 URL ★★★
+        thumbnail_path = asset.get("thumbnail_path")
+        if thumbnail_path:
+            if thumbnail_path.startswith("http"):
+                # Cloudflare 等外部 URL，直接用
+                asset["thumbnail_url"] = thumbnail_path
+            else:
+                # 存储路径，需要生成签名 URL
+                asset["thumbnail_url"] = get_file_url("clips", thumbnail_path)
         
         return asset
     except HTTPException:
@@ -218,6 +238,214 @@ async def get_asset_url(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★★★ 视频文件直接访问 API ★★★
+# ============================================
+
+
+@router.get("/{asset_id}/video")
+async def get_asset_video(
+    asset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    获取 asset 的视频 URL（用于后端服务间调用）
+    
+    决策逻辑：
+    1. 如果是 Cloudflare 视频 → 返回 MP4 下载 URL
+    2. 如果有本地存储 → 重定向到 Supabase Storage
+    """
+    try:
+        result = supabase.table("assets").select(
+            "storage_path, cloudflare_uid, file_type"
+        ).eq("id", asset_id).single().execute()  # 不限制 user_id，允许后端服务访问
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="资源不存在")
+        
+        asset = result.data
+        
+        # 1. Cloudflare Stream 视频
+        cloudflare_uid = asset.get("cloudflare_uid")
+        if cloudflare_uid:
+            # Cloudflare 提供 MP4 下载 URL（需要开启 downloadable）
+            # 格式: https://videodelivery.net/{uid}/downloads/default.mp4
+            mp4_url = f"https://videodelivery.net/{cloudflare_uid}/downloads/default.mp4"
+            return RedirectResponse(url=mp4_url, status_code=302)
+        
+        # 2. Supabase Storage
+        storage_path = asset.get("storage_path")
+        if storage_path:
+            video_url = get_file_url("clips", storage_path)
+            return RedirectResponse(url=video_url, status_code=302)
+        
+        raise HTTPException(status_code=404, detail="视频文件不存在")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取视频 URL 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★★★ 封面图统一 API ★★★
+# ============================================
+
+
+@router.get("/{asset_id}/thumbnail")
+async def get_asset_thumbnail(
+    asset_id: str,
+    timestamp: float = 1.0,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    获取 asset 的封面图
+    
+    决策逻辑：
+    1. 如果有已生成的 thumbnail_path → 重定向到 Supabase Storage
+    2. 如果是 Cloudflare 视频 → 重定向到 Cloudflare 缩略图 API
+    3. 如果都没有 → 后台触发生成，返回 404 提示客户端重试
+    
+    Args:
+        asset_id: 资源 ID
+        timestamp: 封面图截取时间点（秒），默认 1s
+    """
+    try:
+        result = supabase.table("assets").select(
+            "thumbnail_path, storage_path, cloudflare_uid, file_type"
+        ).eq("id", asset_id).eq("user_id", user_id).single().execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="资源不存在")
+        
+        asset = result.data
+        thumbnail_path = asset.get("thumbnail_path")
+        
+        # 1. 如果有已存储的封面图
+        if thumbnail_path:
+            if thumbnail_path.startswith("http"):
+                # Cloudflare 等外部 URL，直接重定向
+                return Response(
+                    status_code=302,
+                    headers={"Location": thumbnail_path}
+                )
+            else:
+                # 存储路径，生成签名 URL
+                thumbnail_url = get_file_url("clips", thumbnail_path)
+                return Response(
+                    status_code=302,
+                    headers={"Location": thumbnail_url}
+                )
+        
+        # 2. 没有封面图 - 对于视频触发生成
+        storage_path = asset.get("storage_path", "")
+        if asset.get("file_type") == "video":
+            # 后台触发封面图生成
+            try:
+                video_url = get_file_url("clips", storage_path)
+                from ..tasks.asset_processing import generate_thumbnail_from_url
+                thumbnail_path = await generate_thumbnail_from_url(asset_id, video_url, timestamp)
+                
+                if thumbnail_path:
+                    # 更新数据库
+                    supabase.table("assets").update({
+                        "thumbnail_path": thumbnail_path
+                    }).eq("id", asset_id).execute()
+                    
+                    # 返回新生成的封面图
+                    thumbnail_url = get_file_url("clips", thumbnail_path)
+                    return Response(
+                        status_code=302,
+                        headers={"Location": thumbnail_url}
+                    )
+            except Exception as e:
+                logger.warning(f"封面图生成失败: {e}")
+        
+        # 如果是图片类型，直接使用原图
+        if asset.get("file_type") == "image":
+            image_url = get_file_url("clips", storage_path)
+            return Response(
+                status_code=302,
+                headers={"Location": image_url}
+            )
+        
+        raise HTTPException(status_code=404, detail="封面图不可用")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取封面图失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{asset_id}/thumbnail/generate")
+async def generate_asset_thumbnail(
+    asset_id: str,
+    background_tasks: BackgroundTasks,
+    timestamp: float = 1.0,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    手动触发生成 asset 封面图
+    
+    用于：
+    1. 重新生成封面图
+    2. 指定不同时间点截取封面
+    """
+    try:
+        result = supabase.table("assets").select(
+            "storage_path, cloudflare_uid, file_type, status"
+        ).eq("id", asset_id).eq("user_id", user_id).single().execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="资源不存在")
+        
+        asset = result.data
+        
+        if asset.get("status") != "ready":
+            raise HTTPException(status_code=400, detail="资源未就绪，无法生成封面图")
+        
+        storage_path = asset.get("storage_path", "")
+        thumbnail_path = asset.get("thumbnail_path", "")
+        
+        # 如果已有封面图是 Cloudflare URL（外部链接），无法重新生成
+        if thumbnail_path.startswith("http"):
+            return {
+                "status": "external",
+                "thumbnail_url": thumbnail_path,
+                "message": "外部视频封面图无法重新生成"
+            }
+        
+        # 本地视频：触发后台生成
+        async def _generate():
+            try:
+                video_url = get_file_url("clips", storage_path)
+                from ..tasks.asset_processing import generate_thumbnail_from_url
+                thumbnail_path = await generate_thumbnail_from_url(asset_id, video_url, timestamp)
+                
+                if thumbnail_path:
+                    supabase.table("assets").update({
+                        "thumbnail_path": thumbnail_path
+                    }).eq("id", asset_id).execute()
+                    logger.info(f"✅ 封面图已生成: asset_id={asset_id}")
+            except Exception as e:
+                logger.error(f"封面图生成失败: {e}")
+        
+        background_tasks.add_task(_generate)
+        
+        return {
+            "status": "generating",
+            "message": "封面图正在后台生成，请稍后刷新"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"触发封面图生成失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -861,15 +1089,27 @@ async def stream_proxy_video(asset_id: str, request: Request):
     from ..services.supabase_client import get_supabase_admin_client
     
     admin_supabase = get_supabase_admin_client()
+    
+    # ★ 不用 .single()，避免 0 rows 抛异常
     result = await asyncio.to_thread(
-        lambda: admin_supabase.table("assets").select("storage_path, cloudflare_uid").eq("id", asset_id).single().execute()
+        lambda: admin_supabase.table("assets").select("storage_path, cloudflare_uid, status").eq("id", asset_id).execute()
     )
     
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Asset not found")
+    if not result.data or len(result.data) == 0:
+        logger.error(f"[Proxy] ❌ Asset not found in DB: {asset_id}")
+        raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}")
     
-    storage_path = result.data.get("storage_path", "")
-    cloudflare_uid = result.data.get("cloudflare_uid")
+    asset = result.data[0]
+    storage_path = asset.get("storage_path", "")
+    cloudflare_uid = asset.get("cloudflare_uid")
+    asset_status = asset.get("status")
+    
+    logger.debug(f"[Proxy] Asset {asset_id[:8]}: storage_path={storage_path[:50] if storage_path else 'None'}, cloudflare_uid={cloudflare_uid}, status={asset_status}")
+    
+    # ★ 检查 asset 状态
+    if asset_status == "processing":
+        logger.warning(f"[Proxy] Asset {asset_id[:8]} 仍在处理中 (status=processing)")
+        raise HTTPException(status_code=202, detail="Asset still processing")
     
     # Cloudflare 视频：返回 HLS URL
     if storage_path.startswith("cloudflare:") or cloudflare_uid:
@@ -877,8 +1117,19 @@ async def stream_proxy_video(asset_id: str, request: Request):
         hls_url = f"https://videodelivery.net/{uid}/manifest/video.m3u8"
         return RedirectResponse(url=hls_url, status_code=302)
     
+    # ★ 检查 storage_path 是否有效
+    if not storage_path:
+        logger.error(f"[Proxy] ❌ Asset {asset_id[:8]} has no storage_path!")
+        raise HTTPException(status_code=404, detail=f"Asset has no storage path: {asset_id}")
+    
     # 旧视频：返回原始流
     signed_url = get_file_url("clips", storage_path)
+    
+    # ★ 检查签名 URL 是否获取成功
+    if not signed_url:
+        logger.error(f"[Proxy] ❌ Failed to get signed URL for {asset_id[:8]}, storage_path={storage_path}")
+        raise HTTPException(status_code=404, detail=f"Failed to get file URL: {asset_id}")
+    
     range_header = request.headers.get("range")
     return await _create_streaming_response(signed_url, "video/mp4", range_header, {})
 
