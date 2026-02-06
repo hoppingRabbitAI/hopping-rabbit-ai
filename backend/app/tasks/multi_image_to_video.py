@@ -41,10 +41,10 @@ def _get_supabase():
 # ============================================
 
 def update_ai_task(task_id: str, **updates):
-    """更新 ai_tasks 表"""
+    """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
     except Exception as e:
         logger.error(f"更新 ai_task 失败: {e}")
 
@@ -70,7 +70,7 @@ def process_multi_image_to_video(self, task_id: str, user_id: str, image_list: L
     多图生视频任务入口
     
     Args:
-        task_id: ai_tasks 表的任务 ID
+        task_id: 任务 ID
         user_id: 用户 ID
         image_list: 图片 URL 列表（最多4张）
         prompt: 文本提示词（必填）

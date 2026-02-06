@@ -232,7 +232,7 @@ export function AITaskProgress({
         {
           event: 'UPDATE',
           schema: 'public',
-          table: 'ai_tasks',
+          table: 'tasks',
           filter: `id=eq.${taskId}`,
         },
         (payload) => {

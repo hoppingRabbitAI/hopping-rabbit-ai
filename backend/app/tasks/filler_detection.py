@@ -414,7 +414,7 @@ try:
             
             update_task_progress(task_id, 90, "保存结果")
             
-            supabase.table("ai_tasks").update({
+            supabase.table("tasks").update({
                 "status": "completed",
                 "result": result,
                 "progress": 100,

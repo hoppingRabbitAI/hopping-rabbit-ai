@@ -93,7 +93,7 @@ def _create_ai_task(
         "created_at": now,
     }
     
-    _get_supabase().table("ai_tasks").insert(task_data).execute()
+    _get_supabase().table("tasks").insert(task_data).execute()
     
     logger.info(f"[KlingAPI] 创建任务: {ai_task_id}, callback={callback_url or '无(轮询模式)'}")
     return ai_task_id
@@ -765,7 +765,7 @@ async def get_ai_task_status(
     """查询 AI 任务状态（前端轮询）"""
     try:
         supabase = _get_supabase()
-        result = supabase.table("ai_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
+        result = supabase.table("tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="任务不存在")
@@ -805,7 +805,7 @@ async def list_ai_tasks(
     """获取用户的 AI 任务列表"""
     try:
         supabase = _get_supabase()
-        query = supabase.table("ai_tasks").select("*").eq("user_id", user_id)
+        query = supabase.table("tasks").select("*").eq("user_id", user_id)
         
         if status:
             query = query.eq("status", status)
@@ -837,7 +837,7 @@ async def cancel_ai_task(
     """取消 AI 任务"""
     try:
         supabase = _get_supabase()
-        supabase.table("ai_tasks").update({
+        supabase.table("tasks").update({
             "status": "cancelled",
             "completed_at": datetime.utcnow().isoformat(),
         }).eq("id", task_id).eq("user_id", user_id).execute()
@@ -932,7 +932,7 @@ async def add_ai_task_to_project(
         now = datetime.utcnow().isoformat()
         
         # 1. 获取 AI 任务信息
-        task_result = supabase.table("ai_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
+        task_result = supabase.table("tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
         if not task_result.data:
             raise HTTPException(status_code=404, detail="任务不存在")
         
@@ -1059,7 +1059,7 @@ async def add_ai_task_to_project(
             logger.info(f"[KlingAPI] 创建 clip: clip_id={clip_id}, start={start_time_ms}, end={end_time_ms}")
         
         # 7. 更新 ai_tasks 表
-        supabase.table("ai_tasks").update({
+        supabase.table("tasks").update({
             "output_asset_id": asset_id,
             "updated_at": now,
         }).eq("id", task_id).execute()
@@ -1107,7 +1107,7 @@ async def delete_ai_task(
         supabase = _get_supabase()
         
         # 验证任务属于当前用户并删除
-        result = supabase.table("ai_tasks").delete().eq("id", task_id).eq("user_id", user_id).execute()
+        result = supabase.table("tasks").delete().eq("id", task_id).eq("user_id", user_id).execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="任务不存在或无权删除")
@@ -1138,7 +1138,7 @@ async def batch_delete_ai_tasks(
         supabase = _get_supabase()
         
         # 批量删除属于当前用户的任务
-        result = supabase.table("ai_tasks").delete().in_("id", request.task_ids).eq("user_id", user_id).execute()
+        result = supabase.table("tasks").delete().in_("id", request.task_ids).eq("user_id", user_id).execute()
         
         deleted_count = len(result.data) if result.data else 0
         

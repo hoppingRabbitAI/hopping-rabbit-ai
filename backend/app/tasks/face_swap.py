@@ -41,10 +41,10 @@ def _get_supabase():
 # ============================================
 
 def update_ai_task(task_id: str, **updates):
-    """更新 ai_tasks 表"""
+    """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
     except Exception as e:
         logger.error(f"更新 ai_task 失败: {e}")
 
@@ -70,7 +70,7 @@ def process_face_swap(self, task_id: str, user_id: str, video_url: str, face_ima
     AI换脸任务入口
     
     Args:
-        task_id: ai_tasks 表的任务 ID
+        task_id: 任务 ID
         user_id: 用户 ID
         video_url: 源视频 URL
         face_image_url: 目标人脸图片 URL

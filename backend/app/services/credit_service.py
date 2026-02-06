@@ -310,7 +310,7 @@ class CreditService:
             
             # 更新 AI 任务的冻结积分
             if ai_task_id:
-                self.supabase.table("ai_tasks").update({
+                self.supabase.table("tasks").update({
                     "credits_held": credits,
                 }).eq("id", ai_task_id).execute()
             
@@ -358,7 +358,7 @@ class CreditService:
             }).eq("user_id", user_id).execute()
             
             # 更新 AI 任务
-            self.supabase.table("ai_tasks").update({
+            self.supabase.table("tasks").update({
                 "credits_consumed": credits,
                 "credits_held": 0,
             }).eq("id", ai_task_id).execute()
@@ -438,7 +438,7 @@ class CreditService:
                 
                 # 更新 AI 任务
                 if ai_task_id:
-                    self.supabase.table("ai_tasks").update({
+                    self.supabase.table("tasks").update({
                         "credits_held": 0,
                     }).eq("id", ai_task_id).execute()
             

@@ -126,7 +126,7 @@ function TaskItem({
   const typeLabel = TASK_TYPE_LABELS[task.task_type] || task.task_type;
   const statusConfig = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG['pending'];
   
-  // 获取结果 URL（图片或视频）- ★ 兼容 tasks 表和 ai_tasks 表的不同字段名
+  // 获取结果 URL（图片或视频）- ★ 统一使用 tasks 表
   const resultUrl = task.output_url 
     || (task as unknown as { result_url?: string }).result_url  // tasks 表使用 result_url
     || (task.result_metadata as { result_url?: string })?.result_url;

@@ -153,7 +153,7 @@ class AICapabilityService:
         """
         创建 AI 能力任务
         
-        ★★★ 治本方案：任务持久化到 ai_tasks 表 ★★★
+        ★★★ 治本方案：任务持久化到 tasks 表 ★★★
         
         Args:
             capability_type: 能力类型
@@ -192,7 +192,7 @@ class AICapabilityService:
         
         self._tasks[task_id] = task
         
-        # ★★★ 持久化到 ai_tasks 表 ★★★
+        # ★★★ 持久化到 tasks 表 ★★★
         if user_id:
             try:
                 now = datetime.utcnow().isoformat()
@@ -215,7 +215,7 @@ class AICapabilityService:
                 if project_id:
                     task_data["project_id"] = project_id
                 
-                supabase.table("ai_tasks").insert(task_data).execute()
+                supabase.table("tasks").insert(task_data).execute()
                 logger.info(f"[AICapability] 任务已持久化到数据库: {task_id}")
             except Exception as e:
                 logger.warning(f"[AICapability] 任务持久化失败（不影响执行）: {e}")
@@ -227,7 +227,7 @@ class AICapabilityService:
         return task
     
     def _map_capability_to_task_type(self, capability_type: str) -> str:
-        """将 capability_type 映射到 ai_tasks 表的 task_type"""
+        """将 capability_type 映射到 tasks 表的 task_type"""
         mapping = {
             "background_replace": "background_replace",
             "person_replace": "background_replace",  # 人物替换也归类为 background_replace
@@ -260,7 +260,7 @@ class AICapabilityService:
         """
         创建预览任务（两步工作流的第一步）
         
-        ★★★ 治本方案：任务持久化到 ai_tasks 表 ★★★
+        ★★★ 治本方案：任务持久化到 tasks 表 ★★★
         
         与 create_task 类似，但结果不会自动应用到 clip，
         需要用户确认后调用 apply_preview 才会应用。
@@ -307,7 +307,7 @@ class AICapabilityService:
         
         self._tasks[task_id] = task
         
-        # ★★★ 持久化到 ai_tasks 表 ★★★
+        # ★★★ 持久化到 tasks 表 ★★★
         if user_id:
             try:
                 now = datetime.utcnow().isoformat()
@@ -331,7 +331,7 @@ class AICapabilityService:
                 if project_id:
                     task_data["project_id"] = project_id
                 
-                supabase.table("ai_tasks").insert(task_data).execute()
+                supabase.table("tasks").insert(task_data).execute()
                 logger.info(f"[AICapability] 预览任务已持久化到数据库: {task_id}")
             except Exception as e:
                 logger.warning(f"[AICapability] 预览任务持久化失败（不影响执行）: {e}")
@@ -653,7 +653,7 @@ class AICapabilityService:
         from .supabase_client import supabase
         try:
             updates["updated_at"] = datetime.utcnow().isoformat()
-            supabase.table("ai_tasks").update(updates).eq("id", task_id).execute()
+            supabase.table("tasks").update(updates).eq("id", task_id).execute()
         except Exception as e:
             logger.warning(f"[AICapability] 数据库状态更新失败（不影响执行）: {e}")
     

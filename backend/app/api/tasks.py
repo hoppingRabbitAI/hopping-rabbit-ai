@@ -50,76 +50,32 @@ async def get_task_status(
 async def list_tasks(
     project_id: Optional[str] = None,
     asset_id: Optional[str] = None,
+    clip_id: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 20,
-    include_ai_tasks: bool = True,  # 是否包含 ai_tasks 表的任务
     user_id: str = Depends(get_current_user_id)
 ):
-    """获取任务列表（合并 tasks 和 ai_tasks 表）"""
+    """获取任务列表（统一 tasks 表）"""
     try:
-        all_tasks = []
-        
-        # 1. 查询 tasks 表
+        # 查询 tasks 表
         query = supabase.table("tasks").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit)
         
         if project_id:
             query = query.eq("project_id", project_id)
         if asset_id:
             query = query.eq("asset_id", asset_id)
+        if clip_id:
+            query = query.eq("clip_id", clip_id)
         if status:
             query = query.eq("status", status)
         
         result = query.execute()
-        if result.data:
-            # ★ 治本：统一字段名 - 将 result_url 映射为 output_url
-            for task in result.data:
-                if "result_url" in task and not task.get("output_url"):
-                    task["output_url"] = task.get("result_url")
-            all_tasks.extend(result.data)
+        all_tasks = result.data or []
         
-        # 2. 查询 ai_tasks 表（背景替换、口型同步等 AI 任务）
-        if include_ai_tasks:
-            ai_query = supabase.table("ai_tasks").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit)
-            
-            if status:
-                ai_query = ai_query.eq("status", status)
-            
-            ai_result = ai_query.execute()
-            if ai_result.data:
-                # 转换 ai_tasks 格式以兼容前端
-                # 并根据 project_id 过滤（project_id 存储在 input_params JSON 内）
-                for ai_task in ai_result.data:
-                    task_project_id = ai_task.get("input_params", {}).get("project_id")
-                    
-                    # 如果指定了 project_id，只返回匹配的任务
-                    if project_id and task_project_id != project_id:
-                        continue
-                    
-                    all_tasks.append({
-                        "id": ai_task["id"],
-                        "task_type": ai_task["task_type"],
-                        "status": ai_task["status"],
-                        "progress": ai_task.get("progress", 0),
-                        "status_message": ai_task.get("status_message"),
-                        "error_message": ai_task.get("error_message"),
-                        "output_url": ai_task.get("output_url"),
-                        "output_asset_id": ai_task.get("output_asset_id"),
-                        "input_params": ai_task.get("input_params", {}),
-                        "result_metadata": ai_task.get("result_metadata"),
-                        # 从 input_params 提取关联信息
-                        "clip_id": ai_task.get("input_params", {}).get("clip_id"),
-                        "project_id": task_project_id,
-                        "asset_id": ai_task.get("input_params", {}).get("asset_id"),
-                        "created_at": ai_task["created_at"],
-                        "started_at": ai_task.get("started_at"),
-                        "completed_at": ai_task.get("completed_at"),
-                        # 标记来源表
-                        "_source": "ai_tasks",
-                    })
-        
-        # 3. 按创建时间排序并限制数量
-        all_tasks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        all_tasks = all_tasks[:limit]
+        # 统一字段名 - 将 result_url 映射为 output_url
+        for task in all_tasks:
+            if "result_url" in task and not task.get("output_url"):
+                task["output_url"] = task.get("result_url")
         
         return {"tasks": all_tasks}
     except Exception as e:

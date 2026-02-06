@@ -40,7 +40,7 @@ def _get_supabase():
 
 def update_ai_task(task_id: str, **updates) -> bool:
     """
-    更新 ai_tasks 表
+    更新任务表
     
     Args:
         task_id: 任务 ID
@@ -51,7 +51,7 @@ def update_ai_task(task_id: str, **updates) -> bool:
     """
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
         return True
     except Exception as e:
         logger.error(f"[AITask] 更新任务状态失败: task_id={task_id}, error={e}")

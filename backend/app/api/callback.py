@@ -97,10 +97,10 @@ KLING_STATUS_MAP = {
 # ============================================
 
 def update_ai_task(task_id: str, **updates):
-    """更新 ai_tasks 表"""
+    """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
         logger.info(f"[Callback] 任务状态已更新: {task_id} -> {updates.get('status', 'N/A')}")
     except Exception as e:
         logger.error(f"[Callback] 更新任务状态失败: {e}")
@@ -109,7 +109,7 @@ def update_ai_task(task_id: str, **updates):
 def find_ai_task_by_provider_task_id(provider_task_id: str) -> Optional[Dict]:
     """根据可灵AI的task_id查找我们的ai_task"""
     try:
-        result = _get_supabase().table("ai_tasks").select("*").eq(
+        result = _get_supabase().table("tasks").select("*").eq(
             "provider_task_id", provider_task_id
         ).single().execute()
         return result.data
@@ -423,7 +423,7 @@ async def kling_callback(
             # 尝试从 external_task_id 查找
             if payload.task_info and payload.task_info.external_task_id:
                 try:
-                    result = _get_supabase().table("ai_tasks").select("*").eq(
+                    result = _get_supabase().table("tasks").select("*").eq(
                         "id", payload.task_info.external_task_id
                     ).single().execute()
                     ai_task = result.data

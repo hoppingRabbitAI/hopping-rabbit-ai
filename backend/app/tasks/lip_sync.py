@@ -43,10 +43,10 @@ def _get_supabase():
 # ============================================
 
 def update_ai_task(task_id: str, **updates):
-    """更新 ai_tasks 表"""
+    """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
     except Exception as e:
         logger.error(f"[LipSync] 更新任务状态失败: {e}")
 
@@ -190,7 +190,7 @@ def process_lip_sync(
     4. 下载并上传结果 - 存储到 Supabase
     
     Args:
-        ai_task_id: AI 任务 ID (ai_tasks 表)
+        ai_task_id: 任务 ID
         user_id: 用户 ID
         video_url: 原始视频 URL
         audio_url: 目标音频 URL

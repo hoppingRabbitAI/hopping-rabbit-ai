@@ -41,10 +41,10 @@ def _get_supabase():
 # ============================================
 
 def update_ai_task(task_id: str, **updates):
-    """更新 ai_tasks 表"""
+    """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
     except Exception as e:
         logger.error(f"更新 ai_task 失败: {e}")
 
@@ -79,7 +79,7 @@ def process_motion_control(
     动作控制任务入口
     
     Args:
-        task_id: ai_tasks 表的任务 ID
+        task_id: 任务 ID
         user_id: 用户 ID
         image_url: 参考图像 URL（人物图片）
         video_url: 参考视频 URL（动作来源）

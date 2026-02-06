@@ -48,7 +48,7 @@ def _get_supabase():
 def update_ai_task_progress(task_id: str, progress: int, message: str):
     """更新任务进度"""
     supabase = _get_supabase()
-    supabase.table("ai_tasks").update({
+    supabase.table("tasks").update({
         "progress": progress,
         "status_message": message,
     }).eq("id", task_id).execute()
@@ -69,13 +69,13 @@ def update_ai_task_status(task_id: str, status: str, output_url: str = None, out
     if error:
         update_data["error_message"] = error
     
-    supabase.table("ai_tasks").update(update_data).eq("id", task_id).execute()
+    supabase.table("tasks").update(update_data).eq("id", task_id).execute()
 
 
 def update_ai_task(task_id: str, **fields):
     """通用字段更新"""
     supabase = _get_supabase()
-    supabase.table("ai_tasks").update(fields).eq("id", task_id).execute()
+    supabase.table("tasks").update(fields).eq("id", task_id).execute()
 
 
 # ============================================

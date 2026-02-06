@@ -51,10 +51,10 @@ def _get_supabase():
 # ============================================
 
 def update_ai_task(task_id: str, **updates):
-    """更新 ai_tasks 表"""
+    """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
     try:
-        _get_supabase().table("ai_tasks").update(updates).eq("id", task_id).execute()
+        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
     except Exception as e:
         logger.error(f"[ImageGen] 更新任务状态失败: {e}")
 
@@ -222,7 +222,7 @@ def process_image_generation(
     2. 轮询模式: 未配置回调时，任务会轮询等待结果
     
     Args:
-        ai_task_id: AI 任务 ID (ai_tasks 表)
+        ai_task_id: 任务 ID
         user_id: 用户 ID
         prompt: 正向提示词
         negative_prompt: 负向提示词
