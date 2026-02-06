@@ -10,7 +10,12 @@ ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_task_type_check;
 -- 2. 添加新的 CHECK 约束（包含所有已知任务类型）
 ALTER TABLE tasks ADD CONSTRAINT tasks_task_type_check 
 CHECK (task_type IN (
+    -- 原 tasks 表任务类型
     'transcribe', 'vad', 'filler_detection', 'diarization',
     'stem_separation', 'smart_clean', 'smart_camera', 'export', 
-    'subtitle_burn', 'asset_processing', 'clip_split', 'background_replace'
+    'subtitle_burn', 'asset_processing', 'clip_split', 'background_replace',
+    -- AI 任务类型
+    'lip_sync', 'face_swap', 'text_to_video', 'image_to_video', 
+    'image_generation', 'digital_human', 'motion_control', 'omni_image',
+    'multi_elements', 'smart_broadcast'
 ));
