@@ -544,9 +544,10 @@ async def update_clip(
     source_start: Optional[int] = Query(None, description="新的源素材起始位置（毫秒）"),
     source_end: Optional[int] = Query(None, description="新的源素材结束位置（毫秒）"),
     name: Optional[str] = Query(None, description="分镜名称"),
+    video_url: Optional[str] = Query(None, description="替换的视频 URL"),
 ):
     """
-    手动调整分镜
+    手动调整分镜（包括替换视频）
     """
     
     supabase = get_supabase()
@@ -565,6 +566,8 @@ async def update_clip(
         update_data["source_end"] = source_end
     if name is not None:
         update_data["name"] = name
+    if video_url is not None:
+        update_data["video_url"] = video_url
     
     if not update_data:
         return {"success": True, "clip_id": clip_id, "message": "No changes"}
@@ -572,7 +575,7 @@ async def update_clip(
     # 保存
     supabase.table("clips").update(update_data).eq("id", clip_id).execute()
     
-    return {"success": True, "clip_id": clip_id}
+    return {"success": True, "clip_id": clip_id, "updated": update_data}
 
 
 @router.delete("/clips/{clip_id}/children")

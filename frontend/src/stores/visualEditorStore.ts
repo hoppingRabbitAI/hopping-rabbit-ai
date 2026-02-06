@@ -29,8 +29,8 @@ interface VisualEditorActions {
   updateShotBackground: (shotId: string, background: Partial<ShotBackground>) => void;
   updateShotArtboard: (shotId: string, artboard: Partial<Artboard>) => void;
   updateShotViewport: (shotId: string, viewportTransform: number[]) => void;
-  // ★ 新增：替换分镜的视频 URL
-  replaceShotVideo: (shotId: string, newVideoUrl: string) => void;
+  // ★ 替换分镜的视频 URL
+  replaceShotVideo: (shotId: string, newVideoUrl: string) => Promise<void>;
   
   // 图层操作
   addLayer: (shotId: string, layer: Layer) => void;
@@ -167,17 +167,30 @@ export const useVisualEditorStore = create<VisualEditorStore>()((set, get) => ({
     });
   },
   
-  // ★ 新增：替换分镜的视频 URL
-  replaceShotVideo: (shotId, newVideoUrl) => {
+  // ★ 替换分镜的视频 URL（同步更新前端 + 后端）
+  replaceShotVideo: async (shotId, newVideoUrl) => {
     const { shots } = get();
     console.log('[VisualEditorStore] 替换分镜视频:', { shotId, newVideoUrl });
+    
+    // 1. 立即更新前端状态
     set({
       shots: shots.map(shot => 
         shot.id === shotId 
-          ? { ...shot, replacedVideoUrl: newVideoUrl }
+          ? { ...shot, videoUrl: newVideoUrl, replacedVideoUrl: newVideoUrl }
           : shot
       ),
     });
+    
+    // 2. 调用后端接口持久化
+    try {
+      const { authFetch } = await import('@/lib/supabase/session');
+      await authFetch(`/api/clips/${shotId}?video_url=${encodeURIComponent(newVideoUrl)}`, {
+        method: 'PATCH',
+      });
+      console.log('[VisualEditorStore] 替换成功');
+    } catch (error) {
+      console.error('[VisualEditorStore] 替换失败:', error);
+    }
   },
   
   // ==========================================
