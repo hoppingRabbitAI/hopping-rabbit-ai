@@ -754,20 +754,213 @@ async def execute_clip_split(
         
         logger.info(f"[ClipSplit] ✅ 拆分完成: {clip_id} -> {len(new_clips)} 个片段")
         
-        # 5. ★ 后台异步生成精确缩略图（不阻塞返回）
+        # 5. ★ 治标治本：同步生成缩略图（确保前端刷新后能看到新缩略图）
         asset_id = original_clip.get("asset_id")
         track_id = original_clip.get("track_id")
         if asset_id and track_id:
-            import asyncio
-            asyncio.create_task(
-                _async_generate_thumbnails(
+            try:
+                await _generate_thumbnails_sync(
                     result.data, asset_id, track_id, supabase_client
                 )
-            )
+            except Exception as e:
+                logger.warning(f"[ClipSplit] 缩略图生成失败，但拆分已完成: {e}")
         
         return result.data
     
     return []
+
+
+async def _generate_thumbnails_sync(
+    clips: List[dict],
+    asset_id: str,
+    track_id: str,
+    supabase_client
+):
+    """
+    ★ 治标治本：同步为拆分后的 clips 生成精确缩略图
+    
+    在拆分完成后同步执行，确保前端刷新时能看到新缩略图
+    """
+    import tempfile
+    import subprocess
+    import os
+    import shutil
+    
+    try:
+        # 1. 获取视频 URL
+        asset_result = supabase_client.table("assets").select("*").eq("id", asset_id).single().execute()
+        if not asset_result.data:
+            logger.warning(f"[ClipSplit Thumbnail] Asset {asset_id} 不存在")
+            return
+        
+        asset = asset_result.data
+        video_url = asset.get("cf_stream_url") or asset.get("storage_url") or asset.get("cached_url")
+        if not video_url:
+            logger.warning(f"[ClipSplit Thumbnail] 无法获取视频 URL")
+            return
+        
+        # 2. 获取 session_id 和项目比例
+        track_result = supabase_client.table("tracks").select("project_id").eq("id", track_id).single().execute()
+        if not track_result.data:
+            return
+        
+        project_id = track_result.data.get("project_id")
+        session_result = supabase_client.table("workspace_sessions").select("id").eq(
+            "project_id", project_id
+        ).order("created_at", desc=True).limit(1).execute()
+        
+        session_id = session_result.data[0].get("id") if session_result.data else "unknown"
+        
+        # ★ 获取项目目标比例
+        target_aspect = None
+        try:
+            project_result = supabase_client.table("projects").select("resolution").eq("id", project_id).single().execute()
+            if project_result.data and project_result.data.get("resolution"):
+                resolution = project_result.data["resolution"]
+                if resolution.get("width") and resolution.get("height"):
+                    if resolution["width"] > resolution["height"]:
+                        target_aspect = "16:9"
+                    else:
+                        target_aspect = "9:16"
+                    logger.info(f"[ClipSplit Thumbnail] 📐 目标比例: {target_aspect}")
+        except Exception as e:
+            logger.warning(f"[ClipSplit Thumbnail] 获取项目比例失败: {e}")
+        
+        # 3. 下载视频（如果是 HLS）
+        temp_dir = tempfile.mkdtemp(prefix="clip_thumb_sync_")
+        video_path = video_url
+        
+        if 'videodelivery.net' in video_url or 'm3u8' in video_url:
+            temp_video = os.path.join(temp_dir, "video.mp4")
+            cmd = [
+                "ffmpeg", "-y", "-i", video_url,
+                "-c", "copy", "-bsf:a", "aac_adtstoasc",
+                temp_video
+            ]
+            logger.info(f"[ClipSplit Thumbnail] 下载视频...")
+            result = subprocess.run(cmd, capture_output=True, timeout=300)
+            if result.returncode == 0 and os.path.exists(temp_video):
+                video_path = temp_video
+            else:
+                logger.warning(f"[ClipSplit Thumbnail] 视频下载失败")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return
+        
+        # ★ 获取视频尺寸（用于裁剪）
+        src_width, src_height = 1920, 1080
+        crop_filter = None
+        if target_aspect:
+            try:
+                probe_cmd = [
+                    "ffprobe", "-v", "quiet",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height",
+                    "-of", "csv=p=0",
+                    video_path
+                ]
+                result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                if result.returncode == 0 and result.stdout.strip():
+                    parts = result.stdout.strip().split(',')
+                    if len(parts) == 2:
+                        src_width, src_height = int(parts[0]), int(parts[1])
+                        src_ratio = src_width / src_height
+                        target_ratio = 16/9 if target_aspect == "16:9" else 9/16
+                        if abs(src_ratio - target_ratio) / target_ratio > 0.05:
+                            if src_ratio > target_ratio:
+                                new_w = int(src_height * target_ratio)
+                                new_h = src_height
+                                x = (src_width - new_w) // 2
+                                y = 0
+                            else:
+                                new_w = src_width
+                                new_h = int(src_width / target_ratio)
+                                x = 0
+                                y = (src_height - new_h) // 2
+                            crop_filter = f"crop={new_w}:{new_h}:{x}:{y}"
+                            logger.info(f"[ClipSplit Thumbnail] ✂️ 裁剪: {crop_filter}")
+            except Exception as e:
+                logger.warning(f"[ClipSplit Thumbnail] 获取尺寸失败: {e}")
+        
+        # 4. 为每个 clip 生成缩略图
+        STORAGE_BUCKET = "ai-creations"
+        success_count = 0
+        
+        for i, clip in enumerate(clips):
+            clip_id = clip.get("id")
+            source_start = clip.get("source_start", 0)
+            source_end = clip.get("source_end", source_start + 1000)
+            mid_time_sec = (source_start + source_end) / 2 / 1000
+            
+            local_filename = f"clip_{i:03d}_{clip_id[:8]}.jpg"
+            output_path = os.path.join(temp_dir, local_filename)
+            
+            try:
+                # 构建滤镜链
+                filter_parts = []
+                if crop_filter:
+                    filter_parts.append(crop_filter)
+                if target_aspect == "9:16":
+                    filter_parts.append("scale=-2:'min(568,ih)'")
+                else:
+                    filter_parts.append("scale='min(320,iw)':-2")
+                
+                video_filter = ",".join(filter_parts) if filter_parts else None
+                
+                # 提取帧
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(mid_time_sec),
+                    "-i", video_path,
+                    "-vframes", "1",
+                ]
+                if video_filter:
+                    cmd.extend(["-vf", video_filter])
+                cmd.extend(["-q:v", "2", output_path])
+                
+                result = subprocess.run(cmd, capture_output=True, timeout=30)
+                
+                if result.returncode != 0 or not os.path.exists(output_path):
+                    continue
+                
+                # 上传到 Supabase
+                storage_path = f"shot_thumbnails/{session_id}/{local_filename}"
+                
+                with open(output_path, "rb") as f:
+                    file_data = f.read()
+                
+                try:
+                    supabase_client.storage.from_(STORAGE_BUCKET).remove([storage_path])
+                except:
+                    pass
+                
+                supabase_client.storage.from_(STORAGE_BUCKET).upload(
+                    storage_path, file_data, {"content-type": "image/jpeg"}
+                )
+                
+                public_url = supabase_client.storage.from_(STORAGE_BUCKET).get_public_url(storage_path)
+                
+                # 更新数据库中的 clip
+                current_clip = supabase_client.table("clips").select("metadata").eq("id", clip_id).single().execute()
+                if current_clip.data:
+                    metadata = current_clip.data.get("metadata", {}) or {}
+                    metadata["thumbnail_url"] = public_url
+                    supabase_client.table("clips").update({"metadata": metadata}).eq("id", clip_id).execute()
+                
+                success_count += 1
+                os.remove(output_path)
+                
+            except Exception as e:
+                logger.warning(f"[ClipSplit Thumbnail] clip {clip_id[:8]} 失败: {e}")
+                continue
+        
+        # 清理
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.info(f"[ClipSplit Thumbnail] ✅ 同步生成完成: {success_count}/{len(clips)} 个")
+        
+    except Exception as e:
+        logger.error(f"[ClipSplit Thumbnail] 同步生成失败: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def _async_generate_thumbnails(
