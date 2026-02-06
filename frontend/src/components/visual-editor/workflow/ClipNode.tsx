@@ -17,6 +17,7 @@ import type { NodeProps } from '@xyflow/react';
 import { Play, Pause, Loader2, AlertCircle, RefreshCw, X } from 'lucide-react';
 import type { ClipNodeData } from './types';
 import { clipPlaybackService } from '../services/ClipPlaybackService';
+import { useTaskHistoryStore } from '@/stores/taskHistoryStore';
 import Hls from 'hls.js';
 
 // 拆分片段类型
@@ -119,6 +120,9 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
     
     if (!data.clipId) return;
     
+    // ★ 获取任务历史 store 方法
+    const { addOptimisticTask, updateTask, open: openTaskHistory } = useTaskHistoryStore.getState();
+    
     try {
       const { authFetch } = await import('@/lib/supabase/session');
       
@@ -136,6 +140,24 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
       const { task_id } = await response.json();
       console.log('[ClipNode] 创建拆分任务:', task_id);
       
+      // ★ 治标治本：添加乐观任务到历史侧边栏
+      const strategyLabel = SPLIT_STRATEGIES.find(s => s.id === strategy)?.name || strategy;
+      addOptimisticTask({
+        id: task_id,
+        task_type: 'clip_split',
+        status: 'processing',
+        progress: 0,
+        status_message: `正在${strategyLabel}...`,
+        clip_id: data.clipId,
+        input_params: {
+          clip_id: data.clipId,
+          strategy: strategy,
+        },
+      });
+      
+      // 打开任务历史侧边栏
+      openTaskHistory();
+      
       // Step 2: 轮询任务状态
       const maxAttempts = 60; // 最多等待 120 秒
       const pollInterval = 2000;
@@ -149,10 +171,25 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
         }
         
         const task = await statusResponse.json();
-        console.log(`[ClipNode] 任务状态 (${attempt + 1}/${maxAttempts}):`, task.status);
+        console.log(`[ClipNode] 任务状态 (${attempt + 1}/${maxAttempts}):`, task.status, task.progress);
+        
+        // ★ 更新任务进度
+        if (task.progress !== undefined) {
+          updateTask(task_id, {
+            progress: task.progress,
+            status_message: task.progress < 50 ? '分析中...' : '拆分中...',
+          });
+        }
         
         if (task.status === 'completed') {
           const result = task.result;
+          
+          // ★ 更新任务为完成状态
+          updateTask(task_id, {
+            status: 'completed',
+            progress: 100,
+            completed_at: new Date().toISOString(),
+          });
           
           if (result.success) {
             // 拆分成功，通知父组件刷新
@@ -173,14 +210,38 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
           }
           return;
         } else if (task.status === 'failed') {
+          // 更新任务历史为失败状态
+          if (taskId) {
+            updateTask(taskId, { 
+              status: 'failed', 
+              progress: 100,
+              error: task.error_message || task.error || '拆分任务失败'
+            });
+          }
           throw new Error(task.error_message || task.error || '拆分任务失败');
         }
         // 继续轮询...
       }
       
+      // 超时也更新任务状态
+      if (taskId) {
+        updateTask(taskId, { 
+          status: 'failed', 
+          progress: 100,
+          error: '拆分超时，请重试'
+        });
+      }
       throw new Error('拆分超时，请重试');
     } catch (error) {
       console.error('[ClipNode] 拆分失败:', error);
+      // 更新任务历史为失败状态
+      if (taskId) {
+        updateTask(taskId, { 
+          status: 'failed', 
+          progress: 100,
+          error: error instanceof Error ? error.message : '拆分失败'
+        });
+      }
       setSplitResult({
         can_split: false,
         reason: error instanceof Error ? error.message : '拆分失败',

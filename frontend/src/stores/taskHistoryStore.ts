@@ -50,6 +50,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   'stem_separation': '人声分离',
   'smart_clean': '智能清理',
   'extract_audio': '音频提取',
+  'clip_split': '分镜拆分',  // ★ 新增：分镜拆分任务
 };
 
 export const TASK_STATUS_CONFIG: Record<string, { label: string; color: string }> = {

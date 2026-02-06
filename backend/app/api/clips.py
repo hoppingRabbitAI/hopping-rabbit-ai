@@ -412,11 +412,10 @@ async def direct_clip_split(
             "id": task_id,
             "project_id": project_id,
             "user_id": user_id,
-            "task_type": "smart_clean",  # 兼容 CHECK 约束
+            "task_type": "clip_split",  # ★ 使用明确的任务类型
             "status": "pending",
             "progress": 0,
             "params": {
-                "actual_type": "direct_clip_split",
                 "clip_id": clip_id,
                 "strategy": request.strategy
             },
