@@ -361,6 +361,7 @@ export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHis
   
   // ★ 获取 shots 信息用于显示关联的 clip
   const shots = useVisualEditorStore(state => state.shots);
+  const replaceShotVideo = useVisualEditorStore(state => state.replaceShotVideo);
   
   // 预览状态
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -371,6 +372,10 @@ export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHis
     taskId: string;
     clipLabel: string;
   } | null>(null);
+  // ★ 替换中 loading 状态
+  const [isReplacing, setIsReplacing] = useState(false);
+  // ★ 替换成功提示
+  const [replaceSuccess, setReplaceSuccess] = useState<string | null>(null);
   
   // ★ 治本：打开侧边栏时立即获取任务列表
   useEffect(() => {
@@ -406,11 +411,21 @@ export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHis
     setReplaceConfirm({ clipId, videoUrl, taskId, clipLabel });
   };
   
-  // ★ 确认替换
-  const confirmReplace = () => {
-    if (replaceConfirm && onReplaceClip) {
-      onReplaceClip(replaceConfirm.clipId, replaceConfirm.videoUrl, replaceConfirm.taskId);
+  // ★ 确认替换（带 loading 和成功反馈）
+  const confirmReplace = async () => {
+    if (!replaceConfirm) return;
+    
+    setIsReplacing(true);
+    try {
+      await replaceShotVideo(replaceConfirm.clipId, replaceConfirm.videoUrl);
+      // 成功提示
+      setReplaceSuccess(replaceConfirm.clipLabel);
+      setTimeout(() => setReplaceSuccess(null), 3000);
       setReplaceConfirm(null);
+    } catch (error) {
+      console.error('替换失败:', error);
+    } finally {
+      setIsReplacing(false);
     }
   };
   
@@ -528,18 +543,35 @@ export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHis
             <div className="flex gap-3">
               <button
                 onClick={() => setReplaceConfirm(null)}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                disabled={isReplacing}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50"
               >
                 取消
               </button>
               <button
                 onClick={confirmReplace}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                disabled={isReplacing}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                确认替换
+                {isReplacing ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    替换中...
+                  </>
+                ) : (
+                  '确认替换'
+                )}
               </button>
             </div>
           </div>
+        </div>
+      )}
+      
+      {/* ★ 替换成功提示 */}
+      {replaceSuccess && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] px-4 py-3 bg-green-500 text-white rounded-lg shadow-lg flex items-center gap-2 animate-fade-in">
+          <CheckCircle size={18} />
+          <span>{replaceSuccess} 已成功替换</span>
         </div>
       )}
       
@@ -552,6 +584,13 @@ export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHis
           to {
             transform: translateX(0);
           }
+        }
+        @keyframes fade-in {
+          from { opacity: 0; transform: translate(-50%, 20px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
+        }
+        .animate-fade-in {
+          animation: fade-in 0.3s ease-out;
         }
         .animate-slide-in-right {
           animation: slide-in-right 0.2s ease-out;
