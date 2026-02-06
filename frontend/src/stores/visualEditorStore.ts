@@ -29,6 +29,8 @@ interface VisualEditorActions {
   updateShotBackground: (shotId: string, background: Partial<ShotBackground>) => void;
   updateShotArtboard: (shotId: string, artboard: Partial<Artboard>) => void;
   updateShotViewport: (shotId: string, viewportTransform: number[]) => void;
+  // ★ 新增：替换分镜的视频 URL
+  replaceShotVideo: (shotId: string, newVideoUrl: string) => void;
   
   // 图层操作
   addLayer: (shotId: string, layer: Layer) => void;
@@ -155,6 +157,19 @@ export const useVisualEditorStore = create<VisualEditorStore>()((set, get) => ({
       shots: shots.map(shot => 
         shot.id === shotId 
           ? { ...shot, viewportTransform }
+          : shot
+      ),
+    });
+  },
+  
+  // ★ 新增：替换分镜的视频 URL
+  replaceShotVideo: (shotId, newVideoUrl) => {
+    const { shots } = get();
+    console.log('[VisualEditorStore] 替换分镜视频:', { shotId, newVideoUrl });
+    set({
+      shots: shots.map(shot => 
+        shot.id === shotId 
+          ? { ...shot, replacedVideoUrl: newVideoUrl }
           : shot
       ),
     });

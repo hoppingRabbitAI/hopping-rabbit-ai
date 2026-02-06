@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useVisualEditorStore } from '@/stores/visualEditorStore';
 import { 
@@ -21,6 +21,7 @@ export default function Header() {
     projectName, 
     isSaving,
     shots,
+    replaceShotVideo,
   } = useVisualEditorStore();
   
   const handleBack = () => {
@@ -34,6 +35,13 @@ export default function Header() {
   const handleSave = async () => {
     console.log('Save');
   };
+  
+  // ★ 处理替换 Clip 视频
+  const handleReplaceClip = useCallback((clipId: string, newVideoUrl: string, taskId: string) => {
+    console.log('[Header] 替换 Clip 视频:', { clipId, newVideoUrl, taskId });
+    replaceShotVideo(clipId, newVideoUrl);
+    // TODO: 可以在这里添加成功提示
+  }, [replaceShotVideo]);
   
   const handleExportToEditor = async () => {
     if (projectId) {
@@ -133,7 +141,10 @@ export default function Header() {
       </div>
       
       {/* 任务历史侧边栏 */}
-      <TaskHistorySidebar projectId={projectId ?? undefined} />
+      <TaskHistorySidebar 
+        projectId={projectId ?? undefined} 
+        onReplaceClip={handleReplaceClip}
+      />
     </header>
   );
 }

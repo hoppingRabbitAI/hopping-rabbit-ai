@@ -34,7 +34,7 @@ export interface TaskHistoryFilter {
 // ============================================
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
-  'background_replace': '背景替换',
+  'background_replace': '视频生成',  // ★ 更明确的描述
   'lip_sync': '口型同步',
   'text_to_video': '文生视频',
   'image_to_video': '图生视频',

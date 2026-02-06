@@ -136,6 +136,7 @@ export interface Shot {
   sourceStart?: number;    // ★ 源视频位置（毫秒），用于 HLS 播放定位
   sourceEnd?: number;      // ★ 源视频位置（毫秒）
   assetId?: string;        // ★ 素材 ID，用于获取视频播放 URL
+  replacedVideoUrl?: string;  // ★ 替换后的视频 URL（AI 生成的新视频）
   transcript?: string;     // ★ 文字稿
   thumbnail?: string;
   thumbnailUrl?: string;
