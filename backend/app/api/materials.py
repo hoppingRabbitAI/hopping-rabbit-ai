@@ -76,10 +76,6 @@ class SetDefaultMaterialRequest(BaseModel):
 class ImportFromUrlRequest(BaseModel):
     """从 URL 导入素材请求"""
     source_url: str = Field(..., description="源文件 URL")
-    display_name: Optional[str] = Field(None, description="显示名称")
-    material_type: Literal["avatar", "voice_sample", "general"] = Field(default="general", description="素材类型")
-    tags: Optional[List[str]] = Field(default_factory=list, description="标签")
-    source_task_id: Optional[str] = Field(None, description="来源任务 ID")
 
 
 # ============================================
@@ -661,7 +657,7 @@ async def set_default_material(
 
 
 # ============================================
-# 从 URL 导入素材（简化版：只存链接）
+# 从 URL 导入素材（只存链接）
 # ============================================
 
 @router.post("/import-from-url")
@@ -669,64 +665,33 @@ async def import_material_from_url(
     request: ImportFromUrlRequest,
     user_id: str = Depends(get_current_user_id)
 ):
-    """
-    从 URL 导入素材到用户素材库
-    只保存链接和基本信息，不重新下载上传
-    """
+    """从 URL 导入素材到用户素材库，直接保存链接"""
     try:
         source_url = request.source_url
         
-        # 从 URL 推断文件信息
+        # 从 URL 推断文件类型
         from urllib.parse import urlparse, unquote
         parsed = urlparse(source_url)
         path_parts = parsed.path.split('/')
-        original_filename = unquote(path_parts[-1]) if path_parts else "imported_file"
+        filename = unquote(path_parts[-1]).split('?')[0] if path_parts else "file"
+        file_ext = filename.split('.')[-1].lower() if '.' in filename else 'mp4'
         
-        # 去掉查询参数
-        if '?' in original_filename:
-            original_filename = original_filename.split('?')[0]
-        
-        # 推断文件类型
-        file_ext = original_filename.split('.')[-1].lower() if '.' in original_filename else 'mp4'
-        
-        # 确定 MIME 类型和文件类型
-        mime_map = {
-            'mp4': ('video/mp4', 'video'),
-            'webm': ('video/webm', 'video'),
-            'mov': ('video/quicktime', 'video'),
-            'png': ('image/png', 'image'),
-            'jpg': ('image/jpeg', 'image'),
-            'jpeg': ('image/jpeg', 'image'),
-            'gif': ('image/gif', 'image'),
-            'webp': ('image/webp', 'image'),
-            'mp3': ('audio/mpeg', 'audio'),
-            'wav': ('audio/wav', 'audio'),
-            'm4a': ('audio/m4a', 'audio'),
-        }
-        
-        mime_type, file_type = mime_map.get(file_ext, ('application/octet-stream', 'video'))
+        file_type = 'video' if file_ext in ['mp4', 'webm', 'mov'] else \
+                    'image' if file_ext in ['png', 'jpg', 'jpeg', 'gif', 'webp'] else \
+                    'audio' if file_ext in ['mp3', 'wav', 'm4a'] else 'video'
         
         asset_id = str(uuid4())
         now = datetime.utcnow().isoformat()
-        display_name = request.display_name or original_filename
         
-        # ★ 直接存链接，不重新下载上传
+        # 直接存链接
         asset_data = {
             "id": asset_id,
             "user_id": user_id,
-            "name": display_name,
-            "original_filename": original_filename,
-            "display_name": display_name,
+            "name": filename,
             "file_type": file_type,
-            "mime_type": mime_type,
-            "storage_path": source_url,  # 直接存源 URL
+            "storage_path": source_url,
             "asset_category": "user_material",
-            "material_type": request.material_type,
-            "tags": request.tags or [],
-            "material_metadata": {
-                "source_task_id": request.source_task_id,
-                "imported_at": now,
-            },
+            "material_type": "general",
             "status": "ready",
             "created_at": now,
             "updated_at": now
@@ -735,21 +700,16 @@ async def import_material_from_url(
         result = supabase.table("assets").insert(asset_data).execute()
         
         if not result.data:
-            raise HTTPException(status_code=500, detail="创建素材记录失败")
+            raise HTTPException(status_code=500, detail="保存失败")
         
-        # 返回数据，URL 直接用 source_url
         response_data = result.data[0]
         response_data["url"] = source_url
         
-        logger.info(f"素材导入成功: {asset_id}")
-        
-        return {
-            "success": True,
-            "asset": response_data
-        }
+        return {"success": True, "asset": response_data}
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"从 URL 导入素材失败: {e}")
+        logger.error(f"导入素材失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))

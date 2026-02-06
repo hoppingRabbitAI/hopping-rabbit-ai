@@ -181,13 +181,7 @@ function TaskItem({
     setIsSavingToLibrary(true);
     try {
       const materialsApi = new MaterialsApi();
-      const result = await materialsApi.importFromUrl({
-        source_url: resultUrl,
-        display_name: `${typeLabel} - ${formatTime(task.created_at)}`,
-        material_type: 'general',
-        tags: ['ai-generated', task.task_type],
-        source_task_id: task.id,
-      });
+      const result = await materialsApi.importFromUrl(resultUrl);
       
       if (result.data?.success) {
         setSavedToLibrary(true);
