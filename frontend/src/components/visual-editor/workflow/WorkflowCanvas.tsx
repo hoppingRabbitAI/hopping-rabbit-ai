@@ -64,7 +64,7 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
   const [selectedCapability, setSelectedCapability] = useState<AICapability | null>(null);
 
   // ★ 任务历史侧边栏（包含乐观更新）
-  const { open: openTaskHistory, fetch: fetchTasks, addOptimisticTask } = useTaskHistoryStore();
+  const { open: openTaskHistory, fetch: fetchTasks, addOptimisticTask, updateTask } = useTaskHistoryStore();
 
   // ★ 背景替换工作流状态
   const backgroundWorkflow = useBackgroundReplaceWorkflow();
@@ -185,9 +185,9 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
     }
   }, [selectedNodeId]);
 
-  // 关键帧编辑器生成预览处理
+  // 关键帧编辑器生成预览处理 - ★ 治标治本：添加任务到历史
   const handleGenerate = useCallback(async (params: GenerateParams): Promise<GenerateResult> => {
-    console.log('生成预览参数:', params);
+    console.log('[WorkflowCanvas] 生成预览参数:', params);
     
     // ★ 治本：获取 session token 用于鉴权
     const session = await getSessionSafe();
@@ -206,6 +206,7 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
         capability_type: params.capabilityId,
         clip_id: params.clipId,
         session_id: sessionId,
+        project_id: projectId,  // ★ 治本：传递 project_id 用于任务关联
         prompt: params.prompt,
         keyframe_url: params.keyframeUrl,
         mask_data_url: params.maskDataUrl,
@@ -218,9 +219,27 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
     }
     
     const task = await response.json();
-    console.log('预览任务已创建:', task);
+    console.log('[WorkflowCanvas] 预览任务已创建:', task);
     
     const taskId = task.id;
+    
+    // ★ 治标治本：立即添加任务到历史侧边栏（乐观更新）
+    const taskType = params.capabilityId.replace(/-/g, '_');
+    console.log('[WorkflowCanvas] ★ 添加预览任务到历史:', taskId, '类型:', taskType);
+    addOptimisticTask({
+      id: taskId,
+      task_type: taskType,
+      status: 'processing',
+      progress: 0,
+      status_message: '正在生成预览...',
+      clip_id: params.clipId,
+      project_id: projectId,
+      input_params: {
+        prompt: params.prompt,
+        clip_id: params.clipId,
+        project_id: projectId,
+      },
+    });
     
     // 轮询等待任务完成
     const maxWaitTime = 120000; // 2 分钟超时
@@ -237,9 +256,25 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
       }
       
       const taskStatus = await statusResponse.json();
-      console.log('任务状态:', taskStatus.status, taskStatus.result_url);
+      console.log('[WorkflowCanvas] 任务状态:', taskStatus.status, taskStatus.result_url);
+      
+      // ★ 治本：更新任务进度
+      if (taskStatus.progress) {
+        updateTask(taskId, {
+          progress: taskStatus.progress,
+          status_message: taskStatus.status_message || `${taskStatus.progress}%`,
+        });
+      }
       
       if (taskStatus.status === 'completed' && taskStatus.result_url) {
+        // ★ 治本：更新任务为完成状态
+        updateTask(taskId, {
+          status: 'completed',
+          progress: 100,
+          output_url: taskStatus.result_url,
+          completed_at: new Date().toISOString(),
+        });
+        
         // ★ 返回意图信息给前端显示
         return {
           previewUrl: taskStatus.result_url,
@@ -249,12 +284,22 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
       }
       
       if (taskStatus.status === 'failed') {
+        // ★ 治本：更新任务为失败状态
+        updateTask(taskId, {
+          status: 'failed',
+          error_message: taskStatus.error || 'AI 生成失败',
+        });
         throw new Error(taskStatus.error || 'AI 生成失败');
       }
     }
     
+    // ★ 超时也要更新任务状态
+    updateTask(taskId, {
+      status: 'failed',
+      error_message: '生成超时，请重试',
+    });
     throw new Error('生成超时，请重试');
-  }, [sessionId]);
+  }, [sessionId, projectId, addOptimisticTask, updateTask]);
 
   // 确认应用处理 - ★ 治标治本：所有能力统一走异步流程
   const handleConfirm = useCallback(async (params: ConfirmParams): Promise<void> => {

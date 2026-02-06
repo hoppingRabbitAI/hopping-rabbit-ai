@@ -9,7 +9,7 @@ AI 能力 API
 - GET /api/ai-capabilities/events/{session_id}: SSE 事件流
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List, AsyncGenerator
@@ -25,6 +25,7 @@ from app.services.ai_capability_service import (
     TaskEvent
 )
 from app.services.multi_step_refine_service import get_multi_step_refine_service
+from .auth import get_current_user_id, get_current_user_id_optional
 
 import logging
 
@@ -105,7 +106,10 @@ class TaskListResponse(BaseModel):
 # ==========================================
 
 @router.post("/tasks", response_model=TaskResponse)
-async def create_task(request: CreateTaskRequest):
+async def create_task(
+    request: CreateTaskRequest,
+    user_id: Optional[str] = Depends(get_current_user_id_optional)
+):
     """
     创建 AI 能力任务
     
@@ -115,6 +119,8 @@ async def create_task(request: CreateTaskRequest):
     - add-subtitle: 添加字幕
     - style-transfer: 风格迁移
     - voice-enhance: 声音优化
+    
+    ★ 治本：自动从 Authorization header 获取 user_id，确保任务持久化
     """
     try:
         # 验证能力类型
@@ -126,6 +132,9 @@ async def create_task(request: CreateTaskRequest):
                 detail=f"不支持的能力类型: {request.capability_type}"
             )
         
+        # ★ 治本：优先使用 header 中的 user_id，其次使用请求体中的
+        effective_user_id = user_id or request.user_id
+        
         service = get_ai_capability_service()
         task = await service.create_task(
             capability_type=request.capability_type,
@@ -134,11 +143,11 @@ async def create_task(request: CreateTaskRequest):
             prompt=request.prompt,
             keyframe_url=request.keyframe_url,
             mask_data_url=request.mask_data_url,
-            user_id=request.user_id,
+            user_id=effective_user_id,
             project_id=request.project_id,
         )
         
-        logger.info(f"[AICapabilityAPI] 创建任务成功: {task.id}")
+        logger.info(f"[AICapabilityAPI] 创建任务成功: {task.id}, user_id={effective_user_id}")
         return TaskResponse.from_task(task)
         
     except HTTPException:
@@ -149,7 +158,10 @@ async def create_task(request: CreateTaskRequest):
 
 
 @router.post("/preview", response_model=TaskResponse)
-async def create_preview_task(request: CreateTaskRequest):
+async def create_preview_task(
+    request: CreateTaskRequest,
+    user_id: Optional[str] = Depends(get_current_user_id_optional)
+):
     """
     创建预览任务（两步工作流第一步）
     
@@ -165,6 +177,8 @@ async def create_preview_task(request: CreateTaskRequest):
     支持的能力类型:
     - background-replace: 换背景/图像编辑（支持 mask）
     - style-transfer: 风格迁移
+    
+    ★ 治本：自动从 Authorization header 获取 user_id，确保任务持久化
     """
     try:
         # 验证能力类型
@@ -176,6 +190,9 @@ async def create_preview_task(request: CreateTaskRequest):
                 detail=f"不支持的能力类型: {request.capability_type}"
             )
         
+        # ★ 治本：优先使用 header 中的 user_id，其次使用请求体中的
+        effective_user_id = user_id or request.user_id
+        
         service = get_ai_capability_service()
         task = await service.create_preview_task(
             capability_type=request.capability_type,
@@ -184,11 +201,11 @@ async def create_preview_task(request: CreateTaskRequest):
             prompt=request.prompt,
             keyframe_url=request.keyframe_url,
             mask_data_url=request.mask_data_url,
-            user_id=request.user_id,
+            user_id=effective_user_id,
             project_id=request.project_id,
         )
         
-        logger.info(f"[AICapabilityAPI] 创建预览任务成功: {task.id}")
+        logger.info(f"[AICapabilityAPI] 创建预览任务成功: {task.id}, user_id={effective_user_id}")
         return TaskResponse.from_task(task)
         
     except HTTPException:

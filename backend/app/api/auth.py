@@ -241,6 +241,22 @@ async def get_current_user_id(authorization: str = Header(None)) -> str:
     return user.get("user_id")
 
 
+async def get_current_user_id_optional(authorization: str = Header(None)) -> Optional[str]:
+    """
+    获取当前用户 ID（可选，未登录返回 None）
+    用于不强制要求登录但需要用户信息的场景
+    """
+    token = await get_token_from_header(authorization)
+    if not token:
+        return None
+    
+    user = await verify_supabase_token(token)
+    if not user:
+        return None
+    
+    return user.get("user_id")
+
+
 # ============================================
 # 认证路由
 # ============================================
