@@ -70,6 +70,11 @@ interface VisualEditorActions {
   setRightPanelTab: (tab: 'background' | 'properties') => void;
   setIsPlaying: (playing: boolean) => void;
   
+  // ★ 侧边栏统一管理 - 同时只显示一个
+  openSidebar: (sidebar: 'taskHistory' | 'aiCapability', clipId?: string) => void;
+  closeSidebar: () => void;
+  toggleSidebar: (sidebar: 'taskHistory' | 'aiCapability', clipId?: string) => void;
+  
   // 加载状态
   setIsLoading: (loading: boolean) => void;
   setIsAnalyzing: (analyzing: boolean) => void;
@@ -433,6 +438,33 @@ export const useVisualEditorStore = create<VisualEditorStore>()((set, get) => ({
   
   setIsPlaying: (isPlaying) => {
     set({ isPlaying });
+  },
+  
+  // ==========================================
+  // 侧边栏统一管理 - 同时只显示一个
+  // ==========================================
+  
+  openSidebar: (sidebar, clipId) => {
+    set({ 
+      activeSidebar: sidebar,
+      selectedClipIdForAI: clipId || null,
+    });
+  },
+  
+  closeSidebar: () => {
+    set({ 
+      activeSidebar: null,
+      selectedClipIdForAI: null,
+    });
+  },
+  
+  toggleSidebar: (sidebar, clipId) => {
+    const { activeSidebar } = get();
+    if (activeSidebar === sidebar) {
+      set({ activeSidebar: null, selectedClipIdForAI: null });
+    } else {
+      set({ activeSidebar: sidebar, selectedClipIdForAI: clipId || null });
+    }
   },
   
   // ==========================================

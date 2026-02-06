@@ -225,6 +225,10 @@ export interface VisualEditorState {
   leftPanelTab: 'layers' | 'history';
   rightPanelTab: 'background' | 'properties';
   isPlaying: boolean;
+  
+  // ★ 侧边栏状态 - 统一管理，同时只显示一个
+  activeSidebar: 'taskHistory' | 'aiCapability' | null;
+  selectedClipIdForAI: string | null;  // 当前选中要应用 AI 能力的 clip
 }
 
 // ==========================================
@@ -266,6 +270,8 @@ export const DEFAULT_VISUAL_EDITOR_STATE: VisualEditorState = {
   leftPanelTab: 'layers',
   rightPanelTab: 'background',
   isPlaying: false,
+  activeSidebar: null,
+  selectedClipIdForAI: null,
 };
 
 // ==========================================

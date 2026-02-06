@@ -296,9 +296,12 @@ function PreviewModal({ url, onClose }: { url: string; onClose: () => void }) {
 }
 
 export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHistorySidebarProps) {
+  // ★ 使用统一的侧边栏管理
+  const activeSidebar = useVisualEditorStore(state => state.activeSidebar);
+  const closeSidebar = useVisualEditorStore(state => state.closeSidebar);
+  const isOpen = activeSidebar === 'taskHistory';
+  
   const { 
-    isOpen, 
-    close, 
     tasks, 
     isLoading, 
     error,
@@ -385,7 +388,7 @@ export default function TaskHistorySidebar({ projectId, onReplaceClip }: TaskHis
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
             </button>
             <button
-              onClick={close}
+              onClick={closeSidebar}
               className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <X size={18} />

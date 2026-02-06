@@ -30,6 +30,7 @@ import type { ClipNodeData, AICapability } from './types';
 import type { GenerateParams, GenerateResult, ConfirmParams } from './KeyframeEditor';
 import { getSessionSafe } from '@/lib/supabase/session';
 import { useTaskHistoryStore } from '@/stores/taskHistoryStore';
+import { useVisualEditorStore } from '@/stores/visualEditorStore';
 
 // 注册自定义节点类型
 const nodeTypes = {
@@ -59,9 +60,14 @@ interface WorkflowCanvasProps {
 
 export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:9', onShotSelect }: WorkflowCanvasProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [showCapabilityPanel, setShowCapabilityPanel] = useState(false);
   const [showKeyframeEditor, setShowKeyframeEditor] = useState(false);
   const [selectedCapability, setSelectedCapability] = useState<AICapability | null>(null);
+
+  // ★ 侧边栏统一管理
+  const activeSidebar = useVisualEditorStore(state => state.activeSidebar);
+  const selectedClipIdForAI = useVisualEditorStore(state => state.selectedClipIdForAI);
+  const closeSidebar = useVisualEditorStore(state => state.closeSidebar);
+  const showCapabilityPanel = activeSidebar === 'aiCapability';
 
   // ★ 任务历史侧边栏（包含乐观更新）
   const { open: openTaskHistory, fetch: fetchTasks, addOptimisticTask, updateTask } = useTaskHistoryStore();
@@ -149,7 +155,8 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
   // 节点点击处理
   const onNodeClick: NodeMouseHandler = useCallback((event, node) => {
     setSelectedNodeId(node.id);
-    setShowCapabilityPanel(true);
+    // ★ 使用统一的侧边栏管理
+    useVisualEditorStore.getState().openSidebar('aiCapability', node.id);
     
     // 通知父组件
     const shot = shots.find(s => s.id === node.id);
@@ -159,7 +166,7 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
   // 画布空白区域点击
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
-    setShowCapabilityPanel(false);
+    useVisualEditorStore.getState().closeSidebar();
     onShotSelect?.(null);
   }, [onShotSelect]);
 
@@ -178,12 +185,12 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
     if (capability.requiresConfig) {
       setSelectedCapability(capability);
       setShowKeyframeEditor(true);
-      setShowCapabilityPanel(false);
+      closeSidebar();  // ★ 关闭 AI 能力面板
     } else {
       // 不需要配置的能力，直接执行
       alert(`即将直接执行: ${capability.name}`);
     }
-  }, [selectedNodeId]);
+  }, [selectedNodeId, closeSidebar]);
 
   // 关键帧编辑器生成预览处理 - ★ 治标治本：添加任务到历史
   const handleGenerate = useCallback(async (params: GenerateParams): Promise<GenerateResult> => {
@@ -484,7 +491,7 @@ export function WorkflowCanvas({ shots, sessionId, projectId, aspectRatio = '16:
       {showCapabilityPanel && (
         <AICapabilityPanel
           selectedClip={selectedClipData}
-          onClose={() => setShowCapabilityPanel(false)}
+          onClose={closeSidebar}
           onSelectCapability={handleSelectCapability}
         />
       )}

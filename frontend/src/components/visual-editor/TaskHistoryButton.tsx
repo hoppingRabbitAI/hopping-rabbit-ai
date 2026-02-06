@@ -3,16 +3,19 @@
 import React from 'react';
 import { History } from 'lucide-react';
 import { useTaskHistoryStore } from '@/stores/taskHistoryStore';
+import { useVisualEditorStore } from '@/stores/visualEditorStore';
 
 interface TaskHistoryButtonProps {
   projectId?: string;
 }
 
 export default function TaskHistoryButton({ projectId }: TaskHistoryButtonProps) {
-  const { toggle, fetch, processingCount } = useTaskHistoryStore();
+  const { fetch, processingCount } = useTaskHistoryStore();
+  // ★ 使用统一的侧边栏管理
+  const toggleSidebar = useVisualEditorStore(state => state.toggleSidebar);
   
   const handleClick = async () => {
-    toggle();
+    toggleSidebar('taskHistory');
     if (projectId) {
       await fetch(projectId);
     }
