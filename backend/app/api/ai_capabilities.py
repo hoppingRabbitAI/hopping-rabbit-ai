@@ -16,15 +16,16 @@ from typing import Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime
 import asyncio
 import json
+import uuid
 
 from app.services.ai_capability_service import (
     get_ai_capability_service,
     CapabilityTask,
     CapabilityType,
     TaskStatus,
-    TaskEvent
+    TaskEvent,
+    normalize_capability_type,
 )
-from app.services.multi_step_refine_service import get_multi_step_refine_service
 from .auth import get_current_user_id, get_current_user_id_optional
 
 import logging
@@ -42,7 +43,7 @@ class CreateTaskRequest(BaseModel):
     """创建任务请求"""
     capability_type: str = Field(..., description="能力类型: background-replace, add-broll, etc.")
     clip_id: str = Field(..., description="片段 ID")
-    session_id: str = Field(..., description="会话 ID")
+    session_id: Optional[str] = Field(None, description="会话 ID（可选，缺失时自动生成）")
     prompt: str = Field(..., description="用户提示词")
     keyframe_url: Optional[str] = Field(None, description="关键帧图片 URL")
     mask_data_url: Optional[str] = Field(None, description="Mask 数据 URL (base64)")
@@ -54,7 +55,7 @@ class CreateTaskRequest(BaseModel):
             "example": {
                 "capability_type": "background-replace",
                 "clip_id": "clip-123",
-                "session_id": "session-456",
+                "session_id": None,
                 "prompt": "日落时分的海滩，金色阳光洒在海面上",
                 "keyframe_url": "https://example.com/keyframe.jpg",
                 "mask_data_url": None
@@ -105,58 +106,6 @@ class TaskListResponse(BaseModel):
 # API 端点
 # ==========================================
 
-@router.post("/tasks", response_model=TaskResponse)
-async def create_task(
-    request: CreateTaskRequest,
-    user_id: Optional[str] = Depends(get_current_user_id_optional)
-):
-    """
-    创建 AI 能力任务
-    
-    支持的能力类型:
-    - background-replace: 换背景
-    - add-broll: 插入 B-Roll
-    - add-subtitle: 添加字幕
-    - style-transfer: 风格迁移
-    - voice-enhance: 声音优化
-    
-    ★ 治本：自动从 Authorization header 获取 user_id，确保任务持久化
-    """
-    try:
-        # 验证能力类型
-        try:
-            CapabilityType(request.capability_type)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"不支持的能力类型: {request.capability_type}"
-            )
-        
-        # ★ 治本：优先使用 header 中的 user_id，其次使用请求体中的
-        effective_user_id = user_id or request.user_id
-        
-        service = get_ai_capability_service()
-        task = await service.create_task(
-            capability_type=request.capability_type,
-            clip_id=request.clip_id,
-            session_id=request.session_id,
-            prompt=request.prompt,
-            keyframe_url=request.keyframe_url,
-            mask_data_url=request.mask_data_url,
-            user_id=effective_user_id,
-            project_id=request.project_id,
-        )
-        
-        logger.info(f"[AICapabilityAPI] 创建任务成功: {task.id}, user_id={effective_user_id}")
-        return TaskResponse.from_task(task)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[AICapabilityAPI] 创建任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/preview", response_model=TaskResponse)
 async def create_preview_task(
     request: CreateTaskRequest,
@@ -177,13 +126,15 @@ async def create_preview_task(
     支持的能力类型:
     - background-replace: 换背景/图像编辑（支持 mask）
     - style-transfer: 风格迁移
+    - omni_image / omni-image: 图像编辑（Compositor）
     
     ★ 治本：自动从 Authorization header 获取 user_id，确保任务持久化
     """
     try:
-        # 验证能力类型
+        # 验证能力类型（兼容下划线/短横线别名）
+        normalized_capability_type = normalize_capability_type(request.capability_type)
         try:
-            CapabilityType(request.capability_type)
+            CapabilityType(normalized_capability_type)
         except ValueError:
             raise HTTPException(
                 status_code=400,
@@ -193,11 +144,14 @@ async def create_preview_task(
         # ★ 治本：优先使用 header 中的 user_id，其次使用请求体中的
         effective_user_id = user_id or request.user_id
         
+        # session_id 可选：未提供时用 project_id 兜底，再无则自动生成 UUID
+        effective_session_id = request.session_id or request.project_id or str(uuid.uuid4())
+        
         service = get_ai_capability_service()
         task = await service.create_preview_task(
-            capability_type=request.capability_type,
+            capability_type=normalized_capability_type,
             clip_id=request.clip_id,
-            session_id=request.session_id,
+            session_id=effective_session_id,
             prompt=request.prompt,
             keyframe_url=request.keyframe_url,
             mask_data_url=request.mask_data_url,
@@ -255,183 +209,26 @@ async def get_task(task_id: str):
     return TaskResponse.from_task(task)
 
 
-@router.get("/tasks", response_model=TaskListResponse)
-async def list_tasks(
-    session_id: str = Query(..., description="会话 ID")
-):
+@router.get("/tasks/{task_id}/status")
+async def get_task_status(task_id: str):
     """
-    列出会话的所有任务
+    轻量查询任务状态（直接读数据库，适用于回调模式任务的轮询补偿）
     """
-    service = get_ai_capability_service()
-    tasks = await service.list_tasks(session_id)
-    
-    return TaskListResponse(
-        tasks=[TaskResponse.from_task(t) for t in tasks],
-        total=len(tasks)
-    )
-
-
-@router.get("/capabilities")
-async def list_capabilities():
-    """
-    列出所有可用的 AI 能力
-    """
-    capabilities = [
-        {
-            "id": "background-replace",
-            "name": "换背景",
-            "description": "使用 AI 替换视频背景",
-            "icon": "ImagePlus",
-            "category": "visual",
-            "requires_config": True,
-            "supported": True,
-        },
-        {
-            "id": "add-broll",
-            "name": "插入 B-Roll",
-            "description": "智能插入相关素材",
-            "icon": "Film",
-            "category": "visual",
-            "requires_config": True,
-            "supported": True,
-        },
-        {
-            "id": "add-subtitle",
-            "name": "添加字幕",
-            "description": "自动生成动态字幕",
-            "icon": "Subtitles",
-            "category": "text",
-            "requires_config": True,
-            "supported": False,  # 开发中
-        },
-        {
-            "id": "style-transfer",
-            "name": "风格迁移",
-            "description": "应用艺术风格滤镜",
-            "icon": "Palette",
-            "category": "effect",
-            "requires_config": True,
-            "supported": True,
-        },
-        {
-            "id": "voice-enhance",
-            "name": "声音优化",
-            "description": "降噪、音量均衡",
-            "icon": "AudioLines",
-            "category": "audio",
-            "requires_config": False,
-            "supported": False,  # 开发中
-        },
-    ]
-    
-    return {"capabilities": capabilities}
-
-
-# ==========================================
-# 细粒度优化 API (Phase 2)
-# ==========================================
-
-class RefineBackgroundRequest(BaseModel):
-    """背景优化请求"""
-    clip_id: str = Field(..., description="片段 ID")
-    image_url: str = Field(..., description="原图 URL")
-    prompt: str = Field(..., description="背景描述")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "clip_id": "clip-123",
-                "image_url": "https://example.com/keyframe.jpg",
-                "prompt": "日落海滩，金色阳光"
-            }
-        }
-
-
-class RefineResultResponse(BaseModel):
-    """优化结果响应"""
-    result_url: str
-    task_id: Optional[str] = None
-
-
-@router.post("/refine/background", response_model=RefineResultResponse)
-async def refine_background(request: RefineBackgroundRequest):
-    """
-    细粒度背景优化
-    
-    保持人物位置和姿态不变，只替换/优化背景。
-    使用 omni-image API 通过 prompt 工程实现。
-    
-    工作流:
-    1. 用户描述想要的背景效果
-    2. AI 自动识别人物并保持不变
-    3. 只替换背景部分
-    4. 返回优化后的图片 URL
-    """
+    from ..services.supabase_client import supabase
     try:
-        service = get_multi_step_refine_service()
-        result = await service.refine_background(
-            image_url=request.image_url,
-            background_prompt=request.prompt
-        )
-        
-        logger.info(f"[RefineAPI] 背景优化成功: clip={request.clip_id}")
-        return RefineResultResponse(
-            result_url=result["result_url"],
-            task_id=result.get("task_id")
-        )
-        
+        result = supabase.table("tasks").select(
+            "id, status, progress, output_url, output_asset_id, status_message"
+        ).eq("id", task_id).single().execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        return result.data
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"[RefineAPI] 背景优化失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/refine/extract-person", response_model=RefineResultResponse)
-async def extract_person(image_url: str):
-    """
-    提取人物（纯白背景）
-    
-    从图片中提取主体人物，背景替换为纯白色。
-    可用于后续的精细合成。
-    """
-    try:
-        service = get_multi_step_refine_service()
-        result = await service.extract_person(image_url=image_url)
-        
-        logger.info(f"[RefineAPI] 人物提取成功")
-        return RefineResultResponse(
-            result_url=result["result_url"],
-            task_id=result.get("task_id")
-        )
-        
-    except Exception as e:
-        logger.error(f"[RefineAPI] 人物提取失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.post("/refine/composite", response_model=RefineResultResponse)
-async def composite_layers(person_url: str, background_url: str):
-    """
-    合成图层
-    
-    将人物图层与背景图层自然融合。
-    用于分步优化的最后一步。
-    """
-    try:
-        service = get_multi_step_refine_service()
-        result = await service.composite_layers(
-            person_url=person_url,
-            background_url=background_url
-        )
-        
-        logger.info(f"[RefineAPI] 图层合成成功")
-        return RefineResultResponse(
-            result_url=result["result_url"],
-            task_id=result.get("task_id")
-        )
-        
-    except Exception as e:
-        logger.error(f"[RefineAPI] 图层合成失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==========================================

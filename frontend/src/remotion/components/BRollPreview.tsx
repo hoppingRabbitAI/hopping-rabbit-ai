@@ -310,7 +310,7 @@ export function BRollPreview({
   return (
     <div className={className} style={style} onClick={handleClick}>
       {/* 调试标记 - 确认 Remotion 组件已加载 */}
-      <div className="absolute top-2 right-2 z-50 px-2 py-1 bg-purple-600 text-white text-xs rounded opacity-80">
+      <div className="absolute top-2 right-2 z-50 px-2 py-1 bg-gray-700 text-white text-xs rounded opacity-80">
         Remotion
       </div>
       <Player

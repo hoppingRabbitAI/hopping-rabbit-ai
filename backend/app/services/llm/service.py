@@ -454,6 +454,64 @@ class LLMService:
             logger.info(f"[LLMService] 多模态分析完成: {result[:100]}...")
             return result
 
+    async def analyze_images(
+        self,
+        images: list,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        多图多模态分析：多张图片 + 文字
+        
+        Args:
+            images: 图片 base64 编码列表（不含 data:image/xxx;base64, 前缀）
+            prompt: 分析提示词
+            system_prompt: 系统提示（可选）
+        """
+        import httpx
+        
+        api_key = settings.volcengine_ark_api_key
+        model = settings.doubao_seed_1_8_endpoint
+        base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        
+        content = []
+        for img_base64 in images:
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{img_base64}"
+                }
+            })
+        content.append({"type": "text", "text": prompt})
+        
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": content})
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 1000,
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            result = data["choices"][0]["message"]["content"]
+            logger.info(f"[LLMService] 多图多模态分析完成: {result[:100]}...")
+            return result
+
     # ============================================
     # 图像 Prompt 增强
     # ============================================
@@ -477,7 +535,7 @@ class LLMService:
         
         context = ""
         if is_image_to_image:
-            context = "（注意：用户上传了参考图片，这是图生图模式，请确保 prompt 中强调保留原图的人物/主体特征）\n\n"
+            context = "（注意：用户上传了参考图片，这是图生图模式。请确保 prompt 中强调保留原图的人物/主体特征、真实肤色和自然光影。生成结果必须看起来像一张真实照片，不能有 AI 生成感。）\n\n"
         
         try:
             chain = IMAGE_PROMPT_ENHANCEMENT_PROMPT | self.llm

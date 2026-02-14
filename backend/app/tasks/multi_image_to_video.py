@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 多图生视频 Celery 任务
+Lepus AI - 多图生视频 Celery 任务
 异步处理多图参考生视频任务，支持进度更新和结果存储
 
 应用场景：
@@ -43,8 +43,10 @@ def _get_supabase():
 def update_ai_task(task_id: str, **updates):
     """更新任务表"""
     updates["updated_at"] = datetime.utcnow().isoformat()
+    logger.info(f"[MultiImageToVideo] update_ai_task: task_id={task_id}, updates={updates}")
     try:
-        _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
+        result = _get_supabase().table("tasks").update(updates).eq("id", task_id).execute()
+        logger.info(f"[MultiImageToVideo] update_ai_task result: {result.data}")
     except Exception as e:
         logger.error(f"更新 ai_task 失败: {e}")
 
@@ -60,11 +62,40 @@ def create_asset(user_id: str, asset_data: Dict) -> Optional[str]:
     return None
 
 
+def _upload_to_supabase_storage(storage_path: str, file_bytes: bytes) -> None:
+    """
+    直接用 httpx 上传文件到 Supabase Storage，绕过 storage3 库的超时 bug。
+    storage3 在 httpx.ReadTimeout 时触发 UnboundLocalError('response')。
+    """
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/{STORAGE_BUCKET}/{storage_path}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "video/mp4",
+        "x-upsert": "true",
+    }
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+        resp = client.post(upload_url, content=file_bytes, headers=headers)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Supabase Storage upload failed: {resp.status_code} {resp.text[:300]}"
+            )
+    logger.info(f"[MultiImageToVideo] 上传完成: {storage_path}, size={len(file_bytes)}")
+
+
 # ============================================
 # Celery 任务
 # ============================================
 
-@celery_app.task(name="tasks.multi_image_to_video.process_multi_image_to_video", bind=True)
+@celery_app.task(
+    name="tasks.multi_image_to_video.process_multi_image_to_video",
+    bind=True,
+    queue="gpu",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_kwargs={"max_retries": 2},
+)
 def process_multi_image_to_video(self, task_id: str, user_id: str, image_list: List[str], prompt: str, options: Dict = None):
     """
     多图生视频任务入口
@@ -129,8 +160,8 @@ async def _process_multi_image_to_video_async(
         logger.info(f"[MultiImageToVideo] Step 1: 状态更新为 processing")
         
         # Step 2: 调用可灵 API
+        # 注意：multi-image2video 不传 model_name，service 层已注释说明该接口使用 API 默认值
         api_options = {
-            "model_name": options.get("model_name", "kling-v1-6"),
             "duration": options.get("duration", "5"),
             "aspect_ratio": options.get("aspect_ratio", "16:9"),
             "mode": options.get("mode", "std"),
@@ -150,7 +181,7 @@ async def _process_multi_image_to_video_async(
         if not kling_task_id:
             raise ValueError(f"可灵 API 返回无效: {response}")
         
-        update_ai_task(task_id, kling_task_id=kling_task_id, progress=20)
+        update_ai_task(task_id, provider_task_id=kling_task_id, progress=20)
         logger.info(f"[MultiImageToVideo] 可灵任务ID: {kling_task_id}")
         
         # Step 3: 轮询任务状态
@@ -167,7 +198,7 @@ async def _process_multi_image_to_video_async(
             status_data = status_response.get("data", {})
             task_status = status_data.get("task_status", "")
             
-            logger.info(f"[MultiImageToVideo] 轮询 {poll_count}/{max_polls}: status={task_status}")
+            logger.info(f"[MultiImageToVideo] 轮询 {poll_count}/{max_polls}: task_id={task_id}, status={task_status}")
             
             # 计算进度 20-80%
             progress = 20 + int((poll_count / max_polls) * 60)
@@ -213,14 +244,27 @@ async def _process_multi_image_to_video_async(
         # Step 6: 上传到 Supabase Storage
         logger.info(f"[MultiImageToVideo] Step 6: 上传到 Supabase Storage...")
         storage_path = f"ai_generated/{user_id}/{task_id}.mp4"
-        
+
         with open(temp_file.name, "rb") as f:
-            _get_supabase().storage.from_(STORAGE_BUCKET).upload(
-                storage_path,
-                f.read(),
-                {"content-type": "video/mp4", "upsert": "true"}
-            )
-        
+            file_bytes = f.read()
+
+        upload_ok = False
+        last_upload_err: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                _upload_to_supabase_storage(storage_path, file_bytes)
+                upload_ok = True
+                break
+            except Exception as upload_exc:
+                last_upload_err = upload_exc
+                logger.warning(
+                    f"[MultiImageToVideo] 上传重试 {attempt + 1}/3 失败: {upload_exc}"
+                )
+                if attempt < 2:
+                    await asyncio.sleep(3 * (attempt + 1))
+        if not upload_ok:
+            raise RuntimeError(f"上传到 Supabase Storage 失败: {last_upload_err}")
+
         # 获取公开 URL
         storage_url = _get_supabase().storage.from_(STORAGE_BUCKET).get_public_url(storage_path)
         logger.info(f"[MultiImageToVideo] 上传成功: {storage_url[:80]}...")
@@ -234,7 +278,7 @@ async def _process_multi_image_to_video_async(
         logger.info(f"[MultiImageToVideo] Step 7: 创建 Asset 记录...")
         
         asset_data = {
-            "project_id": "00000000-0000-0000-0000-000000000000",
+            "project_id": None,  # AI 生成的素材不属于任何项目
             "user_id": user_id,
             "name": f"AI多图视频_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
             "file_type": "video",
@@ -258,8 +302,8 @@ async def _process_multi_image_to_video_async(
             task_id,
             status="completed",
             progress=100,
-            result_asset_id=asset_id,
-            result_url=storage_url
+            output_asset_id=asset_id,
+            output_url=storage_url
         )
         
         logger.info(f"[MultiImageToVideo] 任务完成: task_id={task_id}, asset_id={asset_id}")

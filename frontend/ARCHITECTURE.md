@@ -1,4 +1,4 @@
-# HoppingRabbit AI 前端代码架构
+# Lepus AI 前端代码架构
 
 ## 目录结构
 
@@ -20,9 +20,6 @@ frontend/src/
 │   │   ├── smart/        # 智能功能组件 ⭐ NEW
 │   │   │   ├── types.ts               # 智能功能类型定义
 │   │   │   ├── SilenceDetectionPanel.tsx    # 静音检测
-│   │   │   ├── FillerDetectionPanel.tsx     # 填充词检测
-│   │   │   ├── SpeakerDiarizationPanel.tsx  # 说话人分离
-│   │   │   ├── StemSeparationPanel.tsx      # 音轨分离
 │   │   │   ├── SmartPanel.tsx               # 主容器
 │   │   │   └── index.ts               # 导出入口
 │   │   ├── AssetPanel.tsx             # 资源面板
@@ -94,7 +91,7 @@ frontend/src/
 | `lib/api/assets.ts` | 资源管理 API | ~130 |
 | `lib/api/tasks.ts` | AI 任务 API | ~150 |
 | `lib/api/export.ts` | 导出功能 API | ~130 |
-| `lib/api/smart.ts` | 智能剪辑 API | ~40 |
+| `lib/api/smart.ts` | AI 成片 API | ~40 |
 | `lib/api/index.ts` | 统一导出 + 兼容层 | ~90 |
 
 ## SmartPanel 模块划分 ⭐ NEW
@@ -103,9 +100,6 @@ frontend/src/
 |------|------|------|
 | `smart/types.ts` | 智能功能类型定义 | ~65 |
 | `smart/SilenceDetectionPanel.tsx` | 静音检测面板 | ~215 |
-| `smart/FillerDetectionPanel.tsx` | 填充词检测面板 | ~280 |
-| `smart/SpeakerDiarizationPanel.tsx` | 说话人分离面板 | ~250 |
-| `smart/StemSeparationPanel.tsx` | 音轨分离面板 | ~275 |
 | `smart/SmartPanel.tsx` | 主容器组件 | ~140 |
 | `smart/index.ts` | 统一导出 | ~8 |
 
@@ -143,7 +137,7 @@ Timeline.tsx
 6. **历史记录**: `undo`, `redo`, `saveToHistory`
 7. **播放状态**: `currentTime`, `isPlaying`, `setCurrentTime`
 8. **关键帧系统**: `keyframes`, `addKeyframe`, `updateKeyframe`, `deleteKeyframe`
-9. **AI 功能**: `startASR`, `startStemSeparation`, `startSmartClean`
+9. **AI 功能**: `startASR`
 10. **同步管理**: `_syncManager`, `_addOperation`
 
 > 注：由于 Zustand 单一 store 的特性，且各模块间存在紧密依赖，暂不进一步拆分。
@@ -212,9 +206,8 @@ await taskApi.pollTaskUntilComplete(taskId);
 import { exportApi, exportVideo } from '@/lib/api';
 await exportApi.startExport({ project_id });
 
-// 智能剪辑
+// 智能功能
 import { smartApi } from '@/lib/api';
-await smartApi.smartClean({ project_id });
 ```
 
 ### SmartPanel 模块
@@ -225,9 +218,6 @@ import { SmartPanel } from '@/components/editor/smart';
 
 // 或导入单个子面板
 import { 
-  SilenceDetectionPanel,
-  FillerDetectionPanel,
-  SpeakerDiarizationPanel,
-  StemSeparationPanel 
+  SilenceDetectionPanel
 } from '@/components/editor/smart';
 ```

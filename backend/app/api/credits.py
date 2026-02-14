@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Credits API
+Lepus AI - Credits API
 积分管理 API 端点
 """
 from fastapi import APIRouter, Depends, HTTPException, Query

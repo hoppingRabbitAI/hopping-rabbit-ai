@@ -68,7 +68,7 @@ export function AICapabilityPanel({
       <div className="p-4 border-b border-gray-100">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-blue-500" />
+            <Sparkles className="w-5 h-5 text-gray-500" />
             <h3 className="font-semibold text-gray-800">AI 能力</h3>
           </div>
           <button 
@@ -119,8 +119,8 @@ export function AICapabilityPanel({
                     onClick={() => onSelectCapability(cap)}
                     className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors group text-left"
                   >
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-blue-600" />
+                    <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center">
+                      <Icon className="w-5 h-5 text-gray-500" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800">{cap.name}</p>

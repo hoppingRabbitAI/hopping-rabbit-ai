@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 可灵AI API 集成服务
+Lepus AI - 可灵AI API 集成服务
 专注于口播场景的 AI 视频生成能力
 
 可灵AI 主要能力（口播相关）：
@@ -50,6 +50,10 @@ class KlingConfig:
     POLL_INTERVAL = 5     # 轮询间隔（秒）
     MAX_POLL_TIME = 600   # 最大等待时间（10分钟）
 
+    # Prompt 长度限制（Kling API 要求 0~2500）
+    PROMPT_MAX_LEN = 2500
+    NEGATIVE_PROMPT_MAX_LEN = 2500
+
 
 class TaskType(Enum):
     """可灵AI 任务类型"""
@@ -76,6 +80,21 @@ class TaskStatus(Enum):
 class KlingAIClient:
     """可灵AI API 客户端"""
     
+    @staticmethod
+    def _truncate_prompt(text: str, max_len: int = KlingConfig.PROMPT_MAX_LEN) -> str:
+        """截断 prompt 到 API 允许的最大长度，在词边界处截断"""
+        if not text or len(text) <= max_len:
+            return text
+        truncated = text[:max_len]
+        # 尝试在最后一个空格/句号处截断，避免截断到词中间
+        for sep in ['. ', ', ', ' ', '。', '，']:
+            idx = truncated.rfind(sep)
+            if idx > max_len * 0.8:
+                truncated = truncated[:idx + len(sep)].rstrip()
+                break
+        logger.warning(f"[KlingAI] Prompt 超长 ({len(text)} chars)，已截断至 {len(truncated)} chars")
+        return truncated
+
     def __init__(self, api_key: str = None, api_secret: str = None):
         self.api_key = api_key or KlingConfig.API_KEY
         self.api_secret = api_secret or KlingConfig.API_SECRET
@@ -141,8 +160,21 @@ class KlingAIClient:
             if response.status_code >= 400:
                 error_text = response.text
                 logger.error(f"[KlingAI] API 错误: {response.status_code} - {error_text}")
-                logger.error(f"[KlingAI] 请求数据: {data}")
-                response.raise_for_status()
+                logger.error(f"[KlingAI] 请求 URL: {url}")
+                # 避免打印过长的 base64 数据
+                safe_data = {k: (v[:100] + "..." if isinstance(v, str) and len(v) > 100 else v) for k, v in (data or {}).items()}
+                logger.error(f"[KlingAI] 请求数据: {safe_data}")
+                # ★ 尝试解析错误响应，提取更有用的错误信息
+                kling_message = ""
+                try:
+                    error_json = response.json()
+                    kling_code = error_json.get("code")
+                    kling_message = error_json.get("message", "")
+                    logger.error(f"[KlingAI] Kling 错误码: {kling_code}, 消息: {kling_message}")
+                except Exception:
+                    pass
+                # 抛出包含详细信息的异常
+                raise ValueError(f"Kling API 错误 ({response.status_code}): {kling_message or error_text[:200]}")
             
             return response.json()
     
@@ -328,12 +360,12 @@ class KlingAIClient:
         
         # 构建请求体
         payload = {
-            "prompt": prompt,
+            "prompt": self._truncate_prompt(prompt),
         }
         
         # 可选参数
         if negative_prompt:
-            payload["negative_prompt"] = negative_prompt
+            payload["negative_prompt"] = self._truncate_prompt(negative_prompt, KlingConfig.NEGATIVE_PROMPT_MAX_LEN)
         
         if options.get("model_name"):
             payload["model_name"] = options["model_name"]
@@ -458,7 +490,7 @@ class KlingAIClient:
         
         # 可选参数
         if prompt:
-            payload["prompt"] = prompt
+            payload["prompt"] = self._truncate_prompt(prompt)
         
         if options.get("model_name"):
             payload["model_name"] = options["model_name"]
@@ -467,7 +499,7 @@ class KlingAIClient:
             payload["image_tail"] = clean_base64_field(options["image_tail"])
         
         if options.get("negative_prompt"):
-            payload["negative_prompt"] = options["negative_prompt"]
+            payload["negative_prompt"] = self._truncate_prompt(options["negative_prompt"], KlingConfig.NEGATIVE_PROMPT_MAX_LEN)
         
         if options.get("duration"):
             payload["duration"] = str(options["duration"])  # API要求字符串
@@ -484,15 +516,24 @@ class KlingAIClient:
         if options.get("voice_list"):
             payload["voice_list"] = options["voice_list"]
         
-        # 运镜控制（与 static_mask/dynamic_masks 互斥）
-        if options.get("camera_control"):
-            payload["camera_control"] = options["camera_control"]
+        # 运镜控制（与 image_tail / static_mask / dynamic_masks 互斥）
+        # ★ API 互斥约束: image+image_tail / camera_control / dynamic_masks+static_mask 三选一
+        has_image_tail = "image_tail" in payload
+        # ★ 验证 camera_control 格式：必须包含 type 字段
+        if options.get("camera_control") and not has_image_tail:
+            camera_control = options["camera_control"]
+            if isinstance(camera_control, dict) and camera_control.get("type"):
+                payload["camera_control"] = camera_control
+            else:
+                logger.warning(f"[KlingAI] camera_control 格式无效（缺少 type 字段），已忽略: {camera_control}")
+        elif options.get("camera_control") and has_image_tail:
+            logger.warning("[KlingAI] image_tail 与 camera_control 互斥，已忽略 camera_control")
         
-        # 运动笔刷（与 camera_control 互斥）
-        if options.get("static_mask"):
+        # 运动笔刷（与 camera_control / image_tail 互斥）
+        if options.get("static_mask") and not has_image_tail:
             payload["static_mask"] = clean_base64_field(options["static_mask"])
         
-        if options.get("dynamic_masks"):
+        if options.get("dynamic_masks") and not has_image_tail:
             payload["dynamic_masks"] = options["dynamic_masks"]
         
         # 回调和自定义ID
@@ -593,17 +634,14 @@ class KlingAIClient:
         # 构建请求体
         payload = {
             "image_list": formatted_image_list,
-            "prompt": prompt,  # 必填
+            "prompt": self._truncate_prompt(prompt),  # 必填
         }
         
-        # 可选参数
-        if options.get("model_name"):
-            payload["model_name"] = options["model_name"]
-        else:
-            payload["model_name"] = "kling-v2-5-turbo"  # 默认值（支持首尾帧）
+        # 可选参数 - multi-image2video 不传 model_name，使用 API 默认值
+        # 注意：该接口可能只支持特定模型，不要传入 model_name 避免报错
         
         if options.get("negative_prompt"):
-            payload["negative_prompt"] = options["negative_prompt"]
+            payload["negative_prompt"] = self._truncate_prompt(options["negative_prompt"], KlingConfig.NEGATIVE_PROMPT_MAX_LEN)
         
         if options.get("duration"):
             payload["duration"] = str(options["duration"])
@@ -715,8 +753,14 @@ class KlingAIClient:
         }
         
         # 可选参数
+        if options.get("model_name"):
+            payload["model_name"] = options["model_name"]
+        
+        if options.get("duration"):
+            payload["duration"] = str(options["duration"])
+        
         if options.get("prompt"):
-            payload["prompt"] = options["prompt"]
+            payload["prompt"] = self._truncate_prompt(options["prompt"])
         
         if options.get("keep_original_sound"):
             payload["keep_original_sound"] = options["keep_original_sound"]
@@ -994,7 +1038,7 @@ class KlingAIClient:
         payload = {
             "session_id": session_id,
             "edit_mode": edit_mode,
-            "prompt": prompt,
+            "prompt": self._truncate_prompt(prompt),
         }
         
         # 可选参数
@@ -1010,7 +1054,7 @@ class KlingAIClient:
             payload["image_list"] = formatted_image_list
         
         if options.get("negative_prompt"):
-            payload["negative_prompt"] = options["negative_prompt"]
+            payload["negative_prompt"] = self._truncate_prompt(options["negative_prompt"], KlingConfig.NEGATIVE_PROMPT_MAX_LEN)
         
         if options.get("duration"):
             payload["duration"] = str(options["duration"])
@@ -1105,10 +1149,10 @@ class KlingAIClient:
         
         # 可选参数
         if options.get("prompt"):
-            payload["prompt"] = options["prompt"]
+            payload["prompt"] = self._truncate_prompt(options["prompt"])
         
         if options.get("negative_prompt"):
-            payload["negative_prompt"] = options["negative_prompt"]
+            payload["negative_prompt"] = self._truncate_prompt(options["negative_prompt"], KlingConfig.NEGATIVE_PROMPT_MAX_LEN)
         
         if options.get("cfg_scale") is not None:
             payload["cfg_scale"] = options["cfg_scale"]
@@ -1207,7 +1251,7 @@ class KlingAIClient:
         options = options or {}
         
         payload = {
-            "prompt": prompt
+            "prompt": self._truncate_prompt(prompt)
         }
         
         # 模型选择逻辑：
@@ -1225,7 +1269,7 @@ class KlingAIClient:
         
         # 负向提示词（图生图时不支持）
         if negative_prompt and not image:
-            payload["negative_prompt"] = negative_prompt
+            payload["negative_prompt"] = self._truncate_prompt(negative_prompt, KlingConfig.NEGATIVE_PROMPT_MAX_LEN)
         
         # 参考图像（图生图模式）
         if image:
@@ -1367,7 +1411,7 @@ class KlingAIClient:
                 [{"element_id": 123}, ...]
                 - 主体数量 + 图片数量 <= 10
             options: 可选参数
-                - model_name: 模型名称，默认 kling-v2-1
+                - model_name: 模型名称，支持 kling-image-o1（默认）
                 - resolution: 清晰度 1k/2k，默认 1k
                 - n: 生成数量 [1,9]，默认 1
                 - aspect_ratio: 画面比例 16:9/9:16/1:1/4:3/3:4/3:2/2:3/21:9/auto
@@ -1389,12 +1433,11 @@ class KlingAIClient:
         options = options or {}
         
         payload = {
-            "prompt": prompt
+            "prompt": self._truncate_prompt(prompt)
         }
         
-        # 模型选择（默认 kling-v2-1）
-        if options.get("model_name"):
-            payload["model_name"] = options["model_name"]
+        # 模型选择（omni-image 支持 kling-image-o1）
+        payload["model_name"] = options.get("model_name") or "kling-image-o1"
         
         # 参考图列表 - 清洗 data:xxx;base64, 前缀
         if image_list:
@@ -1504,70 +1547,8 @@ class KlingAIClient:
         return result
     
     # ========================================
-    # AI 换脸 - 批量生成不同主播版本
+    # 通用任务查询（使用各端点专用查询方法）
     # ========================================
-    
-    async def create_face_swap_task(
-        self,
-        video_url: str,
-        face_image_url: str,
-        options: Dict = None
-    ) -> Dict:
-        """
-        AI 换脸任务
-        
-        口播场景应用：
-        - 一条口播内容，多个数字人形象
-        - 隐私保护：用数字人替代真人出镜
-        - A/B 测试：测试不同形象的播放效果
-        
-        Args:
-            video_url: 原始视频 URL
-            face_image_url: 目标人脸图片 URL
-            options: 可选参数
-                - face_index: 视频中选择第几张脸
-                - enhance: 是否增强换脸质量
-        
-        Returns:
-            {"task_id": "xxx", "status": "pending"}
-        """
-        options = options or {}
-        
-        payload = {
-            "video_url": video_url,
-            "face_image_url": face_image_url,
-            "face_index": options.get("face_index", 0),
-            "enhance": options.get("enhance", True),
-        }
-        
-        logger.info(f"[KlingAI] 创建换脸任务")
-        
-        result = await self._request("POST", "/faceswap/create", payload)
-        return result
-    
-    # ========================================
-    # 通用任务查询
-    # ========================================
-    
-    async def get_task_status(self, task_id: str) -> Dict:
-        """
-        查询任务状态
-        
-        Returns:
-            {
-                "task_id": "xxx",
-                "status": "completed",
-                "progress": 100,
-                "result": {
-                    "video_url": "https://...",
-                    "duration": 10.5,
-                    "width": 1920,
-                    "height": 1080
-                }
-            }
-        """
-        result = await self._request("GET", f"/task/{task_id}")
-        return result
     
     async def wait_for_task(
         self,
@@ -1698,49 +1679,6 @@ class KouboService:
             on_progress(100, "完成")
         
         return result
-    
-    async def batch_generate_avatars(
-        self,
-        source_video_url: str,
-        face_images: List[str],
-        on_progress: callable = None
-    ) -> List[Dict]:
-        """
-        批量生成不同数字人版本
-        
-        场景：一条口播内容，生成多个不同形象的版本
-        
-        Args:
-            source_video_url: 源口播视频
-            face_images: 目标人脸图片 URL 列表
-            on_progress: 进度回调
-        
-        Returns:
-            [{"face_image": "...", "video_url": "..."}]
-        """
-        results = []
-        total = len(face_images)
-        
-        for i, face_url in enumerate(face_images):
-            if on_progress:
-                on_progress(int(i / total * 100), f"生成第 {i+1}/{total} 个形象")
-            
-            task = await self.client.create_face_swap_task(
-                video_url=source_video_url,
-                face_image_url=face_url
-            )
-            
-            result = await self.client.wait_for_task(task["task_id"])
-            
-            results.append({
-                "face_image": face_url,
-                "video_url": result["result"]["video_url"]
-            })
-        
-        if on_progress:
-            on_progress(100, "全部完成")
-        
-        return results
     
     async def generate_product_showcase(
         self,

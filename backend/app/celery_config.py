@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Celery 配置
+Lepus AI - Celery 配置
 分布式任务队列配置，支持 AI 处理任务
 """
 import os
@@ -25,15 +25,12 @@ USE_SSL_REDIS = REDIS_URL.startswith("rediss://")
 
 # 创建 Celery 应用
 celery_app = Celery(
-    "hoppingrabbit",
+    "lepus",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
     include=[
         "app.tasks.transcribe",
-        "app.tasks.stem_separation",
-        "app.tasks.diarization",
         "app.tasks.export",
-        "app.tasks.smart_clean",
         "app.tasks.asset_processing",
         "app.tasks.lip_sync",              # AI 口型同步
         "app.tasks.text_to_video",         # AI 文生视频
@@ -45,6 +42,9 @@ celery_app = Celery(
         "app.tasks.image_generation",      # AI 图像生成
         "app.tasks.omni_image",            # AI Omni-Image (O1)
         "app.tasks.face_swap",             # AI 换脸
+        "app.tasks.enhance_style",         # AI 美化打光换装（5 大能力）
+        "app.tasks.avatar_confirm_portraits",  # 数字人确认肖像
+        "app.tasks.doubao_image",              # 豆包 Seedream 图像生成
         "app.tasks.broll_download",        # B-roll 下载
     ]
 )
@@ -87,51 +87,14 @@ celery_app.conf.update(
     task_soft_time_limit=1800,  # 30分钟软超时
     task_time_limit=3600,  # 60分钟硬超时
     
-    # 任务路由
-    task_routes={
-        # ASR 任务：高优先级，需要 GPU
-        "app.tasks.transcribe.*": {"queue": "gpu_high"},
-        
-        # 音频分离任务：高优先级，需要 GPU
-        "app.tasks.stem_separation.*": {"queue": "gpu_high"},
-        
-        # 说话人分离：中优先级，需要 GPU
-        "app.tasks.diarization.*": {"queue": "gpu_medium"},
-        
-        # 导出任务：中优先级，CPU 密集
-        "app.tasks.export.*": {"queue": "cpu_medium"},
-        
-        # 资源处理（代理、波形、缩略图）：低优先级
-        "app.tasks.asset_processing.*": {"queue": "cpu_low"},
-        
-        # 智能清洗：低优先级，CPU
-        "app.tasks.smart_clean.*": {"queue": "cpu_low"},
-        
-        # ★ B-roll 下载：CPU 任务，使用 cpu 队列
-        "app.tasks.broll_download.*": {"queue": "cpu"},
-    },
-    
-    # 队列定义
+    # 队列定义 — 统一使用单一 gpu 队列，简化运维
     task_queues=(
-        # GPU 高优先级队列
-        Queue("gpu_high", routing_key="gpu.high"),
-        # GPU 中优先级队列
-        Queue("gpu_medium", routing_key="gpu.medium"),
-        # GPU 队列（通用）
         Queue("gpu", routing_key="gpu"),
-        # CPU 队列（通用）
-        Queue("cpu", routing_key="cpu"),
-        # CPU 中优先级队列
-        Queue("cpu_medium", routing_key="cpu.medium"),
-        # CPU 低优先级队列
-        Queue("cpu_low", routing_key="cpu.low"),
-        # 默认队列
-        Queue("default", routing_key="default"),
     ),
     
     # 默认队列
-    task_default_queue="default",
-    task_default_routing_key="default",
+    task_default_queue="gpu",
+    task_default_routing_key="gpu",
     
     # 任务跟踪
     task_track_started=True,
@@ -147,13 +110,12 @@ celery_app.conf.update(
 # ============================================
 
 def gpu_task(func=None, *, priority="high"):
-    """GPU 任务装饰器"""
-    queue = f"gpu_{priority}"
+    """GPU 任务装饰器（所有任务统一用 gpu 队列）"""
     
     def decorator(f):
         return celery_app.task(
             bind=True,
-            queue=queue,
+            queue="gpu",
             autoretry_for=(Exception,),
             retry_backoff=True,
             retry_backoff_max=600,
@@ -166,13 +128,12 @@ def gpu_task(func=None, *, priority="high"):
 
 
 def cpu_task(func=None, *, priority="medium"):
-    """CPU 任务装饰器"""
-    queue = f"cpu_{priority}"
+    """CPU 任务装饰器（所有任务统一用 gpu 队列）"""
     
     def decorator(f):
         return celery_app.task(
             bind=True,
-            queue=queue,
+            queue="gpu",
             autoretry_for=(Exception,),
             retry_backoff=True,
             retry_backoff_max=300,

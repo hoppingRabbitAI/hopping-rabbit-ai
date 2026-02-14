@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 用户 API
+Lepus AI - 用户 API
 用户资料、配额、订阅相关接口
 """
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
@@ -83,21 +83,6 @@ class UpdateProfileRequest(BaseModel):
 # ============================================
 # API 路由
 # ============================================
-
-@router.get("/me", response_model=UserProfileResponse)
-async def get_current_user_profile(user: dict = Depends(get_current_user)):
-    """
-    获取当前用户资料
-    """
-    quota_service = get_quota_service()
-    quota = await quota_service.get_user_quota(user["user_id"])
-    
-    return UserProfileResponse(
-        user_id=user["user_id"],
-        email=user.get("email", ""),
-        tier=quota.get("tier", "free") if quota else "free",
-    )
-
 
 @router.get("/me/quota", response_model=QuotaResponse)
 async def get_current_user_quota(user_id: str = Depends(get_current_user_id)):

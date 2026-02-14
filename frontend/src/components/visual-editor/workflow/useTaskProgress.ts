@@ -27,12 +27,13 @@ export interface Task {
 }
 
 interface UseTaskProgressOptions {
-  sessionId: string;
+  /** SSE 订阅标识（通常传入 projectId） */
+  subscriberId: string;
   onTaskComplete?: (taskId: string, resultUrl?: string) => void;
   onTaskFailed?: (taskId: string, error: string) => void;
 }
 
-export function useTaskProgress({ sessionId, onTaskComplete, onTaskFailed }: UseTaskProgressOptions) {
+export function useTaskProgress({ subscriberId, onTaskComplete, onTaskFailed }: UseTaskProgressOptions) {
   const [tasks, setTasks] = useState<Map<string, Task>>(new Map());
   const [isConnected, setIsConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -48,9 +49,9 @@ export function useTaskProgress({ sessionId, onTaskComplete, onTaskFailed }: Use
     onTaskFailedRef.current = onTaskFailed;
   }, [onTaskComplete, onTaskFailed]);
 
-  // 连接 SSE - 只在 sessionId 变化时重新连接
+  // 连接 SSE - 只在 subscriberId 变化时重新连接
   useEffect(() => {
-    if (!sessionId) return;
+    if (!subscriberId) return;
     
     // 关闭现有连接
     if (eventSourceRef.current) {
@@ -71,7 +72,7 @@ export function useTaskProgress({ sessionId, onTaskComplete, onTaskFailed }: Use
       // NEXT_PUBLIC_API_URL 可能包含 /api，需要去掉后再添加正确路径
       let backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       backendUrl = backendUrl.replace(/\/api\/?$/, ''); // 去掉末尾的 /api
-      const eventSource = new EventSource(`${backendUrl}/api/ai-capabilities/events/${sessionId}`);
+      const eventSource = new EventSource(`${backendUrl}/api/ai-capabilities/events/${subscriberId}`);
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
@@ -176,7 +177,7 @@ export function useTaskProgress({ sessionId, onTaskComplete, onTaskFailed }: Use
         reconnectTimeoutRef.current = null;
       }
     };
-  }, [sessionId]);
+  }, [subscriberId]);
 
   // 添加新任务到追踪列表
   const addTask = useCallback((taskId: string) => {

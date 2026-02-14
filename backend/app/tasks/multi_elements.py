@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 多模态视频编辑 Celery 任务
+Lepus AI - 多模态视频编辑 Celery 任务
 异步处理视频元素增加/替换/删除任务
 
 应用场景：
@@ -199,7 +199,7 @@ async def _process_multi_elements_async(
         if not kling_task_id:
             raise ValueError(f"创建编辑任务失败: {create_response}")
         
-        update_ai_task(task_id, kling_task_id=kling_task_id, progress=30)
+        update_ai_task(task_id, provider_task_id=kling_task_id, progress=30)
         logger.info(f"[MultiElements] 可灵任务ID: {kling_task_id}")
         
         # Step 5: 轮询任务状态
@@ -215,7 +215,7 @@ async def _process_multi_elements_async(
             status_data = status_response.get("data", {})
             task_status = status_data.get("task_status", "")
             
-            logger.info(f"[MultiElements] 轮询 {poll_count}/{max_polls}: status={task_status}")
+            logger.info(f"[MultiElements] 轮询 {poll_count}/{max_polls}: task_id={task_id}, status={task_status}")
             
             # 计算进度 30-80%
             progress = 30 + int((poll_count / max_polls) * 50)
@@ -288,7 +288,7 @@ async def _process_multi_elements_async(
         }
         
         asset_data = {
-            "project_id": "00000000-0000-0000-0000-000000000000",
+            "project_id": None,  # AI 生成的素材不属于任何项目
             "user_id": user_id,
             "name": f"AI{edit_mode_names.get(edit_mode, '编辑')}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
             "file_type": "video",
@@ -312,8 +312,8 @@ async def _process_multi_elements_async(
             task_id,
             status="completed",
             progress=100,
-            result_asset_id=asset_id,
-            result_url=storage_url
+            output_asset_id=asset_id,
+            output_url=storage_url
         )
         
         logger.info(f"[MultiElements] 任务完成: task_id={task_id}, asset_id={asset_id}")

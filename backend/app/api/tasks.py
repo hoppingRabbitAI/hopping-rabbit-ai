@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 任务 API
+Lepus AI - 任务 API
 适配新表结构 (2026-01-07)
 
 新表结构变化：
@@ -16,7 +16,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from ..models import ASRRequest, ASRClipRequest, StemSeparationRequest, SmartCleanRequest, ExtractAudioRequest
+from ..models import ASRRequest, ASRClipRequest, ExtractAudioRequest
 from ..services.supabase_client import supabase, get_file_url
 from .auth import get_current_user_id
 
@@ -52,14 +52,27 @@ async def list_tasks(
     asset_id: Optional[str] = None,
     clip_id: Optional[str] = None,
     status: Optional[str] = None,
-    limit: int = 20,
+    task_type: Optional[str] = None,
+    limit: int = 50,
     user_id: str = Depends(get_current_user_id)
 ):
-    """获取任务列表（统一 tasks 表）"""
+    """获取任务列表（轻量查询，不返回大字段）"""
     try:
-        # 查询 tasks 表
-        query = supabase.table("tasks").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit)
-        
+        # ── 只查询列表需要的列，跳过 input_params/result_metadata 等大 JSONB ──
+        light_columns = (
+            "id,task_type,status,progress,status_message,error_message,"
+            "output_url,output_asset_id,result_url,"
+            "asset_id,clip_id,project_id,"
+            "created_at,started_at,completed_at"
+        )
+        query = (
+            supabase.table("tasks")
+            .select(light_columns)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(min(limit, 200))
+        )
+
         if project_id:
             query = query.eq("project_id", project_id)
         if asset_id:
@@ -68,15 +81,18 @@ async def list_tasks(
             query = query.eq("clip_id", clip_id)
         if status:
             query = query.eq("status", status)
-        
+        if task_type:
+            query = query.eq("task_type", task_type)
+
         result = query.execute()
         all_tasks = result.data or []
-        
+
         # 统一字段名 - 将 result_url 映射为 output_url
         for task in all_tasks:
-            if "result_url" in task and not task.get("output_url"):
-                task["output_url"] = task.get("result_url")
-        
+            if task.get("result_url") and not task.get("output_url"):
+                task["output_url"] = task["result_url"]
+            task.pop("result_url", None)
+
         return {"tasks": all_tasks}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -274,81 +290,6 @@ async def start_extract_audio(
             request.source_start,
             request.duration
         )
-        
-        return {"task_id": task_id, "status": "pending"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================
-# 人声分离
-# ============================================
-
-@router.post("/stem-separation")
-async def start_stem_separation(
-    request: StemSeparationRequest,
-    background_tasks: BackgroundTasks,
-    user_id: str = Depends(get_current_user_id)
-):
-    """启动人声分离任务"""
-    try:
-        # 通过 asset_id 查询 project_id
-        asset_result = supabase.table("assets").select("project_id").eq("id", request.asset_id).eq("user_id", user_id).single().execute()
-        if not asset_result.data:
-            raise HTTPException(status_code=404, detail="Asset not found")
-        project_id = asset_result.data["project_id"]
-        
-        task_id = str(uuid4())
-        now = datetime.utcnow().isoformat()
-        
-        supabase.table("tasks").insert({
-            "id": task_id,
-            "user_id": user_id,
-            "project_id": project_id,
-            "task_type": "stem_separation",
-            "asset_id": request.asset_id,
-            "status": "pending",
-            "progress": 0,
-            "params": {"stems": request.stems},
-            "created_at": now,
-            "updated_at": now
-        }).execute()
-        
-        background_tasks.add_task(execute_stem_separation, task_id, request.asset_id, request.stems)
-        
-        return {"task_id": task_id, "status": "pending"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================
-# 智能清洗
-# ============================================
-
-@router.post("/smart-clean")
-async def start_smart_clean(
-    request: SmartCleanRequest,
-    background_tasks: BackgroundTasks,
-    user_id: str = Depends(get_current_user_id)
-):
-    """启动智能清洗任务"""
-    try:
-        task_id = str(uuid4())
-        now = datetime.utcnow().isoformat()
-        
-        supabase.table("tasks").insert({
-            "id": task_id,
-            "user_id": user_id,
-            "task_type": "smart_clean",
-            "project_id": request.project_id,
-            "status": "pending",
-            "progress": 0,
-            "params": request.model_dump(),
-            "created_at": now,
-            "updated_at": now
-        }).execute()
-        
-        background_tasks.add_task(execute_smart_clean, task_id, request.project_id)
         
         return {"task_id": task_id, "status": "pending"}
     except Exception as e:
@@ -1147,122 +1088,3 @@ async def execute_extract_audio(
             "updated_at": datetime.utcnow().isoformat()
         }).eq("id", task_id).execute()
 
-
-async def execute_stem_separation(task_id: str, asset_id: str, stems: List[str]):
-    """执行人声分离任务"""
-    try:
-        # 从任务记录获取 user_id
-        task_result = supabase.table("tasks").select("user_id").eq("id", task_id).single().execute()
-        task_user_id = task_result.data.get("user_id") if task_result.data else None
-        
-        supabase.table("tasks").update({
-            "status": "running",
-            "progress": 10,
-            "started_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).execute()
-        
-        # 获取资源（使用新字段名）
-        asset = supabase.table("assets").select("*").eq("id", asset_id).single().execute()
-        
-        if not asset.data:
-            raise Exception("资源不存在")
-        
-        # TODO: 实际的人声分离逻辑
-        # 模拟结果
-        now = datetime.utcnow().isoformat()
-        result_stems = []
-        
-        # 生成源文件 URL
-        source_url = get_file_url("clips", asset.data["storage_path"]) if asset.data.get("storage_path") else None
-        
-        for stem_type in stems:
-            stem_asset_id = str(uuid4())
-            
-            # 创建衍生资源（使用新字段名）
-            # 实际应该上传分离后的文件并获取 storage_path
-            stem_storage_path = f"stems/{stem_asset_id}/{stem_type}.wav"
-            
-            supabase.table("assets").insert({
-                "id": stem_asset_id,
-                "user_id": task_user_id,
-                "project_id": asset.data.get("project_id"),
-                "file_type": "audio",  # 新字段名
-                "storage_path": stem_storage_path,
-                "original_filename": f"{stem_type}.wav",
-                "file_size": 0,  # 实际应该是真实大小
-                "duration": asset.data.get("duration", 0),
-                "sample_rate": asset.data.get("sample_rate"),
-                "channels": asset.data.get("channels"),
-                "parent_id": asset_id,
-                "status": "ready",
-                "created_at": now,
-                "updated_at": now
-            }).execute()
-            
-            result_stems.append({
-                "type": stem_type,
-                "asset_id": stem_asset_id,
-                "url": get_file_url("clips", stem_storage_path),
-                "duration": asset.data.get("duration", 0)
-            })
-        
-        supabase.table("tasks").update({
-            "status": "completed",
-            "progress": 100,
-            "result": {"stems": result_stems},
-            "completed_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).execute()
-        
-    except Exception as e:
-        supabase.table("tasks").update({
-            "status": "failed",
-            "error_message": str(e),
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).execute()
-
-
-async def execute_smart_clean(task_id: str, project_id: str):
-    """执行智能清洗任务"""
-    try:
-        supabase.table("tasks").update({
-            "status": "running",
-            "progress": 10,
-            "started_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).execute()
-        
-        # 获取项目的转写结果（从最近的 ASR 任务获取）
-        # 新表中 projects 没有 segments 字段
-        asr_task = supabase.table("tasks").select("result").eq(
-            "project_id", project_id
-        ).eq("task_type", "asr").eq("status", "completed").order(
-            "completed_at", desc=True
-        ).limit(1).execute()
-        
-        segments = []
-        if asr_task.data and asr_task.data[0].get("result"):
-            segments = asr_task.data[0]["result"].get("segments", [])
-        
-        if not segments:
-            raise Exception("未找到转写结果，请先执行 ASR 任务")
-        
-        # 分析
-        from ..tasks.smart_clean import analyze_transcript
-        result = await analyze_transcript(segments)
-        
-        supabase.table("tasks").update({
-            "status": "completed",
-            "progress": 100,
-            "result": result,
-            "completed_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).execute()
-        
-    except Exception as e:
-        supabase.table("tasks").update({
-            "status": "failed",
-            "error_message": str(e),
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", task_id).execute()

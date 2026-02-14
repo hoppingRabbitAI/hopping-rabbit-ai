@@ -43,12 +43,12 @@ interface ExportRecord {
 function StatusIcon({ status }: { status: ExportRecord['status'] }) {
   switch (status) {
     case 'completed':
-      return <CheckCircle className="w-5 h-5 text-green-500" />;
+      return <CheckCircle className="w-5 h-5 text-gray-500" />;
     case 'failed':
     case 'cancelled':
       return <XCircle className="w-5 h-5 text-red-500" />;
     case 'processing':
-      return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />;
+      return <Loader2 className="w-5 h-5 text-gray-500 animate-spin" />;
     case 'pending':
     default:
       return <Clock className="w-5 h-5 text-gray-400" />;
@@ -139,7 +139,8 @@ export function ExportsView() {
         throw new Error(response.error.message || '获取导出列表失败');
       }
       // 将 API 响应映射到本地类型
-      const records: ExportRecord[] = (response.data?.exports || []).map((item: any) => ({
+      const items = Array.isArray(response.data) ? response.data : (response.data as any)?.exports || [];
+      const records: ExportRecord[] = items.map((item: any) => ({
         id: item.id,
         project_id: item.project_id,
         user_id: item.user_id,
@@ -241,7 +242,12 @@ export function ExportsView() {
   const handleRetry = async (item: ExportRecord) => {
     try {
       setRetrying(item.id);
-      const response = await exportApi.retryExport(item.id);
+      // 重新创建导出任务
+      const response = await exportApi.startExport({
+        project_id: item.project_id,
+        preset: (item.resolution as any)?.preset || '1080p',
+        custom_settings: { format: item.format || 'mp4' },
+      });
       if (response.error) {
         throw new Error(response.error.message || '重试失败');
       }
@@ -502,7 +508,7 @@ export function ExportsView() {
                       <div className="mt-2">
                         <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                            className="h-full bg-gray-500 rounded-full transition-all duration-300"
                             style={{ width: `${item.progress || 0}%` }}
                           />
                         </div>
@@ -556,7 +562,7 @@ export function ExportsView() {
                       <button
                         onClick={() => handleRetry(item)}
                         disabled={retrying === item.id}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-gray-800 hover:bg-gray-700 disabled:bg-gray-300 rounded-lg transition-colors"
                       >
                         {retrying === item.id ? (
                           <Loader2 className="w-4 h-4 animate-spin" />

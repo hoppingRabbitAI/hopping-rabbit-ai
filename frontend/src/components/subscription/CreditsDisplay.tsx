@@ -34,7 +34,7 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
         onClick={onUpgradeClick}
         className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
       >
-        <Gem className="w-4 h-4 text-purple-500" />
+        <Gem className="w-4 h-4 text-gray-500" />
         <span className="text-sm font-medium text-gray-900">
           {credits.credits_balance.toLocaleString()}
         </span>
@@ -48,8 +48,8 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
       {/* 标题行 */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center">
-            <Gem className="w-4 h-4 text-purple-500" />
+          <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
+            <Gem className="w-4 h-4 text-gray-500" />
           </div>
           <h3 className="text-lg font-semibold text-gray-900">积分余额</h3>
         </div>
@@ -76,7 +76,7 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
-            <Zap className="w-3.5 h-3.5 text-yellow-500" />
+            <Zap className="w-3.5 h-3.5 text-gray-500" />
             <span className="text-xs text-gray-500">累计获得</span>
           </div>
           <span className="text-lg font-semibold text-gray-900">
@@ -85,7 +85,7 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
-            <TrendingUp className="w-3.5 h-3.5 text-green-500" />
+            <TrendingUp className="w-3.5 h-3.5 text-gray-500" />
             <span className="text-xs text-gray-500">累计消耗</span>
           </div>
           <span className="text-lg font-semibold text-gray-900">
@@ -100,8 +100,8 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">当前等级</span>
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-              credits.tier === 'enterprise' ? 'bg-amber-100 text-amber-600' :
-              credits.tier === 'pro' ? 'bg-purple-100 text-purple-600' :
+              credits.tier === 'enterprise' ? 'bg-gray-100 text-gray-600' :
+              credits.tier === 'pro' ? 'bg-gray-100 text-gray-600' :
               'bg-gray-100 text-gray-600'
             }`}>
               {credits.tier === 'enterprise' ? 'Enterprise' :
@@ -111,7 +111,7 @@ export function CreditsDisplay({ compact = false, onUpgradeClick }: CreditsDispl
           {credits.tier === 'free' && onUpgradeClick && (
             <button
               onClick={onUpgradeClick}
-              className="text-sm text-purple-600 hover:text-purple-700 transition-colors"
+              className="text-sm text-gray-600 hover:text-gray-800 transition-colors"
             >
               升级解锁更多
             </button>
@@ -145,7 +145,7 @@ export function CreditsEstimate({
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <Gem className={`w-3.5 h-3.5 ${insufficient ? 'text-red-500' : 'text-purple-500'}`} />
+      <Gem className={`w-3.5 h-3.5 ${insufficient ? 'text-red-500' : 'text-gray-500'}`} />
       <span className={`text-xs ${insufficient ? 'text-red-500' : 'text-gray-500'}`}>
         约消耗 {credits} 积分
         {insufficient && ' (余额不足)'}
@@ -182,7 +182,7 @@ export function InsufficientCreditsAlert({
             <div className="mt-3 flex gap-2">
               <button
                 onClick={onUpgrade}
-                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors"
+                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-sm rounded-lg transition-colors"
               >
                 升级获取更多
               </button>
@@ -199,7 +199,7 @@ export function InsufficientCreditsAlert({
  */
 export function CreditsBadge({ credits, className = '' }: { credits: number; className?: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 rounded text-xs text-purple-600 ${className}`}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-100 rounded text-xs text-gray-600 ${className}`}>
       <Gem className="w-3 h-3" />
       {credits}
     </span>

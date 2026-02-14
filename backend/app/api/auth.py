@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Authentication API
+Lepus AI - Authentication API
 处理用户登录验证、JWT Token 解析
 
 注意：由于 Supabase 的新 key 格式 (sb_publishable_...) 与 Python SDK 不兼容，

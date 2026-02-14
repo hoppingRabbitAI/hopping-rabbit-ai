@@ -11,6 +11,7 @@ import { getSessionSafe } from '@/lib/supabase/session';
 export interface WorkflowState {
   isActive: boolean;
   workflowId: string | null;
+  clipId: string | null;  // ★★★ 治本：保存 clipId，用于任务完成后更新 shot ★★★
   status: 'idle' | 'pending' | 'running' | 'completed' | 'failed';
   currentStage: string;
   stageProgress: number;
@@ -28,6 +29,7 @@ export interface WorkflowState {
 const initialState: WorkflowState = {
   isActive: false,
   workflowId: null,
+  clipId: null,  // ★★★ 治本：初始化 clipId ★★★
   status: 'idle',
   currentStage: '',
   stageProgress: 0,
@@ -41,13 +43,15 @@ export function useBackgroundReplaceWorkflow() {
    * 启动背景替换工作流
    */
   const startWorkflow = useCallback(async (params: {
-    sessionId: string;
     clipId: string;
-    projectId?: string;  // ★ 治本：添加 projectId 用于任务关联
+    projectId?: string;
     videoUrl: string;
     backgroundImageUrl: string;
     originalPrompt?: string;
     previewImageUrl?: string;
+    // [新增] 智能分片参数
+    durationMs?: number;    // 视频时长（毫秒），用于智能分片
+    transcript?: string;    // 转写文本，用于分句策略
     // [新增] 编辑相关参数
     editMaskUrl?: string;
     editedFrameUrl?: string;
@@ -80,14 +84,16 @@ export function useBackgroundReplaceWorkflow() {
         headers['Authorization'] = `Bearer ${session.access_token}`;
       }
       
-      // [改造] 传递新参数到后端
+      // [改造] 传递新参数到后端（包含智能分片参数）
       const requestBody = {
-        session_id: params.sessionId,
         clip_id: params.clipId,
-        project_id: params.projectId,  // ★ 治本：传递 project_id
+        project_id: params.projectId,
         video_url: params.videoUrl,
         background_image_url: params.backgroundImageUrl,
         prompt: params.originalPrompt,
+        // ★★★ 智能分片参数 ★★★
+        duration_ms: params.durationMs,
+        transcript: params.transcript,
         // [新增] 编辑相关
         edit_mask_url: params.editMaskUrl,
         edited_frame_url: params.editedFrameUrl,
@@ -112,6 +118,7 @@ export function useBackgroundReplaceWorkflow() {
       setState(prev => ({
         ...prev,
         workflowId,
+        clipId: params.clipId,  // ★★★ 治本：保存 clipId ★★★
         status: 'running',
       }));
 

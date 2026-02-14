@@ -1,7 +1,7 @@
 /**
  * 项目管理 API
  */
-import type { Project, Asset, Timeline, TranscriptSegment, SaveStateRequest } from '@/features/editor/types';
+import type { Project, Asset, Timeline, TranscriptSegment, SaveStateRequest } from '@/types/editor';
 import type {
   ApiResponse,
   PaginatedResponse,
@@ -12,7 +12,7 @@ import type {
 } from './types';
 import { ApiClient } from './client';
 
-export class ProjectApi extends ApiClient {
+class ProjectApi extends ApiClient {
   /**
    * 获取项目列表
    */

@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Supabase Client
+Lepus AI - Supabase Client
 直接连接 Supabase 服务
 """
 from supabase import create_client, Client

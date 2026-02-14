@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - AI 任务公共模块
+Lepus AI - AI 任务公共模块
 提供所有 AI 任务共用的工具函数，避免代码重复
 
 包含功能：
@@ -112,7 +112,7 @@ def update_ai_task_status(
     if error_message:
         updates["error_message"] = error_message
     if result_metadata:
-        updates["result_metadata"] = result_metadata
+        updates["metadata"] = result_metadata
     
     # 完成时自动设置进度为 100
     if status == "completed":
@@ -308,7 +308,7 @@ def create_asset_record(
     
     asset_data = {
         "id": asset_id,
-        "project_id": "00000000-0000-0000-0000-000000000000",  # AI 生成的素材使用虚拟项目
+        "project_id": None,  # AI 生成的素材不属于任何项目
         "user_id": user_id,
         "name": name,
         "original_filename": f"ai_generated{ext}",

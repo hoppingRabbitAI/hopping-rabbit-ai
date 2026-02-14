@@ -174,7 +174,7 @@ export function RemotionPreview({
 // 工具函数：转换编辑器数据为 Remotion 格式
 // ============================================
 
-import type { Clip, Track } from '@/features/editor/types';
+import type { Clip, Track } from '@/types/editor';
 
 /**
  * 将编辑器 Clip 转换为 Remotion ClipData

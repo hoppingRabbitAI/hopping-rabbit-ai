@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 创建 Mock 用户脚本
+Lepus AI - 创建 Mock 用户脚本
 运行: python scripts/create_mock_user.py
 """
 import os
@@ -21,7 +21,7 @@ MOCK_PASSWORD = "0000"
 
 def main():
     print("=" * 50)
-    print("HoppingRabbit AI - Mock 用户创建")
+    print("Lepus AI - Mock 用户创建")
     print("=" * 50)
     
     # 使用 service_key 创建管理员客户端

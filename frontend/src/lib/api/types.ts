@@ -1,7 +1,7 @@
 /**
  * API 客户端 - 类型定义
  */
-import type { Project, Timeline, Asset, TranscriptSegment, SaveStateRequest, TaskStatus } from '@/features/editor/types';
+import type { Project, Timeline, Asset, TranscriptSegment, SaveStateRequest, TaskStatus } from '@/types/editor';
 
 // ============================================
 // 基础类型
@@ -118,7 +118,7 @@ export interface ProcessAdditionsStatus {
 export interface ExportJob {
   id: string;
   project_id: string;
-  status: 'queued' | 'rendering' | 'uploading' | 'completed' | 'failed';
+  status: 'pending' | 'queued' | 'rendering' | 'uploading' | 'processing' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   output_url?: string;
   output_file_size?: number;
@@ -130,18 +130,6 @@ export interface ExportJob {
 export interface ExportStartResponse {
   job_id: string;
   status: string;
-}
-
-// ============================================
-// 智能功能相关
-// ============================================
-
-export interface SmartCleanSuggestion {
-  segment_id?: string;
-  time_range?: [number, number];
-  reason: 'filler_word' | 'long_silence' | 'duplicate';
-  confidence: number;
-  description: string;
 }
 
 // ============================================

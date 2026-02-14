@@ -17,14 +17,14 @@ export default function PricingPage() {
     // 打开定价弹窗
     pricingModal.open({ triggerReason: 'manual' });
     // 重定向到 workspace
-    router.replace('/workspace');
+    router.replace('/p');
   }, [router]);
 
   // 显示加载状态
   return (
     <div className="min-h-screen bg-[#FAFAFA] flex items-center justify-center">
       <div className="text-center">
-        <Loader2 className="w-8 h-8 text-purple-500 animate-spin mx-auto mb-4" />
+        <Loader2 className="w-8 h-8 text-gray-500 animate-spin mx-auto mb-4" />
         <p className="text-gray-500">正在跳转...</p>
       </div>
     </div>

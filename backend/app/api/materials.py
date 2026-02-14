@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 用户素材库 API
+Lepus AI - 用户素材库 API
 支持数字人形象、声音样本等用户素材的管理
 创建时间: 2026-01-30
 """
@@ -76,6 +76,7 @@ class SetDefaultMaterialRequest(BaseModel):
 class ImportFromUrlRequest(BaseModel):
     """从 URL 导入素材请求"""
     source_url: str = Field(..., description="源文件 URL")
+    asset_category: Optional[str] = Field("user_material", description="素材分类: ai_generated / user_material / project_asset")
 
 
 # ============================================
@@ -134,6 +135,9 @@ async def list_user_materials(
                 item["url"] = url_map.get(asset["storage_path"], "")
             if asset.get("thumbnail_path"):
                 item["thumbnail_url"] = url_map.get(asset["thumbnail_path"], "")
+            elif asset.get("file_type") == "image" and item.get("url"):
+                # ★ 图片没有独立缩略图时，直接用原图 URL 作为缩略图
+                item["thumbnail_url"] = item["url"]
             # 使用 display_name 或回退到 original_filename
             item["name"] = asset.get("display_name") or asset.get("original_filename") or asset.get("name")
             items.append(item)
@@ -327,9 +331,14 @@ async def confirm_material_upload(
     file_size: int,
     display_name: Optional[str] = None,
     tags: Optional[str] = None,
+    asset_category: Optional[str] = "user_material",
     user_id: str = Depends(get_current_user_id)
 ):
     """确认素材上传完成，创建数据库记录"""
+    # ★ 校验 asset_category，防止 CHECK 约束违反
+    VALID_ASSET_CATEGORIES = {"ai_generated", "user_material", "project_asset"}
+    if asset_category and asset_category not in VALID_ASSET_CATEGORIES:
+        asset_category = "user_material"
     try:
         now = datetime.utcnow().isoformat()
         
@@ -357,7 +366,7 @@ async def confirm_material_upload(
             "duration": request.duration,
             "width": request.width,
             "height": request.height,
-            "asset_category": "user_material",
+            "asset_category": asset_category or "user_material",
             "material_type": material_type,
             "tags": tag_list,
             "status": "ready",
@@ -369,7 +378,11 @@ async def confirm_material_upload(
         
         # 返回带 URL 的数据
         response_data = result.data[0]
-        response_data["url"] = get_file_url("clips", request.storage_path)
+        signed_url = get_file_url("clips", request.storage_path)
+        response_data["url"] = signed_url
+        # ★ 图片没有独立缩略图，直接用原图 URL
+        if file_type == "image":
+            response_data["thumbnail_url"] = signed_url
         
         return response_data
     except Exception as e:
@@ -488,6 +501,41 @@ async def record_material_usage(
         raise
     except Exception as e:
         logger.error(f"记录素材使用失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{asset_id}/promote-to-library")
+async def promote_asset_to_library(
+    asset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    将项目素材或 AI 生成素材提升为用户素材库素材。
+    把 asset_category 从 project_asset/ai_generated 改为 user_material。
+    """
+    try:
+        asset = supabase.table("assets").select("id, asset_category") \
+            .eq("id", asset_id) \
+            .eq("user_id", user_id) \
+            .single().execute()
+        
+        if not asset.data:
+            raise HTTPException(status_code=404, detail="素材不存在")
+        
+        if asset.data.get("asset_category") == "user_material":
+            return {"success": True, "message": "素材已在素材库中"}
+        
+        supabase.table("assets").update({
+            "asset_category": "user_material",
+            "material_type": "general",
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", asset_id).execute()
+        
+        return {"success": True, "message": "已添加到素材库"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"提升素材到素材库失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -666,6 +714,9 @@ async def import_material_from_url(
     user_id: str = Depends(get_current_user_id)
 ):
     """从 URL 导入素材到用户素材库，直接保存链接"""
+    # ★ 校验 asset_category，防止 CHECK 约束违反
+    VALID_ASSET_CATEGORIES = {"ai_generated", "user_material", "project_asset"}
+    safe_category = request.asset_category if request.asset_category in VALID_ASSET_CATEGORIES else "user_material"
     try:
         source_url = request.source_url
         
@@ -690,7 +741,7 @@ async def import_material_from_url(
             "name": filename,
             "file_type": file_type,
             "storage_path": source_url,
-            "asset_category": "user_material",
+            "asset_category": safe_category,
             "material_type": "general",
             "status": "ready",
             "created_at": now,
@@ -711,5 +762,4 @@ async def import_material_from_url(
         raise
     except Exception as e:
         logger.error(f"导入素材失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))

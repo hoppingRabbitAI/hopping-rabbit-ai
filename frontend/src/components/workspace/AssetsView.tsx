@@ -1,11 +1,10 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import NextLink from 'next/link';
-import { RabbitLoader } from '../common/RabbitLoader';
-import { TopNav } from '../common/TopNav';
+import { LepusLoader } from '../common/LepusLoader';
+import { NewProjectModal } from './NewProjectModal';
+
 import { 
-  Plus,
   Search,
   Grid3X3,
   List,
@@ -15,17 +14,12 @@ import {
   CheckSquare,
   Square,
   CheckCheck,
-  FileVideo,
-  Play,
+  Folder,
   ChevronRight,
-  Link,
-  Sparkles,
-  FileText,
   Upload,
-  X,
 } from 'lucide-react';
-import { useProjectStore, type ProjectRecord } from '@/features/editor/store/project-store';
-import { useAuthStore } from '@/features/editor/store/auth-store';
+import { useProjectStore, type ProjectRecord } from '@/stores/projectStore';
+import { useAuthStore } from '@/stores/authStore';
 import { useCredits } from '@/lib/hooks/useCredits';
 import { useRouter } from 'next/navigation';
 
@@ -119,34 +113,24 @@ function ProjectThumbnail({ thumbnailUrl, thumbnailAssetId, projectName, classNa
   if (loading) {
     return (
       <div className={`w-full h-full flex items-center justify-center bg-gray-100 ${className}`}>
-        <RabbitLoader size={24} />
+        <LepusLoader size={24} />
       </div>
     );
   }
   
   return (
     <div className={`w-full h-full flex items-center justify-center bg-gray-100 ${className}`}>
-      <FileVideo size={32} className="text-gray-400" />
+      <Folder size={32} className="text-gray-400" />
     </div>
   );
 }
 
 // ==================== 主组件 ====================
 interface AssetsViewProps {
-  onCreateProject: () => void;
-  activeTab?: 'home' | 'videos';  // 区分首页和视频 tab
-  onResumeWorkflow?: (data: {
-    sessionId: string;
-    projectId: string;
-    step: string;
-    mode: string;
-    // ★★★ 功能开关状态（用于动态步骤恢复）★★★
-    enableSmartClip?: boolean;
-    enableBroll?: boolean;
-  }) => void;
+  activeTab?: 'home' | 'videos';  // 区分首页和全部项目 tab
 }
 
-export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkflow }: AssetsViewProps) {
+export function AssetsView({ activeTab = 'home' }: AssetsViewProps) {
   const router = useRouter();
   const { projects, fetchProjects, loading, removeProject, removeProjects } = useProjectStore();
   const { isAuthenticated, accessToken, user } = useAuthStore();
@@ -159,10 +143,7 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [showSummaryDialog, setShowSummaryDialog] = useState(false);
-  const [summaryLink, setSummaryLink] = useState('');
-  const [summaryFile, setSummaryFile] = useState<File | null>(null);
-  const summaryFileInputRef = useRef<HTMLInputElement>(null);
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated && accessToken) {
@@ -173,7 +154,7 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
   // 根据 activeTab 过滤项目
   const filteredProjects = useMemo(() => {
     if (activeTab === 'videos') {
-      // 视频 tab 显示所有项目
+      // 全部项目 tab 显示所有项目
       return projects;
     }
     // 首页只显示近一周的项目
@@ -223,44 +204,13 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
     }
   };
 
-  const handleOpenProject = async (projectId: string) => {
+  const handleOpenProject = (projectId: string) => {
     if (selectMode) {
       toggleSelect(projectId);
       return;
     }
-    
-    // ★ 检查项目是否有未完成的工作流
-    try {
-      const { authFetch } = await import('@/lib/supabase/session');
-      const response = await authFetch(`/api/workspace/sessions/by-project/${projectId}/workflow-step`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        // ★ 修复：以 workflow_step 为准，只要不是 "completed" 就显示弹窗
-        // status="completed" 只表示上传完成，不是工作流完成
-        if (data.workflow_step && data.workflow_step !== 'completed') {
-          // 调用恢复工作流回调
-          if (onResumeWorkflow) {
-            onResumeWorkflow({
-              sessionId: data.session_id,
-              projectId: data.project_id || projectId,
-              step: data.workflow_step,
-              mode: data.entry_mode || 'refine',
-              // ★★★ 传递开关状态用于动态步骤恢复 ★★★
-              enableSmartClip: data.enable_smart_clip,
-              enableBroll: data.enable_broll,
-            });
-            return;
-          }
-        }
-      }
-    } catch (err) {
-      debugLog('检查工作流状态失败，直接进入编辑器:', err);
-    }
-    
-    // 没有未完成的工作流，直接进入编辑器
-    router.push(`/editor?project=${projectId}`);
+    // 直接进入视觉编辑器
+    router.push(`/visual-editor?project=${projectId}`);
   };
 
   const formatTime = (dateStr: string) => {
@@ -280,60 +230,37 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
 
   return (
     <div className="flex-1 flex flex-col bg-[#FAFAFA]">
-      {/* 通用顶部导航栏 */}
-      <TopNav
-        showSearch={true}
-        searchPlaceholder="Search"
-        rightActions={
-          <button
-            onClick={onCreateProject}
-            className="h-8 px-4 bg-gray-800 hover:bg-gray-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            Create
-          </button>
-        }
-      />
-
       {/* Main Content */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-[1400px] mx-auto p-8">
-          {/* Create Cards - 多入口 */}
-          <div className="grid grid-cols-2 gap-4 mb-10">
-            {/* 创建视频 */}
+          {/* Upload Entry — 弹窗上传素材创建新项目 */}
+          <div className="mb-10">
             <button
-              onClick={onCreateProject}
-              className="flex items-center space-x-3 px-5 py-4 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 hover:border-gray-300 hover:shadow-md transition-all duration-200 text-left group"
+              onClick={() => setShowNewProjectModal(true)}
+              className="w-full flex items-center justify-center gap-3 px-6 py-5 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl hover:border-gray-400 hover:bg-gray-100 hover:shadow-md transition-all duration-200 group"
             >
-              <div className="w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <Plus size={20} className="text-white" />
+              <div className="w-10 h-10 rounded-lg bg-gray-800 group-hover:bg-gray-700 flex items-center justify-center transition-colors">
+                <Upload size={20} className="text-white" />
               </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-gray-900">创建视频</h3>
-                <p className="text-xs text-gray-500 mt-0.5">上传素材，可选择 AI 智能处理</p>
-              </div>
-            </button>
-
-            {/* AI 内容总结 */}
-            <button
-              onClick={() => setShowSummaryDialog(true)}
-              className="flex items-center space-x-3 px-5 py-4 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 hover:border-gray-300 hover:shadow-md transition-all duration-200 text-left group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-gray-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <FileText size={20} className="text-white" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-gray-900">AI 内容总结</h3>
-                <p className="text-xs text-gray-500 mt-0.5">输入链接或上传文档，智能提炼核心观点</p>
+              <div className="text-left">
+                <h3 className="text-sm font-semibold text-gray-900">创建新项目</h3>
+                <p className="text-xs text-gray-500 mt-0.5">上传图片或视频，开始创作</p>
               </div>
             </button>
           </div>
+
+          {/* 创建新项目弹窗 */}
+          <NewProjectModal
+            open={showNewProjectModal}
+            onClose={() => setShowNewProjectModal(false)}
+          />
 
           {/* My Recents Section */}
           <section>
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center space-x-4">
                 <h2 className="text-xl font-bold text-gray-900">
-                  {activeTab === 'home' ? 'My recents' : '所有视频'}
+                  {activeTab === 'home' ? 'My recents' : '所有项目'}
                 </h2>
                 
                 {/* View Toggle */}
@@ -376,7 +303,7 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
                       disabled={selectedIds.size === 0 || isBatchDeleting}
                       className="h-8 px-3 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors flex items-center space-x-1.5 disabled:opacity-50"
                     >
-                      {isBatchDeleting ? <RabbitLoader size={16} /> : <Trash2 size={16} />}
+                      {isBatchDeleting ? <LepusLoader size={16} /> : <Trash2 size={16} />}
                       <span>删除 ({selectedIds.size})</span>
                     </button>
                     <button
@@ -393,18 +320,18 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
             {/* Projects Grid/List */}
             {loading ? (
               <div className="flex items-center justify-center h-64">
-                <RabbitLoader size={64} />
+                <LepusLoader size={64} />
               </div>
             ) : filteredProjects.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
                 <div className="w-24 h-24 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
-                  <FileVideo size={40} className="text-gray-300" />
+                  <Folder size={40} className="text-gray-300" />
                 </div>
                 <p className="text-lg font-medium text-gray-600 mb-1">
-                  {activeTab === 'home' ? '近一周无编辑记录' : '还没有视频'}
+                  {activeTab === 'home' ? '近一周无编辑记录' : '还没有项目'}
                 </p>
                 <p className="text-sm text-gray-400">
-                  {activeTab === 'home' ? '创建新项目或查看所有视频' : '这里将显示你所有的视频项目'}
+                  {activeTab === 'home' ? '创建新项目或查看所有项目' : '这里将显示你所有的项目'}
                 </p>
               </div>
             ) : viewMode === 'grid' ? (
@@ -460,119 +387,7 @@ export function AssetsView({ onCreateProject, activeTab = 'home', onResumeWorkfl
                 disabled={isDeleting}
                 className="flex-1 h-10 bg-red-600 hover:bg-red-500 text-white font-medium rounded-lg transition-colors flex items-center justify-center disabled:opacity-50"
               >
-                {isDeleting ? <RabbitLoader size={18} /> : '确认删除'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* AI 内容总结弹窗 */}
-      {showSummaryDialog && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white border border-gray-200 rounded-2xl w-[480px] shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900">AI 内容总结</h3>
-              <button
-                onClick={() => {
-                  setShowSummaryDialog(false);
-                  setSummaryLink('');
-                  setSummaryFile(null);
-                }}
-                className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-6 space-y-6">
-              {/* 链接输入 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  输入链接
-                </label>
-                <div className="relative">
-                  <Link size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input
-                    type="url"
-                    value={summaryLink}
-                    onChange={(e) => setSummaryLink(e.target.value)}
-                    placeholder="粘贴 YouTube / Bilibili / 文章链接..."
-                    className="w-full h-11 pl-10 pr-4 bg-gray-50 border border-gray-200 rounded-xl text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-transparent transition-all"
-                  />
-                </div>
-              </div>
-
-              {/* 分隔线 */}
-              <div className="flex items-center gap-4">
-                <div className="flex-1 h-px bg-gray-200"></div>
-                <span className="text-xs text-gray-400">或</span>
-                <div className="flex-1 h-px bg-gray-200"></div>
-              </div>
-
-              {/* 文件上传 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  上传文档
-                </label>
-                <input
-                  ref={summaryFileInputRef}
-                  type="file"
-                  accept=".txt,.md,.pdf,.doc,.docx"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) setSummaryFile(file);
-                  }}
-                />
-                <button
-                  onClick={() => summaryFileInputRef.current?.click()}
-                  className="w-full h-24 border-2 border-dashed border-gray-200 rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all flex flex-col items-center justify-center gap-2"
-                >
-                  {summaryFile ? (
-                    <>
-                      <FileText size={24} className="text-gray-600" />
-                      <span className="text-sm text-gray-700 font-medium">{summaryFile.name}</span>
-                      <span className="text-xs text-gray-400">点击更换文件</span>
-                    </>
-                  ) : (
-                    <>
-                      <Upload size={24} className="text-gray-400" />
-                      <span className="text-sm text-gray-500">点击上传文档</span>
-                      <span className="text-xs text-gray-400">支持 TXT、MD、PDF、Word</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex space-x-3 px-6 py-4 bg-gray-50 border-t border-gray-100">
-              <button
-                onClick={() => {
-                  setShowSummaryDialog(false);
-                  setSummaryLink('');
-                  setSummaryFile(null);
-                }}
-                className="flex-1 h-10 bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 font-medium rounded-lg transition-colors"
-              >
-                取消
-              </button>
-              <button
-                disabled={!summaryLink && !summaryFile}
-                onClick={() => {
-                  // TODO: 调用 AI 总结接口
-                  debugLog('Generate summary:', { link: summaryLink, file: summaryFile?.name });
-                  setShowSummaryDialog(false);
-                  setSummaryLink('');
-                  setSummaryFile(null);
-                }}
-                className="flex-1 h-10 bg-gray-800 hover:bg-gray-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Sparkles size={16} />
-                开始总结
+                {isDeleting ? <LepusLoader size={18} /> : '确认删除'}
               </button>
             </div>
           </div>
@@ -638,19 +453,6 @@ function ProjectCard({ project, selectMode, isSelected, onToggleSelect, onClick,
           </div>
         )}
         
-        {/* Duration Badge */}
-        {project.duration && (
-          <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/70 backdrop-blur-sm rounded text-xs text-white font-medium">
-            {Math.floor(project.duration / 1000 / 60)}:{String(Math.floor((project.duration / 1000) % 60)).padStart(2, '0')}
-          </div>
-        )}
-
-        {/* Hover Play Button */}
-        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform">
-            <Play size={20} className="text-gray-900 ml-1" fill="currentColor" />
-          </div>
-        </div>
       </div>
 
       {/* Info */}

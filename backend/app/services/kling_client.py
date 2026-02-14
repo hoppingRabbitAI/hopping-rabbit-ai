@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 可灵AI HTTP 客户端
+Lepus AI - 可灵AI HTTP 客户端
 
 高性能异步 HTTP 客户端封装，特性:
 1. JWT 动态生成（支持 AK/SK）
@@ -256,15 +256,6 @@ class KlingClient:
     # ========================================
     # 其他 API
     # ========================================
-    
-    async def create_face_swap(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        AI换脸
-        
-        API: POST /videos/face-swap
-        """
-        logger.info(f"[KlingClient] AI换脸")
-        return await self._request("POST", "/videos/face-swap", json=data)
     
     async def create_multi_elements(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

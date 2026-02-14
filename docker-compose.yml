@@ -23,7 +23,7 @@ services:
       - /app/.next
     command: pnpm dev
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # Backend API - FastAPI
@@ -52,8 +52,8 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-      - video_cache:/tmp/hoppingrabbit_cache
-      - video_storage:/tmp/hoppingrabbit_storage
+      - video_cache:/tmp/lepus_cache
+      - video_storage:/tmp/lepus_storage
       - model_cache:/root/.cache
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
@@ -62,7 +62,7 @@ services:
       timeout: 10s
       retries: 3
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # Celery Worker - CPU 任务 (ASR, 资源处理)
@@ -85,8 +85,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
-      - video_cache:/tmp/hoppingrabbit_cache
-      - video_storage:/tmp/hoppingrabbit_storage
+      - video_cache:/tmp/lepus_cache
+      - video_storage:/tmp/lepus_storage
       - model_cache:/root/.cache
     command: celery -A app.celery_config worker --loglevel=info -Q default,cpu_high,cpu_medium,cpu_low,gpu_high,gpu_medium -c 4 -n cpu_worker@%h
     deploy:
@@ -95,7 +95,7 @@ services:
           cpus: '4'
           memory: 4G
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # Celery Worker - GPU 任务 (人声分离, 导出)
@@ -121,8 +121,8 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-      - video_cache:/tmp/hoppingrabbit_cache
-      - video_storage:/tmp/hoppingrabbit_storage
+      - video_cache:/tmp/lepus_cache
+      - video_storage:/tmp/lepus_storage
       - model_cache:/root/.cache
     command: celery -A app.celery_config worker --loglevel=info -Q gpu -c 2 -n gpu_worker@%h
     deploy:
@@ -138,7 +138,7 @@ services:
     profiles:
       - gpu
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # Celery Beat - 定时任务调度器
@@ -161,7 +161,7 @@ services:
       - ./backend:/app
     command: celery -A app.celery_config beat --loglevel=info
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # Flower - Celery 监控面板
@@ -180,7 +180,7 @@ services:
       - redis
     command: celery -A app.celery_config flower --port=5555
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # RabbitMQ - 消息队列
@@ -201,7 +201,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # Redis - 缓存和 Celery 结果后端
@@ -219,7 +219,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
   # ============================================
   # MinIO - 本地对象存储 (开发环境可选)
@@ -238,13 +238,13 @@ services:
     profiles:
       - storage
     networks:
-      - hoppingrabbit-network
+      - lepus-network
 
 # ============================================
 # 网络配置
 # ============================================
 networks:
-  hoppingrabbit-network:
+  lepus-network:
     driver: bridge
 
 # ============================================

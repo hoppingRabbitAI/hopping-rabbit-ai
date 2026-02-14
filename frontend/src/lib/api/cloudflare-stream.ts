@@ -99,7 +99,7 @@ class CloudflareStreamApi extends ApiClient {
   }
 }
 
-export const cloudflareApi = new CloudflareStreamApi();
+const cloudflareApi = new CloudflareStreamApi();
 
 // ==================== 上传进度回调 ====================
 export type UploadProgressCallback = (progress: {
@@ -286,34 +286,4 @@ export async function uploadToCloudflare(
     hls_url: null,
     is_ready: false,
   };
-}
-
-// ==================== 检查服务可用性 ====================
-let _isCloudflareConfigured: boolean | null = null;
-
-/**
- * 检查 Cloudflare Stream 是否已配置
- * 结果会缓存，避免重复请求
- */
-export async function isCloudflareStreamEnabled(): Promise<boolean> {
-  if (_isCloudflareConfigured !== null) {
-    return _isCloudflareConfigured;
-  }
-
-  try {
-    const status = await cloudflareApi.getServiceStatus();
-    _isCloudflareConfigured = status?.configured ?? false;
-    cfLog('Cloudflare Stream 状态:', _isCloudflareConfigured ? '已启用' : '未配置');
-    return _isCloudflareConfigured;
-  } catch {
-    _isCloudflareConfigured = false;
-    return false;
-  }
-}
-
-/**
- * 重置缓存（用于测试或配置变更后）
- */
-export function resetCloudflareCache(): void {
-  _isCloudflareConfigured = null;
 }

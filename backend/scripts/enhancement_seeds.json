@@ -1,0 +1,202 @@
+{
+  "strategies": [
+    {
+      "content_category": "face_portrait",
+      "quality_target": "fashion_editorial",
+      "description": "时尚杂志封面级人像增强：正面人脸，影棚柔光，无瑕肤质，发丝清晰。适用于白底证件照、时尚大片、社交媒体头像。",
+      "pipeline_config": {
+        "steps": ["skin_enhance", "relight"],
+        "kling_params": {
+          "skin_intensity": "moderate",
+          "light_type": "studio",
+          "light_direction": "front",
+          "light_intensity": 0.6,
+          "preserve_original_subject": 0.8
+        },
+        "prompt_template": "时尚杂志封面级人像，细腻无瑕肤质，柔和的正面影棚光，自然肤色，发丝锐利清晰，{original_description}"
+      }
+    },
+    {
+      "content_category": "face_portrait",
+      "quality_target": "realistic_casual",
+      "description": "自然真实人像增强：保留皮肤纹理和光影，轻微修饰瑕疵。适用于日常照片、生活场景人像。",
+      "pipeline_config": {
+        "steps": ["skin_enhance"],
+        "kling_params": {
+          "skin_intensity": "natural"
+        },
+        "prompt_template": "自然真实的高清人像，保留皮肤质感和光影层次，轻微修饰小瑕疵，{original_description}"
+      }
+    },
+    {
+      "content_category": "face_portrait",
+      "quality_target": "cinematic",
+      "description": "电影质感人像增强：侧光或轮廓光，高对比度，电影调色。适用于艺术照、宣传海报。",
+      "pipeline_config": {
+        "steps": ["skin_enhance", "relight"],
+        "kling_params": {
+          "skin_intensity": "natural",
+          "light_type": "dramatic",
+          "light_direction": "left",
+          "light_intensity": 0.8
+        },
+        "prompt_template": "电影级人像，戏剧性侧光，高对比度，丰富的光影层次，{original_description}"
+      }
+    },
+    {
+      "content_category": "garment",
+      "quality_target": "product_catalog",
+      "description": "电商服装产品图增强：色彩准确还原，面料质感清晰，褶皱自然。适用于平铺图、挂拍图、模特穿搭图。",
+      "pipeline_config": {
+        "steps": ["relight", "omni_image"],
+        "kling_params": {
+          "light_type": "studio",
+          "light_direction": "front",
+          "light_intensity": 0.65
+        },
+        "prompt_template": "高端电商服装特写，色彩还原精准，面料纹理清晰可辨，褶皱自然，{original_description}"
+      }
+    },
+    {
+      "content_category": "garment",
+      "quality_target": "fashion_editorial",
+      "description": "时尚穿搭展示增强：时尚杂志级服装展示，强调整体搭配感和氛围。适用于穿搭推荐、OOTD。",
+      "pipeline_config": {
+        "steps": ["relight"],
+        "kling_params": {
+          "light_type": "natural",
+          "light_direction": "front",
+          "light_intensity": 0.5
+        },
+        "prompt_template": "时尚杂志级穿搭展示，整体搭配协调，光线柔和自然，{original_description}"
+      }
+    },
+    {
+      "content_category": "accessory",
+      "quality_target": "product_catalog",
+      "description": "配饰产品图增强：珠宝、手表、眼镜等细节增强，反光和材质质感突出。适用于配饰电商图。",
+      "pipeline_config": {
+        "steps": ["relight"],
+        "kling_params": {
+          "light_type": "studio",
+          "light_direction": "front",
+          "light_intensity": 0.7
+        },
+        "prompt_template": "专业配饰特写摄影，材质质感清晰（金属光泽/宝石折射/皮革纹理），{original_description}"
+      }
+    },
+    {
+      "content_category": "product",
+      "quality_target": "product_catalog",
+      "description": "通用产品图增强：白底产品照，均匀打光，色彩准确。适用于各类电商产品主图。",
+      "pipeline_config": {
+        "steps": ["relight"],
+        "kling_params": {
+          "light_type": "studio",
+          "light_direction": "front",
+          "light_intensity": 0.7,
+          "keep_original_background": false
+        },
+        "prompt_template": "专业产品摄影，纯白背景，均匀柔和的影棚光，色彩精准，{original_description}"
+      }
+    },
+    {
+      "content_category": "product",
+      "quality_target": "realistic_casual",
+      "description": "场景化产品增强：产品置于生活场景中，自然光影。适用于社交媒体种草图、场景化展示。",
+      "pipeline_config": {
+        "steps": ["relight"],
+        "kling_params": {
+          "light_type": "natural",
+          "light_direction": "front",
+          "light_intensity": 0.5
+        },
+        "prompt_template": "生活场景中的产品展示，自然光线，氛围感强，{original_description}"
+      }
+    },
+    {
+      "content_category": "scene",
+      "quality_target": "cinematic",
+      "description": "电影级场景增强：宽幅构图，丰富的光影层次，电影调色。适用于背景层增强、场景重建。",
+      "pipeline_config": {
+        "steps": ["omni_image"],
+        "kling_params": {},
+        "prompt_template": "电影级场景画面，宽幅构图，丰富的光影对比和色彩层次，高动态范围，{original_description}"
+      }
+    },
+    {
+      "content_category": "scene",
+      "quality_target": "realistic_casual",
+      "description": "自然场景增强：保留真实感，增强清晰度和色彩饱和度。适用于日常场景背景。",
+      "pipeline_config": {
+        "steps": ["omni_image"],
+        "kling_params": {},
+        "prompt_template": "高清真实场景，色彩饱和自然，细节丰富清晰，{original_description}"
+      }
+    },
+    {
+      "content_category": "generic",
+      "quality_target": "realistic_casual",
+      "description": "通用增强：适用于无法明确分类的内容，提升整体清晰度和视觉质量。",
+      "pipeline_config": {
+        "steps": ["omni_image"],
+        "kling_params": {},
+        "prompt_template": "高画质真实图像，细节清晰锐利，色彩自然准确，{original_description}"
+      }
+    },
+    {
+      "content_category": "face_portrait",
+      "quality_target": "product_catalog",
+      "description": "证件照/白底人像增强：标准正面照，均匀光线，干净白底，适用于证件照、头像照。",
+      "pipeline_config": {
+        "steps": ["skin_enhance", "relight"],
+        "kling_params": {
+          "skin_intensity": "moderate",
+          "light_type": "studio",
+          "light_direction": "front",
+          "light_intensity": 0.55,
+          "keep_original_background": false
+        },
+        "prompt_template": "标准证件照级人像，纯白背景，均匀正面光，五官清晰自然，{original_description}"
+      }
+    },
+    {
+      "content_category": "garment",
+      "quality_target": "cinematic",
+      "description": "高级成衣/秀场级服装增强：强调设计细节、廓形和面料质感。适用于品牌宣传、秀场图。",
+      "pipeline_config": {
+        "steps": ["relight", "omni_image"],
+        "kling_params": {
+          "light_type": "dramatic",
+          "light_direction": "left",
+          "light_intensity": 0.7
+        },
+        "prompt_template": "高级时装摄影，戏剧性打光突出服装廓形和面料质感，{original_description}"
+      }
+    },
+    {
+      "content_category": "accessory",
+      "quality_target": "fashion_editorial",
+      "description": "时尚配饰编辑级增强：杂志级珠宝/手表/包包展示，精致光影。",
+      "pipeline_config": {
+        "steps": ["relight"],
+        "kling_params": {
+          "light_type": "studio",
+          "light_direction": "right",
+          "light_intensity": 0.65
+        },
+        "prompt_template": "时尚杂志级配饰特写，精致的高光和阴影，材质质感极致，{original_description}"
+      }
+    },
+    {
+      "content_category": "scene",
+      "quality_target": "fashion_editorial",
+      "description": "时尚场景/布景增强：杂志级环境布景，强调氛围和设计感。",
+      "pipeline_config": {
+        "steps": ["omni_image"],
+        "kling_params": {},
+        "prompt_template": "时尚杂志级环境布景，设计感强，光影氛围考究，{original_description}"
+      }
+    }
+  ]
+}

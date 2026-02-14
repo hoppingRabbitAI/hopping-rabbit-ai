@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Omni-Image (O1) Celery 任务
+Lepus AI - Omni-Image (O1) Celery 任务
 异步处理高级多模态图像生成任务，支持进度更新和结果存储
 
 任务流程:
@@ -92,7 +92,7 @@ def update_ai_task_status(
     if error_message:
         updates["error_message"] = error_message
     if result_metadata:
-        updates["result_metadata"] = result_metadata
+        updates["metadata"] = result_metadata
     if status == "completed":
         updates["progress"] = 100
     
@@ -158,7 +158,7 @@ def create_asset_record(
     
     asset_data = {
         "id": asset_id,
-        "project_id": "00000000-0000-0000-0000-000000000000",  # AI 生成的素材使用虚拟项目
+        "project_id": None,  # AI 生成的素材不属于任何项目
         "user_id": user_id,
         "name": f"AI生成_Omni_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}",
         "original_filename": f"ai_generated{ext}",
@@ -184,7 +184,7 @@ def create_asset_record(
 @celery_app.task(
     bind=True,
     name="app.tasks.omni_image.process_omni_image",
-    queue="gpu_medium",
+    queue="gpu",
     autoretry_for=(Exception,),
     retry_backoff=True,
     retry_backoff_max=300,

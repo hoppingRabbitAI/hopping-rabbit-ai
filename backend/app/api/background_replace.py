@@ -48,6 +48,10 @@ class CreateWorkflowRequest(BaseModel):
     background_image_url: str = Field(..., description="新背景图片 URL")
     prompt: Optional[str] = Field(None, description="用户描述（可选）")
     
+    # [新增] 智能分片相关参数
+    duration_ms: Optional[int] = Field(None, description="视频时长（毫秒），用于智能分片判断")
+    transcript: Optional[str] = Field(None, description="转写文本（用于分句策略分片）")
+    
     # [新增] 编辑相关参数
     edit_mask_url: Optional[str] = Field(None, description="用户涂抹区域的 mask 图片 URL")
     edited_frame_url: Optional[str] = Field(None, description="用户编辑后的完整帧 URL")
@@ -177,6 +181,11 @@ async def create_workflow(
     策略B (人物替换):
     - 使用 Kling motion-control + lip-sync API
     - 新人物 + 原动作 + 原口型 + 原音频
+    
+    ★★★ 异步工作流 ★★★
+    1. 立即创建任务并返回任务 ID
+    2. 在后台执行实际替换
+    3. 前端通过 SSE 或轮询获取进度
     """
     try:
         service = get_video_element_replace_service()
@@ -188,36 +197,150 @@ async def create_workflow(
         )
         
         if use_person_replace and request.edited_frame_url:
-            # 策略B：人物替换
+            # 策略B：人物替换（暂时保持同步，后续优化）
             replace_task = await service.replace_person(
                 clip_id=request.clip_id,
                 video_url=request.video_url,
-                new_person_url=request.edited_frame_url,  # 编辑后的人物图
+                new_person_url=request.edited_frame_url,
                 original_audio_url=request.original_audio_url,
                 prompt=request.prompt,
                 user_id=user_id,
                 project_id=request.project_id,
             )
         else:
-            # 策略A：背景替换（默认）
-            replace_task = await service.replace_background(
-                clip_id=request.clip_id,
-                video_url=request.video_url,
-                new_background_url=request.background_image_url,
-                prompt=request.prompt,
-                user_id=user_id,
-                project_id=request.project_id,
-            )
+            # ★★★ 策略A：背景替换 ★★★
+            duration_ms = request.duration_ms
+            transcript = request.transcript
+            
+            if not duration_ms or duration_ms <= 0:
+                raise HTTPException(status_code=400, detail="缺少必要参数: duration_ms")
+            
+            # ★★★ 检查时长是否符合 Kling 要求 ★★★
+            from app.services.smart_clip_splitter import SmartClipSplitter, is_valid_duration
+            from app.services.supabase_client import supabase
+            from uuid import uuid4 as _uuid4
+            from datetime import datetime as _dt
+            
+            duration_seconds = duration_ms / 1000
+            all_tasks = []
+            
+            if not is_valid_duration(duration_seconds):
+                # ★★★ 时长不符合，自动分片并为每个分片创建任务 ★★★
+                logger.info(f"[WorkflowAPI] Clip {request.clip_id} 时长 {duration_seconds:.1f}s 不在有效区间，启动智能分片")
+                
+                splitter = SmartClipSplitter()
+                split_plan = await splitter.analyze_and_plan(
+                    clip_id=request.clip_id,
+                    duration_ms=duration_ms,
+                    transcript=transcript,
+                )
+                
+                if split_plan.needs_split and len(split_plan.segments) > 1:
+                    # 执行分片：在 canvas_nodes 创建新节点
+                    orig_node = None
+                    try:
+                        orig_res = supabase.table("canvas_nodes").select("*").eq("id", request.clip_id).single().execute()
+                        orig_node = orig_res.data
+                    except Exception:
+                        pass
+                    
+                    new_clips = []
+                    if orig_node:
+                        now = _dt.utcnow().isoformat()
+                        orig_pos = orig_node.get("canvas_position") or {"x": 200, "y": 200}
+                        new_nodes = []
+                        for i, seg in enumerate(split_plan.segments):
+                            node_id = str(_uuid4())
+                            new_nodes.append({
+                                "id": node_id,
+                                "project_id": orig_node.get("project_id"),
+                                "asset_id": orig_node.get("asset_id"),
+                                "node_type": orig_node.get("node_type", "sequence"),
+                                "media_type": "video",
+                                "order_index": i,
+                                "start_time": seg.start_ms / 1000,
+                                "end_time": seg.end_ms / 1000,
+                                "duration": (seg.end_ms - seg.start_ms) / 1000,
+                                "source_start": seg.start_ms,
+                                "source_end": seg.end_ms,
+                                "video_url": orig_node.get("video_url"),
+                                "thumbnail_url": orig_node.get("thumbnail_url"),
+                                "canvas_position": {
+                                    "x": orig_pos.get("x", 200) + i * 340,
+                                    "y": orig_pos.get("y", 200),
+                                },
+                                "metadata": {"split_from": request.clip_id, "split_index": i},
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                        supabase.table("canvas_nodes").insert(new_nodes).execute()
+                        supabase.table("canvas_nodes").delete().eq("id", request.clip_id).execute()
+                        new_clips = new_nodes
+                    
+                    logger.info(f"[WorkflowAPI] 智能分片完成: {len(new_clips)} 个新节点")
+                    
+                    # 为每个新 clip 创建任务
+                    for new_clip in new_clips:
+                        new_clip_id = new_clip["id"]
+                        new_duration_ms = int(new_clip.get("duration", 0) * 1000)
+                        
+                        task = await service.create_background_replace_task(
+                            clip_id=new_clip_id,
+                            video_url=request.video_url,
+                            new_background_url=request.background_image_url,
+                            prompt=request.prompt,
+                            user_id=user_id,
+                            project_id=request.project_id,
+                        )
+                        all_tasks.append(task)
+                else:
+                    # 无法分片，但时长又不符合，创建单个任务尝试处理
+                    logger.warning(f"[WorkflowAPI] Clip {request.clip_id} 无法分片，尝试直接处理")
+                    task = await service.create_background_replace_task(
+                        clip_id=request.clip_id,
+                        video_url=request.video_url,
+                        new_background_url=request.background_image_url,
+                        prompt=request.prompt,
+                        user_id=user_id,
+                        project_id=request.project_id,
+                    )
+                    all_tasks.append(task)
+            else:
+                # 时长符合要求，创建单个任务
+                task = await service.create_background_replace_task(
+                    clip_id=request.clip_id,
+                    video_url=request.video_url,
+                    new_background_url=request.background_image_url,
+                    prompt=request.prompt,
+                    user_id=user_id,
+                    project_id=request.project_id,
+                )
+                all_tasks.append(task)
+            
+            # 在后台执行所有任务
+            async def execute_in_background(task_id: str):
+                try:
+                    await service.execute_background_replace(task_id)
+                except Exception as e:
+                    logger.error(f"[WorkflowAPI] 后台执行任务失败: {task_id}, error: {e}")
+            
+            for task in all_tasks:
+                asyncio.create_task(execute_in_background(task.id))
+            
+            logger.info(f"[WorkflowAPI] 创建 {len(all_tasks)} 个任务")
+            
+            # 返回第一个任务的信息
+            replace_task = all_tasks[0]
         
         logger.info(f"[WorkflowAPI] 创建工作流成功: {replace_task.id}, 策略: {replace_task.strategy.value}")
         
-        # 转换为兼容的响应格式
+        # 转换为兼容的响应格式（此时状态为 pending）
         return WorkflowResponse(
             id=replace_task.id,
             clip_id=replace_task.clip_id,
             session_id=request.session_id,
             status=replace_task.status.value,
-            current_stage=replace_task.status.value,  # 新服务没有分阶段
+            current_stage=replace_task.status.value,
             stage_progress=replace_task.progress,
             overall_progress=replace_task.progress,
             error=replace_task.error,
@@ -227,108 +350,14 @@ async def create_workflow(
             detected_strategy=replace_task.strategy.value,
             strategy_confidence=1.0,
             strategy_recommendation=f"使用 {replace_task.strategy.value} 策略",
-            qa_passed=replace_task.status == ReplaceStatus.COMPLETED,
-            qa_score=1.0 if replace_task.status == ReplaceStatus.COMPLETED else None,
+            qa_passed=False,  # 刚创建，还没有 QA
+            qa_score=None,
         )
         
     except Exception as e:
         import traceback
         logger.error(f"[WorkflowAPI] 创建工作流失败: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e) if str(e) else repr(e))
-
-
-@router.get("/workflows/{workflow_id}", response_model=WorkflowDetailResponse)
-async def get_workflow(workflow_id: str):
-    """
-    获取工作流详细状态
-    
-    返回工作流的完整信息，包括:
-    - 当前阶段和进度
-    - 各阶段完成状态
-    - 质量评分
-    - 最终结果
-    """
-    # 先尝试从新服务获取
-    service = get_video_element_replace_service()
-    task = service.get_task(workflow_id)
-    
-    if task:
-        # 转换为兼容格式
-        return WorkflowDetailResponse(
-            id=task.id,
-            clip_id=task.clip_id,
-            session_id="",
-            status=task.status.value,
-            current_stage=task.status.value,
-            stage_progress=task.progress,
-            overall_progress=task.progress,
-            error=task.error,
-            result_url=task.result_video_url,
-            created_at=task.created_at,
-            updated_at=task.updated_at,
-            detected_strategy=task.strategy.value,
-            strategy_confidence=1.0,
-            strategy_recommendation=f"使用 {task.strategy.value} 策略",
-            qa_passed=task.status == ReplaceStatus.COMPLETED,
-            qa_score=1.0 if task.status == ReplaceStatus.COMPLETED else None,
-            analysis_completed=True,
-            foreground_completed=True,
-            background_completed=True,
-            composite_completed=task.status == ReplaceStatus.COMPLETED,
-        )
-    
-    # 回退到旧 workflow
-    workflow = get_background_replace_workflow()
-    old_task = await workflow.get_task(workflow_id)
-    
-    if not old_task:
-        raise HTTPException(status_code=404, detail="工作流不存在")
-    
-    return WorkflowDetailResponse.from_task_detail(old_task)
-
-
-@router.get("/workflows")
-async def list_workflows(
-    session_id: str = Query(..., description="会话 ID"),
-    status: Optional[str] = Query(None, description="状态过滤")
-):
-    """
-    列出会话的所有工作流
-    """
-    # 从新服务获取任务
-    service = get_video_element_replace_service()
-    new_tasks = service.list_tasks()
-    
-    # 转换为响应格式
-    results = []
-    for task in new_tasks:
-        results.append(WorkflowResponse(
-            id=task.id,
-            clip_id=task.clip_id,
-            session_id=session_id,
-            status=task.status.value,
-            current_stage=task.status.value,
-            stage_progress=task.progress,
-            overall_progress=task.progress,
-            error=task.error,
-            result_url=task.result_video_url,
-            created_at=task.created_at,
-            updated_at=task.updated_at,
-            detected_strategy=task.strategy.value,
-            strategy_confidence=1.0,
-            strategy_recommendation=f"使用 {task.strategy.value} 策略",
-            qa_passed=task.status == ReplaceStatus.COMPLETED,
-            qa_score=1.0 if task.status == ReplaceStatus.COMPLETED else None,
-        ))
-    
-    # 状态过滤
-    if status:
-        results = [r for r in results if r.status == status]
-    
-    return {
-        "workflows": results,
-        "total": len(results)
-    }
 
 
 @router.post("/workflows/{workflow_id}/cancel")
@@ -356,26 +385,6 @@ async def cancel_workflow(workflow_id: str):
     task.updated_at = datetime.utcnow()
     
     return {"status": "cancelled", "workflow_id": workflow_id}
-
-
-@router.post("/workflows/{workflow_id}/retry")
-async def retry_workflow(workflow_id: str):
-    """
-    重试失败的工作流
-    
-    从上次检查点恢复执行
-    """
-    workflow = get_background_replace_workflow()
-    task = await workflow.get_task(workflow_id)
-    
-    if not task:
-        raise HTTPException(status_code=404, detail="工作流不存在")
-    
-    if task.status != WorkflowStatus.FAILED:
-        raise HTTPException(status_code=400, detail="只能重试失败的工作流")
-    
-    # TODO: 实现从检查点恢复
-    raise HTTPException(status_code=501, detail="重试功能开发中")
 
 
 @router.get("/workflows/{workflow_id}/events")
@@ -434,203 +443,37 @@ async def workflow_events(workflow_id: str):
     )
 
 
-# ==========================================
-# 工作流阶段信息
-# ==========================================
-
-@router.get("/stages")
-async def get_stages_info():
+@router.get("/workflows/{workflow_id}")
+async def get_workflow_status(workflow_id: str):
     """
-    获取工作流阶段信息
+    获取工作流状态（用于轮询）
     
-    返回各阶段的描述和预计时间
+    先从新服务 (VideoElementReplaceService) 查找，
+    找不到再从旧服务 (BackgroundReplaceWorkflow) 查找。
     """
-    return {
-        "stages": [
-            {
-                "id": "analyzing",
-                "name": "视频分析",
-                "description": "分析原视频的光线、运动、场景等特征",
-                "estimated_time": "10-15秒",
-                "progress_range": [0, 15],
-            },
-            {
-                "id": "separating",
-                "name": "前景分离",
-                "description": "高精度提取人物，包括头发丝等细节",
-                "estimated_time": "20-40秒",
-                "progress_range": [15, 35],
-            },
-            {
-                "id": "generating",
-                "name": "背景生成",
-                "description": "将静态背景转换为动态视频",
-                "estimated_time": "60-120秒",
-                "progress_range": [35, 65],
-            },
-            {
-                "id": "compositing",
-                "name": "智能合成",
-                "description": "光影匹配、边缘融合、阴影生成",
-                "estimated_time": "15-30秒",
-                "progress_range": [65, 85],
-            },
-            {
-                "id": "enhancing",
-                "name": "质量增强",
-                "description": "去闪烁、AI痕迹修复、质量验证",
-                "estimated_time": "10-20秒",
-                "progress_range": [85, 100],
-            },
-        ],
-        "total_estimated_time": "2-4分钟",
-    }
-
-
-# ==========================================
-# 应用替换结果到 Clip
-# ==========================================
-
-class ApplyResultRequest(BaseModel):
-    """应用替换结果请求"""
-    task_id: str = Field(..., description="AI 任务 ID")
-    clip_id: str = Field(..., description="目标 Clip ID")
-    result_url: str = Field(..., description="替换结果视频 URL")
-
-
-class ApplyResultResponse(BaseModel):
-    """应用替换结果响应"""
-    success: bool
-    clip_id: str
-    new_asset_id: Optional[str] = None
-    message: str
-
-
-@router.post("/apply", response_model=ApplyResultResponse)
-async def apply_replace_result(
-    request: ApplyResultRequest,
-    user_id: str = Depends(get_current_user_id)
-):
-    """
-    将背景替换结果应用到 Clip
+    # ★ 优先从新服务获取任务状态
+    service = get_video_element_replace_service()
+    task = service.get_task(workflow_id)
     
-    策略说明：
-    - 不删除原 clip，而是更新 clip 的 asset_id 指向新素材
-    - 原素材保留，支持用户撤销
-    - 自动从结果视频获取时长，更新 source_start/source_end
-    
-    流程：
-    1. 下载结果视频，获取时长
-    2. 创建新的 asset 记录
-    3. 更新 clip.asset_id 指向新 asset
-    4. 更新 clip.source_start/source_end
-    """
-    from app.services.supabase_client import supabase
-    import subprocess
-    import tempfile
-    import httpx
-    import os
-    
-    try:
-        logger.info(f"[ApplyResult] 开始应用替换结果: task={request.task_id}, clip={request.clip_id}")
-        
-        # 1. 验证任务状态
-        task_result = supabase.table("tasks").select("*").eq("id", request.task_id).single().execute()
-        if not task_result.data:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        
-        task_data = task_result.data
-        if task_data["status"] != "completed":
-            raise HTTPException(status_code=400, detail=f"任务未完成，当前状态: {task_data['status']}")
-        
-        # 2. 获取原 clip 信息
-        clip_result = supabase.table("clips").select("*, assets(*)").eq("id", request.clip_id).single().execute()
-        if not clip_result.data:
-            raise HTTPException(status_code=404, detail="Clip 不存在")
-        
-        clip_data = clip_result.data
-        original_asset = clip_data.get("assets", {})
-        project_id = clip_data.get("project_id")
-        track_id = clip_data.get("track_id")
-        
-        # 3. 下载结果视频获取时长
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.get(request.result_url, follow_redirects=True)
-            response.raise_for_status()
-            
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-                f.write(response.content)
-                video_path = f.name
-        
-        try:
-            # 使用 ffprobe 获取时长
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                video_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            duration_seconds = float(result.stdout.strip())
-            duration_ms = int(duration_seconds * 1000)
-        finally:
-            os.unlink(video_path)
-        
-        logger.info(f"[ApplyResult] 结果视频时长: {duration_seconds}s ({duration_ms}ms)")
-        
-        # 4. 创建新的 asset 记录
-        import uuid
-        from datetime import datetime
-        
-        new_asset_id = str(uuid.uuid4())
-        new_asset = {
-            "id": new_asset_id,
-            "project_id": project_id,
-            "user_id": user_id,
-            "name": f"背景替换_{datetime.utcnow().strftime('%H%M%S')}",
-            "file_type": "video",
-            "storage_path": request.result_url,  # 直接使用 URL
-            "duration": duration_ms,
-            "status": "ready",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+    if task:
+        return {
+            "id": task.id,
+            "clip_id": task.clip_id,
+            "status": task.status.value,
+            "progress": task.progress,
+            "error": task.error,
+            "result_url": task.result_video_url,
+            "strategy": task.strategy.value,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
-        
-        supabase.table("assets").insert(new_asset).execute()
-        logger.info(f"[ApplyResult] 创建新 asset: {new_asset_id}")
-        
-        # 5. 更新 clip 指向新 asset
-        # 保留原 clip 的时间轴位置（start_time, duration），只更新素材引用
-        clip_update = {
-            "asset_id": new_asset_id,
-            "source_start": 0,  # 新视频从头开始
-            "source_end": duration_ms,  # 使用新视频的完整时长
-            "updated_at": datetime.utcnow().isoformat(),
-        }
-        
-        supabase.table("clips").update(clip_update).eq("id", request.clip_id).execute()
-        logger.info(f"[ApplyResult] 更新 clip: {request.clip_id} -> asset: {new_asset_id}")
-        
-        # 6. 更新 tasks 记录，关联结果信息
-        supabase.table("tasks").update({
-            "result_asset_id": new_asset_id,
-            "metadata": {
-                **(task_data.get("metadata") or {}),
-                "applied": True,
-                "applied_at": datetime.utcnow().isoformat(),
-                "original_asset_id": clip_data.get("asset_id"),
-            }
-        }).eq("id", request.task_id).execute()
-        
-        return ApplyResultResponse(
-            success=True,
-            clip_id=request.clip_id,
-            new_asset_id=new_asset_id,
-            message=f"替换成功！新视频时长: {duration_seconds:.1f}秒"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[ApplyResult] 应用替换结果失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    
+    # ★ 回退到旧服务
+    workflow = get_background_replace_workflow()
+    old_task = await workflow.get_task(workflow_id)
+    
+    if old_task:
+        return WorkflowResponse.from_task(old_task).model_dump()
+    
+    raise HTTPException(status_code=404, detail="工作流不存在")
+

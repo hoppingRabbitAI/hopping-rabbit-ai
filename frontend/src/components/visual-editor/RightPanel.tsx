@@ -1,11 +1,11 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useVisualEditorStore, useCurrentShot, useSelectedObjects } from '@/stores/visualEditorStore';
-import { 
-  Image, 
-  Palette, 
-  Sparkles, 
+import {
+  Image,
+  Palette,
+  Sparkles,
   Upload, 
   Grid3X3, 
   Settings,
@@ -15,6 +15,14 @@ import {
   MoveDown,
 } from 'lucide-react';
 import { ShotBackground } from '@/types/visual-editor';
+import {
+  fetchTemplateCandidates,
+  renderTemplate,
+  type TemplateCandidateItem,
+  type TemplateWorkflow,
+} from '@/lib/api/templates';
+import { useTaskHistoryStore } from '@/stores/taskHistoryStore';
+import { toast } from '@/lib/stores/toast-store';
 
 // ==========================================
 // 背景类型选项
@@ -69,12 +77,34 @@ const PRESET_COLORS = [
   '#FEE2E2',
 ];
 
-const TEMPLATE_BACKGROUNDS = [
-  { id: 'office', name: '现代办公室', preview: '/templates/office.jpg' },
-  { id: 'studio', name: '专业演播室', preview: '/templates/studio.jpg' },
-  { id: 'nature', name: '自然风景', preview: '/templates/nature.jpg' },
-  { id: 'abstract', name: '抽象纹理', preview: '/templates/abstract.jpg' },
-];
+function getTemplateTags(candidate: TemplateCandidateItem): string[] {
+  const workflow = (candidate.render_spec?.workflow || {}) as TemplateWorkflow;
+  const tags: string[] = [];
+  for (const key of ['shot_type', 'camera_move', 'pacing'] as const) {
+    const value = workflow[key];
+    if (value) tags.push(String(value));
+  }
+  const style = workflow.style;
+  if (style && typeof style === 'object') {
+    const styleObj = style as Record<string, unknown>;
+    if (styleObj.color) tags.push(String(styleObj.color));
+    if (styleObj.light) tags.push(String(styleObj.light));
+  } else if (style) {
+    tags.push(String(style));
+  }
+  if (tags.length > 0) return tags;
+  return (candidate.tags || []).map((item) => String(item));
+}
+
+
+function getRenderSpecSummary(candidate: TemplateCandidateItem): string {
+  const spec = candidate.render_spec;
+  const parts: string[] = [];
+  if (spec.duration) parts.push(`${spec.duration}s`);
+  if (spec.aspect_ratio) parts.push(spec.aspect_ratio);
+  if (spec.endpoint) parts.push(spec.endpoint);
+  return parts.join(' · ');
+}
 
 // ==========================================
 // 背景面板
@@ -82,7 +112,38 @@ const TEMPLATE_BACKGROUNDS = [
 
 function BackgroundPanel() {
   const currentShot = useCurrentShot();
-  const { updateShotBackground } = useVisualEditorStore();
+  const { updateShotBackground, projectId } = useVisualEditorStore();
+  const addOptimisticTask = useTaskHistoryStore((state) => state.addOptimisticTask);
+  const [templates, setTemplates] = useState<TemplateCandidateItem[]>([]);
+  const [templatePrompt, setTemplatePrompt] = useState('');
+  const [isTemplateLoading, setIsTemplateLoading] = useState(false);
+  const [isTemplateRendering, setIsTemplateRendering] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+
+  const loadTemplateCandidates = React.useCallback(async (prompt: string) => {
+    setIsTemplateLoading(true);
+    setTemplateError(null);
+    try {
+      const response = await fetchTemplateCandidates({
+        scope: 'visual-studio',
+        template_kind: 'background',
+        limit: 5,
+        prompt: prompt || undefined,
+      });
+      setTemplates(response.candidates || []);
+      if (!response.candidates || response.candidates.length === 0) {
+        setTemplateError('没有找到匹配模板，换个描述再试试');
+      }
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : '加载候选模板失败');
+    } finally {
+      setIsTemplateLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTemplateCandidates('');
+  }, [loadTemplateCandidates]);
   
   if (!currentShot) {
     return (
@@ -91,8 +152,57 @@ function BackgroundPanel() {
       </div>
     );
   }
-  
+
   const background = currentShot.background;
+  const selectedTemplate = templates.find((item) => item.template_id === background.templateId);
+
+  const handleRenderFromTemplate = async () => {
+    if (!selectedTemplate || isTemplateRendering) {
+      return;
+    }
+    setIsTemplateRendering(true);
+    setTemplateError(null);
+    try {
+      const spec = selectedTemplate.render_spec;
+      const result = await renderTemplate(selectedTemplate.template_id, {
+        prompt: templatePrompt || spec.prompt,
+        negative_prompt: spec.negative_prompt,
+        duration: spec.duration,
+        model_name: spec.model_name,
+        cfg_scale: spec.cfg_scale,
+        mode: spec.mode,
+        aspect_ratio: spec.aspect_ratio,
+        images: spec.images,
+        video_url: spec.video_url,
+        project_id: projectId || undefined,
+        clip_id: currentShot.id,
+        write_clip_metadata: true,
+        overrides: {
+          kling_endpoint: spec.endpoint,
+        },
+      });
+
+      addOptimisticTask({
+        id: result.task_id,
+        task_type: result.endpoint,
+        status: result.status as 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled',
+        progress: 0,
+        status_message: '模板生成已提交：' + selectedTemplate.name,
+        clip_id: currentShot.id,
+        project_id: projectId || undefined,
+        input_params: {
+          clip_id: currentShot.id,
+          template_id: selectedTemplate.template_id,
+          template_name: selectedTemplate.name,
+        },
+      });
+      toast.info(`🎨 模板生成已提交：${selectedTemplate.name}`);
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : '模板渲染失败');
+    } finally {
+      setIsTemplateRendering(false);
+    }
+  };
   
   return (
     <div className="p-4 space-y-4">
@@ -209,30 +319,81 @@ function BackgroundPanel() {
       )}
       
       {background.type === 'template' && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <label className="text-xs text-gray-500 uppercase tracking-wider font-medium">
-            选择模板
+            模板候选
           </label>
-          <div className="grid grid-cols-2 gap-2">
-            {TEMPLATE_BACKGROUNDS.map((template) => (
-              <button
-                key={template.id}
-                onClick={() => updateShotBackground(currentShot.id, { templateId: template.id })}
-                className={`relative h-20 rounded-xl overflow-hidden border-2 transition-all ${
-                  background.templateId === template.id
-                    ? 'border-gray-800'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="w-full h-full bg-gray-100 flex items-center justify-center text-gray-400 text-xs">
-                  {template.name}
-                </div>
-                <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-white/90 text-xs text-gray-700 text-center font-medium">
-                  {template.name}
-                </div>
-              </button>
-            ))}
+
+          <div className="flex gap-2">
+            <input
+              value={templatePrompt}
+              onChange={(e) => setTemplatePrompt(e.target.value)}
+              placeholder="输入风格关键词，如：科技感产品背景"
+              className="h-9 flex-1 rounded-lg border border-gray-200 px-2.5 text-xs text-gray-900 outline-none focus:border-gray-400"
+            />
+            <button
+              onClick={() => loadTemplateCandidates(templatePrompt.trim())}
+              disabled={isTemplateLoading}
+              className="h-9 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-60"
+            >
+              {isTemplateLoading ? '加载中' : '拉取'}
+            </button>
           </div>
+
+          {templateError && (
+            <div className="rounded-lg border border-red-100 bg-red-50 px-2.5 py-2 text-xs text-red-600">
+              {templateError}
+            </div>
+          )}
+
+          <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto pr-1">
+            {templates.map((template) => {
+              const tags = getTemplateTags(template);
+              const summary = getRenderSpecSummary(template);
+              return (
+                <button
+                  key={template.template_id}
+                  onClick={() => updateShotBackground(currentShot.id, { templateId: template.template_id })}
+                  className={`relative rounded-xl overflow-hidden border-2 text-left transition-all ${
+                    background.templateId === template.template_id
+                      ? 'border-gray-800'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="h-20 w-full bg-gray-100">
+                    {template.thumbnail_url ? (
+                      <img src={template.thumbnail_url} alt={template.name} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">无缩略图</div>
+                    )}
+                  </div>
+                  <div className="space-y-1 bg-white p-1.5">
+                    <div className="truncate text-xs font-medium text-gray-800">{template.name}</div>
+                    {summary && (
+                      <div className="truncate text-[10px] text-gray-500">{summary}</div>
+                    )}
+                    {tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {tags.slice(0, 3).map((tag) => (
+                          <span key={template.template_id + '-' + tag} className="rounded bg-gray-100 px-1 py-0.5 text-[10px] text-gray-600">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={handleRenderFromTemplate}
+            disabled={!selectedTemplate || isTemplateRendering}
+            className="w-full rounded-xl bg-gray-800 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isTemplateRendering ? '正在创建任务...' : '使用模板生成'}
+          </button>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 可灵AI Pydantic 模型
+Lepus AI - 可灵AI Pydantic 模型
 
 完整的请求/响应模型定义，包含:
 1. 枚举类型 (ModelName, Mode, AspectRatio 等)
@@ -144,7 +144,7 @@ class Text2VideoRequest(BaseModel):
     """
     prompt: str = Field(..., max_length=2500, description="正向提示词")
     negative_prompt: Optional[str] = Field(None, max_length=2500, description="负向提示词")
-    model_name: Optional[str] = Field("kling-v2-1-master", description="模型版本")
+    model_name: Optional[str] = Field("kling-v2-6", description="模型版本")
     cfg_scale: Optional[float] = Field(0.5, ge=0, le=1, description="提示词相关性")
     mode: Optional[Mode] = Field(Mode.STD, description="生成模式")
     aspect_ratio: Optional[AspectRatio] = Field(AspectRatio.R_16_9, description="画面比例")
@@ -352,28 +352,6 @@ class OmniImageRequest(BaseModel):
 
 
 # ============================================
-# 换脸请求模型
-# ============================================
-
-class FaceSwapRequest(BaseModel):
-    """
-    AI换脸请求
-    
-    API: POST /v1/videos/face-swap
-    """
-    source_video_url: str = Field(..., description="源视频 URL")
-    target_face_url: str = Field(..., description="目标人脸图片 URL 或 Base64")
-    face_index: Optional[int] = Field(0, ge=0, description="多人脸时选择第几张")
-    callback_url: Optional[str] = Field(None, description="回调通知地址")
-
-    @field_validator('target_face_url')
-    @classmethod
-    def validate_face(cls, v):
-        """清洗 Base64 前缀"""
-        return clean_base64_field(v)
-
-
-# ============================================
 # 多元素视频编辑请求模型
 # ============================================
 
@@ -445,7 +423,7 @@ class SimpleText2VideoRequest(BaseModel):
     """简化版文生视频请求（前端用）"""
     prompt: str = Field(..., min_length=1, max_length=2500, description="正向提示词")
     negative_prompt: str = Field("", max_length=2500, description="负向提示词")
-    model_name: str = Field("kling-v2-1-master", description="模型版本")
+    model_name: str = Field("kling-v2-6", description="模型版本")
     duration: str = Field("5", description="视频时长: 5/10")
     aspect_ratio: str = Field("16:9", description="宽高比")
     cfg_scale: float = Field(0.5, ge=0, le=1, description="提示词相关性")

@@ -1,8 +1,8 @@
-# HoppingRabbit AI - 数据架构 V4
+# Lepus AI - 数据架构 V4
 
 ## 概述
 
-本文档描述 HoppingRabbit AI 的数据存储架构，解决以下核心问题：
+本文档描述 Lepus AI 的数据存储架构，解决以下核心问题：
 1. 分片存储 - 分割后的素材需要独立存储
 2. 素材关联 - video 与分片的关联关系
 3. 用户隔离 - 所有数据需要 user_id

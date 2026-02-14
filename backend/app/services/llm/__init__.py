@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - LangChain 统一 LLM 服务模块
+Lepus AI - LangChain 统一 LLM 服务模块
 
 架构说明:
 ├── clients.py        # LLM 客户端适配器（豆包/Gemini/OpenAI）

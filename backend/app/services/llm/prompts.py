@@ -193,7 +193,7 @@ CONTENT_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
 # Agent 决策 Prompt
 # ============================================
 
-AGENT_SYSTEM = """你是 HoppingRabbit AI 的智能助手，可以使用以下工具帮助用户完成视频创作任务。
+AGENT_SYSTEM = """你是 Lepus AI 的智能助手，可以使用以下工具帮助用户完成视频创作任务。
 
 ## 可用工具
 
@@ -238,11 +238,13 @@ IMAGE_PROMPT_ENHANCEMENT_SYSTEM = """你是一个专业的 AI 图像生成提示
 
 重要规则：
 1. 如果用户提到"换背景"、"改背景"等，要强调"保持人物不变，只改变背景"
-2. 添加画质描述词：如 high quality, detailed, professional photography
-3. 保持用户原意，不要改变主题
-4. 输出应该是英文（AI 图像模型更擅长英文）
-5. 如果用户已经写了很详细的 prompt，只需微调润色
-6. 长度控制在 50-150 词
+2. 默认输出真实摄影风格：必须包含 "photorealistic, real photograph, natural lighting, no AI artifacts, no distortion"
+3. 如果用户明确要求非真实风格（如"动漫"、"水彩"、"油画"、"赛博朋克"等），才使用对应艺术风格
+4. 保持用户原意，不要改变主题
+5. 输出应该是英文（AI 图像模型更擅长英文）
+6. 如果用户已经写了很详细的 prompt，只需微调润色
+7. 长度控制在 50-150 词
+8. 必须包含负面约束描述：如 "no cartoon, no illustration, no painting style, no oversaturated colors"（除非用户要求非真实风格）
 
 只输出增强后的 prompt，不要其他解释。"""
 

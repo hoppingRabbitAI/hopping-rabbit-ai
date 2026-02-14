@@ -1,6 +1,5 @@
 """
-HoppingRabbit AI - 可灵AI API 路由
-口播场景专用接口
+Lepus AI - 可灵AI API 路由
 
 功能列表:
 1. 口型同步 (Lip Sync) - 对口型核心功能
@@ -22,8 +21,8 @@ import uuid
 import logging
 from datetime import datetime
 
-from ..services.kling_ai_service import kling_client, koubo_service
-from ..services.tts_service import tts_service, get_preset_voices
+from ..services.kling_ai_service import kling_client
+from ..services.tts_service import tts_service
 from .auth import get_current_user_id
 
 # 导入所有 Celery 任务
@@ -37,7 +36,6 @@ from ..tasks.video_extend import process_video_extend
 from ..tasks.image_generation import process_image_generation
 from ..tasks.omni_image import process_omni_image
 from ..tasks.face_swap import process_face_swap
-from ..tasks.smart_broadcast import process_smart_broadcast
 
 logger = logging.getLogger(__name__)
 
@@ -69,34 +67,151 @@ def _get_callback_url() -> Optional[str]:
     return None
 
 
+async def _resolve_avatar_portrait(avatar_id: str, user_id: str, prompt: str = None) -> dict:
+    """
+    🆕 根据 avatar_id 获取数字人头像 URL + 多角度参考图
+    
+    当传入 prompt 时，使用 LLM 分析用户 prompt 中的角度/姿态意图，
+    从预生成的多角度参考图中选出最匹配的一张作为 face reference，
+    提升角色在非正面构图下的一致性。
+    
+    返回: {
+        "portrait_url": str,           # 原始正面照（fallback）
+        "reference_images": list[str], # 所有参考图（omni_image 用）
+        "best_ref_url": str,           # 🆕 最佳匹配参考图 URL
+    }
+    安全校验：确认该 avatar 属于当前用户 或 是已发布的公共模板
+    """
+    supabase = _get_supabase()
+    result = supabase.table("digital_avatar_templates").select(
+        "id, portrait_url, reference_images, generation_config, status, created_by"
+    ).eq("id", avatar_id).execute()
+    
+    if not result.data:
+        raise HTTPException(status_code=404, detail=f"数字人角色不存在: {avatar_id}")
+    
+    avatar = result.data[0]
+    
+    # 安全校验：必须是自己创建的 或 已发布的公共模板
+    if avatar.get("created_by") != user_id and avatar.get("status") != "published":
+        raise HTTPException(status_code=403, detail="无权使用该数字人角色")
+    
+    portrait_url = avatar.get("portrait_url")
+    if not portrait_url:
+        raise HTTPException(status_code=400, detail="该数字人角色缺少人像照片")
+    
+    reference_images = avatar.get("reference_images") or []
+    
+    # 🆕 动态角度选择：根据 prompt 意图挑选最佳参考图
+    best_ref_url = portrait_url  # 默认用正面照
+    gen_config = avatar.get("generation_config") or {}
+    angle_map = gen_config.get("reference_angle_map")
+    
+    if prompt and angle_map and len(angle_map) > 1:
+        selected = await _select_best_angle(prompt, angle_map)
+        if selected:
+            best_ref_url = selected
+    
+    logger.info(
+        f"[KlingAPI] 解析数字人角色: {avatar_id} → "
+        f"portrait_url={portrait_url[:60]}..., "
+        f"best_ref={'(angle-matched)' if best_ref_url != portrait_url else '(front)'}, "
+        f"ref_images={len(reference_images)}张"
+    )
+    return {
+        "portrait_url": portrait_url,
+        "reference_images": reference_images,
+        "best_ref_url": best_ref_url,
+    }
+
+
+async def _select_best_angle(prompt: str, angle_map: Dict[str, str]) -> Optional[str]:
+    """
+    🆕 使用 LLM 分析 prompt 中的角度/姿态意图，返回最匹配的参考图 URL
+    
+    角度映射:
+      - front: 正面（默认）
+      - three_quarter_left: 左侧 3/4 视角
+      - profile_right: 右侧侧面
+      - slight_above: 轻微俯视
+    
+    如果 LLM 不可用或判断为正面，返回 None（调用方会 fallback 到 portrait_url）
+    """
+    from ..services.llm import llm_service
+    
+    if not llm_service.is_configured():
+        logger.debug("[AngleSelect] LLM 未配置，跳过角度选择")
+        return None
+    
+    available_angles = list(angle_map.keys())
+    
+    system_prompt = f"""你是一个摄影构图分析助手。根据用户的图像生成 prompt，
+判断画面中人物最可能的朝向/角度，从以下选项中选择最匹配的一个：
+
+可选角度: {available_angles}
+
+角度含义：
+- front: 正面面对镜头
+- three_quarter_left: 人物面部微微转向左侧（3/4 侧面）
+- profile_right: 右侧侧脸
+- slight_above: 略微仰头或俯拍视角
+
+判断规则：
+1. 如果 prompt 明确提到朝向（如"侧脸"、"looking left"、"profile"），直接匹配
+2. 如果 prompt 暗示非正面构图（如"回眸"、"望向窗外"、"turned away"），选最接近的角度
+3. 如果无法判断或是正面构图，选 "front"
+4. 只返回 JSON，不要解释
+
+返回格式: {{"angle": "选中的角度key", "confidence": 0.0到1.0}}"""
+
+    try:
+        result = await llm_service.generate_json(
+            user_prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=0.1,  # 低温度确保稳定分类
+        )
+    except Exception as e:
+        logger.warning(f"[AngleSelect] LLM 角度分析失败: {e}")
+        return None
+    
+    if not result:
+        return None
+    
+    angle = result.get("angle", "front")
+    confidence = result.get("confidence", 0.0)
+    
+    # 低置信度时不切换角度，避免误判
+    if confidence < 0.6 or angle == "front":
+        logger.debug(f"[AngleSelect] angle={angle}, confidence={confidence} → 使用正面照")
+        return None
+    
+    url = angle_map.get(angle)
+    if url:
+        logger.info(f"[AngleSelect] prompt 角度意图: {angle} (confidence={confidence}) → 使用该角度参考图")
+        return url
+    
+    logger.debug(f"[AngleSelect] 角度 {angle} 不在 angle_map 中，fallback 正面照")
+    return None
+
+
 def _create_ai_task(
     user_id: str,
     task_type: str,
-    input_params: Dict
+    input_params: Dict,
+    project_id: str = None,
 ) -> str:
-    """创建 AI 任务记录"""
-    ai_task_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
-    
-    # 获取回调URL
+    """创建 AI 任务记录（委托给共享工具函数）"""
+    from ..utils.ai_task_helpers import create_ai_task
     callback_url = _get_callback_url()
-    
-    task_data = {
-        "id": ai_task_id,
-        "user_id": user_id,
-        "task_type": task_type,
-        "provider": "kling",
-        "status": "pending",
-        "progress": 0,
-        "status_message": "任务已创建，等待处理" + ("（回调模式）" if callback_url else "（轮询模式）"),
-        "input_params": input_params,
-        "created_at": now,
-    }
-    
-    _get_supabase().table("tasks").insert(task_data).execute()
-    
-    logger.info(f"[KlingAPI] 创建任务: {ai_task_id}, callback={callback_url or '无(轮询模式)'}")
-    return ai_task_id
+    # 兼容：如果调用方未显式传 project_id，尝试从 input_params 提取
+    pid = project_id or input_params.get("project_id")
+    return create_ai_task(
+        user_id=user_id,
+        task_type=task_type,
+        input_params=input_params,
+        callback_url=callback_url,
+        project_id=pid,
+    )
 
 
 # ============================================
@@ -116,10 +231,12 @@ class TextToVideoRequest(BaseModel):
     """文生视频请求"""
     prompt: str = Field(..., description="正向提示词", min_length=1, max_length=2500)
     negative_prompt: str = Field("", description="负向提示词", max_length=2500)
-    model_name: str = Field("kling-v2-1-master", description="模型: kling-v2-1-master/kling-video-o1/kling-v2-5-turbo/kling-v2-6")
+    model_name: str = Field("kling-v2-6", description="模型: kling-v2-6/kling-v2-1-master/kling-video-o1/kling-v2-5-turbo")
     duration: str = Field("5", description="视频时长: 5/10")
     aspect_ratio: str = Field("16:9", description="宽高比: 16:9/9:16/1:1")
     cfg_scale: float = Field(0.5, ge=0, le=1, description="提示词相关性")
+    # 🆕 数字人角色 face reference
+    avatar_id: Optional[str] = Field(None, description="数字人角色 ID，传入后自动带入 face reference")
 
 
 class ImageToVideoRequest(BaseModel):
@@ -127,9 +244,11 @@ class ImageToVideoRequest(BaseModel):
     image: str = Field(..., description="源图片 URL 或 Base64")
     prompt: str = Field("", description="运动描述提示词", max_length=2500)
     negative_prompt: str = Field("", description="负向提示词")
-    model_name: str = Field("kling-v2-5-turbo", description="模型: kling-v2-5-turbo/kling-v2-1-master/kling-v2-6")
+    model_name: str = Field("kling-v2-6", description="模型: kling-v2-6/kling-v2-5-turbo/kling-v2-1-master")
     duration: str = Field("5", description="视频时长: 5/10")
     cfg_scale: float = Field(0.5, ge=0, le=1, description="提示词相关性")
+    # 🆕 数字人角色 face reference
+    avatar_id: Optional[str] = Field(None, description="数字人角色 ID，传入后自动带入 face reference")
 
 
 class MultiImageToVideoRequest(BaseModel):
@@ -137,7 +256,7 @@ class MultiImageToVideoRequest(BaseModel):
     images: List[str] = Field(..., description="图片列表(2-4张)", min_length=2, max_length=4)
     prompt: str = Field("", description="运动描述提示词", max_length=2500)
     negative_prompt: str = Field("", description="负向提示词")
-    model_name: str = Field("kling-v2-5-turbo", description="模型: kling-v2-5-turbo(支持首尾帧)")
+    model_name: str = Field("kling-v2-6", description="模型: kling-v2-6/kling-v2-5-turbo")
     duration: str = Field("5", description="视频时长: 5/10")
 
 
@@ -146,7 +265,7 @@ class MotionControlRequest(BaseModel):
     image: str = Field(..., description="待驱动图片 URL 或 Base64")
     video_url: str = Field(..., description="动作参考视频 URL")
     prompt: str = Field("", description="辅助描述", max_length=2500)
-    model_name: str = Field("kling-v2-5-turbo", description="模型: kling-v2-5-turbo/kling-v1-6")
+    model_name: str = Field("kling-v2-6", description="模型: kling-v2-6/kling-v2-5-turbo/kling-v1-6")
     mode: str = Field("pro", description="模式: pro")
     duration: str = Field("5", description="视频时长: 5/10")
 
@@ -187,6 +306,8 @@ class ImageGenerationRequest(BaseModel):
     aspect_ratio: str = Field(None, description="画面比例(仅文生图有效，图生图由参考图决定)")
     image_fidelity: float = Field(0.5, ge=0, le=1, description="图片参考强度")
     human_fidelity: float = Field(0.45, ge=0, le=1, description="面部参考强度")
+    # 🆕 数字人角色 face reference
+    avatar_id: Optional[str] = Field(None, description="数字人角色 ID，传入后自动带入 face reference")
 
 
 class OmniImageRequest(BaseModel):
@@ -194,73 +315,23 @@ class OmniImageRequest(BaseModel):
     prompt: str = Field(..., description="提示词(用<<<image_N>>>引用图片)", max_length=2500)
     image_list: List[Dict[str, str]] = Field(None, description="参考图列表")
     element_list: List[Dict[str, int]] = Field(None, description="主体参考列表")
-    model_name: str = Field("kling-v2-1", description="模型: kling-v1/kling-v1-5/kling-v2/kling-v2-new/kling-v2-1")
-    resolution: str = Field("1k", description="清晰度: 1k/2k")
+    model_name: str = Field("kling-image-o1", description="模型: kling-image-o1")
+    resolution: str = Field("2k", description="清晰度: 1k/2k")
     n: int = Field(1, ge=1, le=9, description="生成数量")
     aspect_ratio: str = Field("auto", description="画面比例(支持auto)")
+    # 🆕 数字人角色 face reference
+    avatar_id: Optional[str] = Field(None, description="数字人角色 ID，传入后自动带入 face reference")
 
 
 class FaceSwapRequest(BaseModel):
-    """AI换脸请求"""
-    video_url: str = Field(..., description="原始视频 URL")
+    """AI换脸请求（基于 Omni-Image）"""
+    source_image_url: str = Field(..., description="源图片 URL（要被换脸的图片）")
     face_image_url: str = Field(..., description="目标人脸图片 URL")
-    face_index: int = Field(0, description="视频中选择第几张脸")
-
-
-# ============================================
-# 智能播报请求模型
-# ============================================
-
-class SmartBroadcastRequest(BaseModel):
-    """
-    智能播报请求
-    
-    三种输入模式:
-    1. 图片 + 音频: image_url + audio_url
-    2. 图片 + 脚本 + 预设音色: image_url + script + voice_id
-    3. 图片 + 脚本 + 声音克隆: image_url + script + voice_clone_audio_url
-    """
-    # 必填 - 人物图片
-    image_url: str = Field(..., description="人物图片 URL (需包含清晰人脸)")
-    
-    # 音频输入 (三选一)
-    audio_url: Optional[str] = Field(None, description="音频 URL (模式1: 直接上传音频)")
-    script: Optional[str] = Field(None, description="文本脚本 (模式2/3: 使用 TTS 合成)")
-    
-    # TTS 配置
-    voice_id: Optional[str] = Field("zh_female_gentle", description="预设音色 ID (模式2)")
-    voice_clone_audio_url: Optional[str] = Field(None, description="声音样本 URL，用于克隆您的声音 (模式3)")
-    
-    # 视频生成选项
-    duration: str = Field("5", description="视频时长: 5/10 秒")
-    image_prompt: Optional[str] = Field(None, description="图片动态化提示词")
-    
-    # 音频混合选项
-    sound_volume: float = Field(1.0, ge=0, le=2, description="配音音量")
-    original_audio_volume: float = Field(0.0, ge=0, le=2, description="原视频音量 (通常为0)")
-
-
-# ============================================
-# 口播场景封装请求
-# ============================================
-
-class DigitalHumanRequest(BaseModel):
-    """数字人口播请求"""
-    audio_url: str = Field(..., description="口播音频 URL")
-    avatar_video_url: str = Field(..., description="数字人基础视频 URL")
-    background_prompt: Optional[str] = Field(None, description="背景生成提示词")
-
-
-class BatchAvatarRequest(BaseModel):
-    """批量换脸请求"""
-    source_video_url: str = Field(..., description="源口播视频")
-    face_images: List[str] = Field(..., description="目标人脸图片列表", min_length=1)
-
-
-class ProductShowcaseRequest(BaseModel):
-    """产品展示请求"""
-    product_images: List[str] = Field(..., description="产品图片 URL 列表", min_length=1)
-    voiceover_url: Optional[str] = Field(None, description="配音音频 URL")
+    custom_prompt: Optional[str] = Field(None, description="额外提示词")
+    resolution: str = Field("1k", description="清晰度 1k/2k")
+    generate_video: bool = Field(False, description="是否在换脸后生成视频")
+    video_prompt: Optional[str] = Field(None, description="视频生成提示词")
+    video_duration: str = Field("5", description="视频时长 5/10 秒")
 
 
 # ============================================
@@ -270,6 +341,7 @@ class ProductShowcaseRequest(BaseModel):
 @router.post("/lip-sync", summary="口型同步", tags=["视频生成"])
 async def create_lip_sync(
     request: LipSyncRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -278,7 +350,7 @@ async def create_lip_sync(
     流程: 人脸识别 → 创建对口型任务 → 轮询状态 → 下载上传
     """
     try:
-        ai_task_id = _create_ai_task(user_id, "lip_sync", request.model_dump())
+        ai_task_id = _create_ai_task(user_id, "lip_sync", request.model_dump(), project_id=project_id)
         
         process_lip_sync.delay(
             ai_task_id=ai_task_id,
@@ -300,154 +372,20 @@ async def create_lip_sync(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================
-# 智能播报 API (一键数字人播报)
-# ============================================
-
-@router.get("/smart-broadcast/voices", summary="获取预设音色列表", tags=["智能播报"])
-async def get_voices(
-    language: Optional[str] = Query(None, description="语言过滤: zh/en"),
-    gender: Optional[str] = Query(None, description="性别过滤: male/female"),
-):
-    """
-    获取 TTS 预设音色列表
-    
-    用于前端展示音色选择器
-    """
-    voices = get_preset_voices(language=language, gender=gender)
-    return {
-        "success": True,
-        "voices": voices,
-        "total": len(voices),
-    }
-
-
-@router.post("/smart-broadcast", summary="智能播报", tags=["智能播报"])
-async def create_smart_broadcast(
-    request: SmartBroadcastRequest,
-    user_id: str = Depends(get_current_user_id)
-):
-    """
-    🎙️ 智能播报 - 一键生成数字人播报视频
-    
-    ## 三种输入模式
-    
-    ### 模式 1: 图片 + 音频
-    直接上传人物图片和配音音频，AI 自动同步口型
-    ```json
-    {
-        "image_url": "https://xxx/person.jpg",
-        "audio_url": "https://xxx/voice.mp3"
-    }
-    ```
-    
-    ### 模式 2: 图片 + 脚本 + 预设音色
-    上传图片和文字脚本，使用预设音色合成语音
-    ```json
-    {
-        "image_url": "https://xxx/person.jpg",
-        "script": "大家好，欢迎来到我的频道...",
-        "voice_id": "zh_female_gentle"
-    }
-    ```
-    
-    ### 模式 3: 图片 + 脚本 + 声音克隆
-    上传图片、脚本和声音样本，克隆您的声音生成播报
-    ```json
-    {
-        "image_url": "https://xxx/person.jpg",
-        "script": "大家好，欢迎来到我的频道...",
-        "voice_clone_audio_url": "https://xxx/my_voice_sample.mp3"
-    }
-    ```
-    
-    ## 处理流程
-    1. (可选) TTS 语音合成
-    2. 图生视频 - 将静态图片转为动态人像视频
-    3. 口型同步 - 音频驱动口型动作
-    4. 输出最终播报视频
-    
-    ## 预计时长
-    - 5秒视频: 约 3-5 分钟
-    - 10秒视频: 约 5-8 分钟
-    """
-    # 验证输入
-    if not request.audio_url and not request.script:
-        raise HTTPException(
-            status_code=400,
-            detail="请提供 audio_url (上传音频) 或 script (文本脚本)"
-        )
-    
-    if request.script and request.audio_url:
-        raise HTTPException(
-            status_code=400,
-            detail="audio_url 和 script 只能选择一个"
-        )
-    
-    try:
-        # 构建输入参数记录
-        input_params = {
-            "image_url": request.image_url,
-            "mode": "audio" if request.audio_url else ("voice_clone" if request.voice_clone_audio_url else "tts"),
-        }
-        if request.audio_url:
-            input_params["audio_url"] = request.audio_url
-        if request.script:
-            input_params["script"] = request.script[:100] + "..." if len(request.script) > 100 else request.script
-            input_params["voice_id"] = request.voice_id
-        if request.voice_clone_audio_url:
-            input_params["voice_clone"] = True
-        
-        ai_task_id = _create_ai_task(user_id, "smart_broadcast", input_params)
-        
-        process_smart_broadcast.delay(
-            ai_task_id=ai_task_id,
-            user_id=user_id,
-            image_url=request.image_url,
-            audio_url=request.audio_url,
-            script=request.script,
-            voice_id=request.voice_id,
-            voice_clone_audio_url=request.voice_clone_audio_url,
-            options={
-                "duration": request.duration,
-                "image_prompt": request.image_prompt,
-                "sound_volume": request.sound_volume,
-                "original_audio_volume": request.original_audio_volume,
-            }
-        )
-        
-        # 返回模式说明
-        mode_desc = {
-            "audio": "图片 + 音频模式",
-            "tts": "图片 + 脚本 + 预设音色模式",
-            "voice_clone": "图片 + 脚本 + 声音克隆模式",
-        }
-        
-        logger.info(f"[KlingAPI] 智能播报任务已创建: {ai_task_id}, mode={input_params['mode']}")
-        return {
-            "success": True,
-            "task_id": ai_task_id,
-            "status": "pending",
-            "mode": input_params["mode"],
-            "mode_description": mode_desc[input_params["mode"]],
-            "estimated_time": "3-8 分钟",
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[KlingAPI] 创建智能播报任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/text-to-video", summary="文生视频", tags=["视频生成"])
 async def create_text_to_video(
     request: TextToVideoRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建文生视频任务"""
     try:
-        ai_task_id = _create_ai_task(user_id, "text_to_video", request.model_dump())
+        # 🆕 文生视频不支持 face reference（Kling text2video API 无 image 参数）
+        # 未来可扩展：先用 image_generation + face 生成图片，再转为 image_to_video
+        if request.avatar_id:
+            logger.info(f"[KlingAPI] 文生视频暂不支持 face reference，已忽略 avatar_id={request.avatar_id}")
+
+        ai_task_id = _create_ai_task(user_id, "text_to_video", request.model_dump(), project_id=project_id)
         
         process_text_to_video.delay(
             task_id=ai_task_id,
@@ -473,11 +411,16 @@ async def create_text_to_video(
 @router.post("/image-to-video", summary="图生视频", tags=["视频生成"])
 async def create_image_to_video(
     request: ImageToVideoRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建图生视频任务"""
     try:
-        ai_task_id = _create_ai_task(user_id, "image_to_video", request.model_dump())
+        # 🆕 图生视频不支持 face reference（Kling image2video API 无此参数）
+        if request.avatar_id:
+            logger.info(f"[KlingAPI] 图生视频暂不支持 face reference，已忽略 avatar_id={request.avatar_id}")
+
+        ai_task_id = _create_ai_task(user_id, "image_to_video", request.model_dump(), project_id=project_id)
         
         process_image_to_video.delay(
             task_id=ai_task_id,
@@ -503,21 +446,22 @@ async def create_image_to_video(
 @router.post("/multi-image-to-video", summary="多图生视频", tags=["视频生成"])
 async def create_multi_image_to_video(
     request: MultiImageToVideoRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建多图生视频任务（2-4张图片场景转换）"""
     try:
-        ai_task_id = _create_ai_task(user_id, "multi_image_to_video", request.model_dump())
+        ai_task_id = _create_ai_task(user_id, "multi_image_to_video", request.model_dump(), project_id=project_id)
         
         process_multi_image_to_video.delay(
-            ai_task_id=ai_task_id,
+            task_id=ai_task_id,
             user_id=user_id,
-            images=request.images,
+            image_list=request.images,
             prompt=request.prompt,
-            negative_prompt=request.negative_prompt,
             options={
                 "model_name": request.model_name,
                 "duration": request.duration,
+                "negative_prompt": request.negative_prompt,
             }
         )
         
@@ -532,11 +476,12 @@ async def create_multi_image_to_video(
 @router.post("/motion-control", summary="动作控制", tags=["视频生成"])
 async def create_motion_control(
     request: MotionControlRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建动作控制任务（参考视频驱动图片人物）"""
     try:
-        ai_task_id = _create_ai_task(user_id, "motion_control", request.model_dump())
+        ai_task_id = _create_ai_task(user_id, "motion_control", request.model_dump(), project_id=project_id)
         
         process_motion_control.delay(
             ai_task_id=ai_task_id,
@@ -547,6 +492,7 @@ async def create_motion_control(
             options={
                 "mode": request.mode,
                 "duration": request.duration,
+                "model_name": request.model_name,
             }
         )
         
@@ -561,19 +507,20 @@ async def create_motion_control(
 @router.post("/video-extend", summary="视频延长", tags=["视频生成"])
 async def create_video_extend(
     request: VideoExtendRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建视频延长任务（延长 4-5 秒）"""
     try:
-        ai_task_id = _create_ai_task(user_id, "video_extend", request.model_dump())
+        ai_task_id = _create_ai_task(user_id, "video_extend", request.model_dump(), project_id=project_id)
         
         process_video_extend.delay(
-            ai_task_id=ai_task_id,
+            task_id=ai_task_id,
             user_id=user_id,
             video_id=request.video_id,
-            prompt=request.prompt,
-            negative_prompt=request.negative_prompt,
             options={
+                "prompt": request.prompt,
+                "negative_prompt": request.negative_prompt,
                 "extend_direction": request.extend_direction,
                 "cfg_scale": request.cfg_scale,
             }
@@ -594,14 +541,28 @@ async def create_video_extend(
 @router.post("/image-generation", summary="图像生成", tags=["图像生成"])
 async def create_image_generation(
     request: ImageGenerationRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建图像生成任务（文生图/图生图）"""
     try:
+        # 🆕 如果传入 avatar_id，自动注入 face reference + 多角度参考图
+        if request.avatar_id:
+            avatar_data = await _resolve_avatar_portrait(request.avatar_id, user_id, prompt=request.prompt)
+            best_ref_url = avatar_data["best_ref_url"]
+            ref_images = avatar_data["reference_images"]
+            # 仅在用户未手动指定 image 时注入
+            if not request.image:
+                request.image = best_ref_url
+                request.image_reference = "face"
+                if request.human_fidelity <= 0.45:  # 未手动调高
+                    request.human_fidelity = 0.75
+                logger.info(f"[KlingAPI] 已注入数字人 face reference: avatar={request.avatar_id}, ref_images={len(ref_images)}张, angle_matched={best_ref_url != avatar_data['portrait_url']}")
+
         # 使用用户指定模型或默认 kling-v2-1
         model_name = request.model_name or "kling-v2-1"
         
-        ai_task_id = _create_ai_task(user_id, "image_generation", request.model_dump())
+        ai_task_id = _create_ai_task(user_id, "image_generation", request.model_dump(), project_id=project_id)
         
         # 构建 options
         options = {
@@ -640,17 +601,35 @@ async def create_image_generation(
 @router.post("/omni-image", summary="Omni-Image", tags=["图像生成"])
 async def create_omni_image(
     request: OmniImageRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
     """创建 Omni-Image 任务（高级多模态图像生成）"""
     try:
-        ai_task_id = _create_ai_task(user_id, "omni_image", request.model_dump())
+        # 🆕 如果传入 avatar_id，将人像 + 多角度参考图全部注入 image_list
+        image_list = request.image_list or []
+        if request.avatar_id:
+            avatar_data = await _resolve_avatar_portrait(request.avatar_id, user_id, prompt=request.prompt)
+            portrait_url = avatar_data["portrait_url"]
+            ref_images = avatar_data["reference_images"]
+            # 合并所有参考图（主图 + 多角度），去重
+            all_refs = [portrait_url]
+            for ref in ref_images:
+                if ref not in all_refs:
+                    all_refs.append(ref)
+            # 将每张参考图追加到 image_list
+            for ref_url in all_refs:
+                face_var = f"image_{len(image_list) + 1}"
+                image_list = [*image_list, {"image": ref_url, "var": face_var}]
+            logger.info(f"[KlingAPI] Omni-Image 已注入数字人 {len(all_refs)} 张参考图: avatar={request.avatar_id}")
+
+        ai_task_id = _create_ai_task(user_id, "omni_image", request.model_dump(), project_id=project_id)
         
         process_omni_image.delay(
             ai_task_id=ai_task_id,
             user_id=user_id,
             prompt=request.prompt,
-            image_list=request.image_list,
+            image_list=image_list,
             element_list=request.element_list,
             options={
                 "model_name": request.model_name,
@@ -668,21 +647,33 @@ async def create_omni_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/face-swap", summary="AI换脸", tags=["视频生成"])
+@router.post("/face-swap", summary="AI换脸", tags=["图像生成"])
 async def create_face_swap(
     request: FaceSwapRequest,
+    project_id: Optional[str] = Query(None, description="关联项目ID"),
     user_id: str = Depends(get_current_user_id)
 ):
-    """创建 AI 换脸任务"""
+    """
+    创建 AI 换脸任务（基于 Omni-Image）
+    
+    原理：通过 Omni-Image 的 face reference 能力，保持源图场景不变，只替换人脸。
+    可选联动：换脸后通过 image2video 生成动态视频。
+    """
     try:
-        ai_task_id = _create_ai_task(user_id, "face_swap", request.model_dump())
+        ai_task_id = _create_ai_task(user_id, "face_swap", request.model_dump(), project_id=project_id)
         
         process_face_swap.delay(
             task_id=ai_task_id,
             user_id=user_id,
-            video_url=request.video_url,
+            source_image_url=request.source_image_url,
             face_image_url=request.face_image_url,
-            options={"face_index": request.face_index}
+            options={
+                "custom_prompt": request.custom_prompt,
+                "resolution": request.resolution,
+                "generate_video": request.generate_video,
+                "video_prompt": request.video_prompt,
+                "video_duration": request.video_duration,
+            }
         )
         
         logger.info(f"[KlingAPI] AI换脸任务已创建: {ai_task_id}")
@@ -779,7 +770,7 @@ async def get_ai_task_status(
             "status_message": task.get("status_message"),
             "output_url": task.get("output_url"),
             "output_asset_id": task.get("output_asset_id"),
-            "result_metadata": task.get("result_metadata"),
+            "result_metadata": task.get("metadata"),
             "error_code": task.get("error_code"),
             "error_message": task.get("error_message"),
             "created_at": task["created_at"],
@@ -938,18 +929,38 @@ async def add_ai_task_to_project(
         
         task = task_result.data
         
-        # 2. 检查任务状态和输出
-        if task["status"] != "completed":
-            raise HTTPException(status_code=400, detail="任务尚未完成")
+        # 2. 检查任务状态和输出 —— 给出详细诊断信息
+        current_status = task["status"]
+        if current_status != "completed":
+            created_at = task.get("created_at", "")
+            # 计算卡住时间
+            stuck_hint = ""
+            if created_at:
+                from datetime import datetime as _dt
+                try:
+                    created = _dt.fromisoformat(created_at.replace("Z", "+00:00"))
+                    elapsed_min = (datetime.utcnow().replace(tzinfo=created.tzinfo) - created).total_seconds() / 60
+                    if current_status == "pending" and elapsed_min > 2:
+                        stuck_hint = f"（任务已等待 {elapsed_min:.0f} 分钟，可能 Celery Worker 未监听 {task.get('task_type', '')} 对应队列）"
+                    elif current_status == "processing" and elapsed_min > 15:
+                        stuck_hint = f"（任务已处理 {elapsed_min:.0f} 分钟，可能卡住）"
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=400,
+                detail=f"任务当前状态为 {current_status}，尚未完成{stuck_hint}"
+            )
         
         if not task.get("output_url"):
-            raise HTTPException(status_code=400, detail="任务没有输出文件")
+            raise HTTPException(status_code=400, detail="任务已完成但没有输出文件，请检查任务日志")
         
-        # 3. 确定文件类型和素材名称
+        # 3. 确定文件类型 — 直接看 output_url 后缀，不硬编码
         task_type = task["task_type"]
-        is_image = task_type in ["image_generation", "omni_image"]
-        file_type = "image" if is_image else "video"  # 用于 assets.file_type
-        clip_type = "image" if is_image else "video"   # 用于 clips.clip_type
+        output_url: str = task["output_url"]
+        video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")
+        is_image = not output_url.lower().split("?")[0].endswith(video_exts)
+        file_type = "image" if is_image else "video"
+        clip_type = "image" if is_image else "video"
         
         task_type_labels = {
             "lip_sync": "口型同步",
@@ -961,12 +972,17 @@ async def add_ai_task_to_project(
             "image_generation": "AI生成图片",
             "omni_image": "Omni-Image",
             "face_swap": "AI换脸",
+            "skin_enhance": "皮肤美化",
+            "relight": "AI打光",
+            "outfit_swap": "换装",
+            "ai_stylist": "AI造型",
+            "outfit_shot": "穿搭拍摄",
         }
         default_name = f"{task_type_labels.get(task_type, 'AI生成')}_{task_id[:8]}"
         asset_name = request.name or default_name
         
-        # 从 result_metadata 获取媒体信息
-        metadata = task.get("result_metadata") or {}
+        # 从 metadata 获取媒体信息
+        metadata = task.get("metadata") or {}
         duration = metadata.get("duration", 5.0)  # 默认 5 秒
         width = metadata.get("width", 1920)
         height = metadata.get("height", 1080)
@@ -1160,71 +1176,6 @@ async def batch_delete_ai_tasks(
 
 
 # ============================================
-# 口播场景封装接口
-# ============================================
-
-@router.post("/koubo/digital-human", summary="数字人口播", tags=["口播场景"])
-async def generate_digital_human_video(
-    request: DigitalHumanRequest,
-    user_id: str = Depends(get_current_user_id)
-):
-    """数字人口播视频生成（完整工作流）"""
-    task_id = str(uuid.uuid4())
-    
-    try:
-        result = await koubo_service.generate_digital_human_video(
-            audio_url=request.audio_url,
-            avatar_video_url=request.avatar_video_url,
-            background_prompt=request.background_prompt,
-        )
-        return {"success": True, "task_id": task_id, "result": result}
-        
-    except Exception as e:
-        logger.error(f"数字人口播生成失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/koubo/batch-avatars", summary="批量换脸", tags=["口播场景"])
-async def batch_generate_avatars(
-    request: BatchAvatarRequest,
-    user_id: str = Depends(get_current_user_id)
-):
-    """批量生成不同数字人版本"""
-    task_id = str(uuid.uuid4())
-    
-    try:
-        results = await koubo_service.batch_generate_avatars(
-            source_video_url=request.source_video_url,
-            face_images=request.face_images,
-        )
-        return {"success": True, "task_id": task_id, "results": results, "count": len(results)}
-        
-    except Exception as e:
-        logger.error(f"批量生成数字人失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/koubo/product-showcase", summary="产品展示", tags=["口播场景"])
-async def generate_product_showcase(
-    request: ProductShowcaseRequest,
-    user_id: str = Depends(get_current_user_id)
-):
-    """产品展示视频生成"""
-    task_id = str(uuid.uuid4())
-    
-    try:
-        result = await koubo_service.generate_product_showcase(
-            product_images=request.product_images,
-            voiceover_url=request.voiceover_url,
-        )
-        return {"success": True, "task_id": task_id, "result": result}
-        
-    except Exception as e:
-        logger.error(f"产品展示生成失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================
 # 能力列表
 # ============================================
 
@@ -1242,7 +1193,7 @@ async def get_capabilities():
                     "name": "口型同步",
                     "endpoint": "POST /kling/lip-sync",
                     "description": "将音频同步到视频人物的嘴型",
-                    "use_cases": ["数字人口播", "AI换脸口播", "多语言配音"],
+                    "use_cases": ["数字人", "AI换脸", "多语言配音"],
                     "input": {"video_url": "视频URL", "audio_url": "音频URL"},
                     "output": "video",
                     "estimated_time": "1-5分钟",
@@ -1253,7 +1204,7 @@ async def get_capabilities():
                     "name": "文生视频",
                     "endpoint": "POST /kling/text-to-video",
                     "description": "根据文字描述生成视频",
-                    "use_cases": ["口播背景", "B-roll素材", "片头片尾"],
+                    "use_cases": ["视频背景", "B-roll素材", "片头片尾"],
                     "input": {"prompt": "提示词"},
                     "output": "video",
                     "estimated_time": "2-10分钟",
@@ -1330,7 +1281,7 @@ async def get_capabilities():
                     "output": "image",
                     "estimated_time": "30秒-2分钟",
                     "api_endpoint": "POST /v1/images/generations",
-                    "models": ["kling-image-o1", "kling-v2-1"],
+                    "models": ["kling-v2-1"],
                 },
                 {
                     "id": "omni_image",
@@ -1342,33 +1293,11 @@ async def get_capabilities():
                     "output": "image",
                     "estimated_time": "30秒-2分钟",
                     "api_endpoint": "POST /v1/images/omni-image",
-                    "models": ["kling-image-o1"],
+                    "models": ["kling-v2-1"],
                 },
             ],
         },
-        "workflows": [
-            {
-                "id": "digital_human",
-                "name": "数字人口播",
-                "endpoint": "POST /kling/koubo/digital-human",
-                "description": "完整的数字人口播视频生成流程",
-                "steps": ["上传音频", "选择数字人形象", "（可选）生成背景", "口型同步", "导出"],
-            },
-            {
-                "id": "batch_avatar",
-                "name": "批量分身",
-                "endpoint": "POST /kling/koubo/batch-avatars",
-                "description": "一条口播，多个数字人形象",
-                "steps": ["上传口播视频", "选择多个形象", "批量生成", "导出"],
-            },
-            {
-                "id": "product_showcase",
-                "name": "产品动态展示",
-                "endpoint": "POST /kling/koubo/product-showcase",
-                "description": "产品图片自动动态化",
-                "steps": ["上传产品图", "自动生成动态视频", "合成带货视频"],
-            },
-        ],
+        "workflows": [],
         "task_management": {
             "get_status": "GET /kling/ai-task/{task_id}",
             "list_tasks": "GET /kling/ai-tasks",

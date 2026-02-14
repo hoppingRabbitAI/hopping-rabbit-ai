@@ -208,6 +208,50 @@ class VideoElementReplaceService:
         }
         return messages.get(status, "未知状态")
     
+    async def _upload_to_storage(self, video_url: str, task_id: str) -> str:
+        """
+        将视频 URL 下载并上传到我们的存储（治本方案）
+        
+        避免 Kling 等第三方 URL 过期问题，统一存储到 Supabase Storage。
+        
+        Args:
+            video_url: 原始视频 URL（可能是 Kling 返回的临时 URL）
+            task_id: 任务 ID，用于构建存储路径
+            
+        Returns:
+            上传后的公开 URL
+        """
+        from .supabase_client import get_file_url
+        
+        try:
+            # 1. 下载视频
+            logger.info(f"[VideoReplace] 正在下载视频以上传到存储: {video_url[:60]}...")
+            response = await self.http_client.get(video_url, follow_redirects=True)
+            response.raise_for_status()
+            video_data = response.content
+            
+            # 2. 上传到 Supabase Storage（在线程池中执行，避免阻塞）
+            storage_path = f"ai-generated/{task_id}.mp4"
+            
+            def _upload_video():
+                supabase.storage.from_("ai-creations").upload(
+                    storage_path,
+                    video_data,
+                    file_options={"content-type": "video/mp4", "upsert": "true"}
+                )
+            
+            await asyncio.get_event_loop().run_in_executor(None, _upload_video)
+            
+            # 3. 获取公开 URL（长期有效）
+            public_url = get_file_url("ai-creations", storage_path, expires_in=86400 * 365)  # 1年有效
+            
+            logger.info(f"[VideoReplace] 视频已上传到存储: {public_url[:60]}...")
+            return public_url
+            
+        except Exception as e:
+            logger.warning(f"[VideoReplace] 上传视频到存储失败: {e}，使用原 URL")
+            return video_url  # 失败时返回原 URL
+    
     def _is_valid_duration(self, duration_seconds: float) -> bool:
         """检查视频时长是否符合 Kling 多模态 API 要求"""
         for min_dur, max_dur in self.VALID_DURATION_RANGES:
@@ -246,6 +290,681 @@ class VideoElementReplaceService:
     # 公共入口
     # ==========================================
     
+    async def create_background_replace_with_smart_split(
+        self,
+        clip_id: str,
+        video_url: str,
+        new_background_url: str,
+        duration_ms: int,
+        transcript: Optional[str] = None,
+        prompt: Optional[str] = None,
+        user_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> List[ReplaceTask]:
+        """
+        ★★★ 智能分片 + 批量任务创建 ★★★
+        
+        如果 clip 时长不符合 Kling API 要求（2-5秒或7-10秒），
+        自动分片并创建多个任务。
+        
+        Args:
+            clip_id: Clip ID
+            video_url: 视频 URL
+            new_background_url: 新背景图 URL
+            duration_ms: 视频时长（毫秒）
+            transcript: 转写文本（用于分句策略）
+            prompt: 提示词
+            user_id: 用户 ID
+            project_id: 项目 ID
+            
+        Returns:
+            List[ReplaceTask]: 创建的任务列表（可能是1个或多个）
+        """
+        from .smart_clip_splitter import get_smart_clip_splitter, is_valid_duration
+        
+        duration_seconds = duration_ms / 1000
+        
+        # 1. 检查是否需要分片
+        if is_valid_duration(duration_seconds):
+            # 不需要分片，直接创建单个任务
+            logger.info(f"[VideoReplace] Clip {clip_id} 时长 {duration_seconds:.1f}s 符合要求，创建单个任务")
+            task = await self.create_background_replace_task(
+                clip_id=clip_id,
+                video_url=video_url,
+                new_background_url=new_background_url,
+                prompt=prompt,
+                user_id=user_id,
+                project_id=project_id,
+            )
+            return [task]
+        
+        # 2. 需要分片
+        logger.info(f"[VideoReplace] Clip {clip_id} 时长 {duration_seconds:.1f}s 需要分片")
+        splitter = get_smart_clip_splitter()
+        
+        # 获取分片计划
+        split_plan = await splitter.analyze_and_plan(
+            clip_id=clip_id,
+            duration_ms=duration_ms,
+            transcript=transcript,
+        )
+        
+        if not split_plan.needs_split or len(split_plan.segments) <= 1:
+            # 无法分片（如视频太短），尝试直接创建任务
+            logger.warning(f"[VideoReplace] 无法分片，尝试直接创建任务")
+            task = await self.create_background_replace_task(
+                clip_id=clip_id,
+                video_url=video_url,
+                new_background_url=new_background_url,
+                prompt=prompt,
+                user_id=user_id,
+                project_id=project_id,
+            )
+            return [task]
+        
+        logger.info(f"[VideoReplace] 分片计划: {split_plan.segment_count} 个分片, 策略: {split_plan.split_strategy}")
+        
+        # 3. 为每个分片创建任务
+        tasks = []
+        parent_task_id = str(uuid.uuid4())  # 父任务 ID，用于关联
+        
+        for i, segment in enumerate(split_plan.segments):
+            # 创建分片任务
+            task = ReplaceTask(
+                id=str(uuid.uuid4()),
+                clip_id=clip_id,
+                video_url=video_url,
+                strategy=ReplaceStrategy.BACKGROUND_SWAP,
+                status=ReplaceStatus.PENDING,
+                progress=0,
+                new_background_url=new_background_url,
+                prompt=prompt,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            
+            # 存储分片信息
+            task.segment_info = {
+                "segment_id": segment.id,
+                "parent_task_id": parent_task_id,
+                "segment_index": i,
+                "total_segments": len(split_plan.segments),
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "duration_ms": segment.duration_ms,
+                "transcript": segment.transcript,
+                "split_strategy": split_plan.split_strategy,
+            }
+            
+            self._tasks[task.id] = task
+            
+            # 保存到数据库
+            if user_id:
+                await self._save_segment_task_to_db(task, user_id, project_id, segment, parent_task_id)
+            
+            tasks.append(task)
+            logger.info(f"[VideoReplace] 创建分片任务 {i+1}/{len(split_plan.segments)}: {task.id}, 时长 {segment.duration_seconds:.1f}s")
+        
+        return tasks
+    
+    async def _save_segment_task_to_db(
+        self,
+        task: ReplaceTask,
+        user_id: str,
+        project_id: Optional[str],
+        segment,
+        parent_task_id: str
+    ) -> None:
+        """保存分片任务到数据库"""
+        try:
+            data = {
+                "id": task.id,
+                "user_id": user_id,
+                "project_id": project_id,
+                "clip_id": task.clip_id,
+                "task_type": "background_replace",
+                "status": task.status.value,
+                "progress": task.progress,
+                "status_message": f"分片 {segment.split_reason}",
+                "metadata": {
+                    "provider": "kling",
+                    "video_url": task.video_url,
+                    "new_background_url": task.new_background_url,
+                    "strategy": task.strategy.value,
+                    "prompt": task.prompt,
+                    # 分片信息
+                    "is_segment": True,
+                    "parent_task_id": parent_task_id,
+                    "segment_index": getattr(task, 'segment_info', {}).get('segment_index', 0),
+                    "total_segments": getattr(task, 'segment_info', {}).get('total_segments', 1),
+                    "segment_start_ms": segment.start_ms,
+                    "segment_end_ms": segment.end_ms,
+                    "segment_duration_ms": segment.duration_ms,
+                },
+                "created_at": task.created_at.isoformat() if task.created_at else datetime.utcnow().isoformat(),
+            }
+            
+            supabase.table("tasks").upsert(data).execute()
+            logger.debug(f"[VideoReplace] 分片任务已保存: {task.id}")
+        except Exception as e:
+            logger.error(f"[VideoReplace] 保存分片任务失败: {e}")
+    
+    async def execute_background_replace_with_split(
+        self,
+        task_id: str,
+        progress_callback: Optional[callable] = None
+    ) -> ReplaceTask:
+        """
+        ★★★ 执行分片任务的背景替换 ★★★
+        
+        如果任务有分片信息，会先裁剪视频片段再处理。
+        处理完成后，检查是否所有分片都已完成，如果是则自动合并。
+        """
+        task = self._tasks.get(task_id)
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+        
+        segment_info = getattr(task, 'segment_info', None)
+        
+        try:
+            if segment_info:
+                # 有分片信息，需要先裁剪视频
+                logger.info(f"[VideoReplace] 执行分片任务 {task_id}: {segment_info['segment_index']+1}/{segment_info['total_segments']}")
+                
+                # 裁剪视频片段（传入 clip_id 用于解析 localhost URL）
+                segment_video_url = await self._cut_video_segment(
+                    video_url=task.video_url,
+                    start_ms=segment_info['start_ms'],
+                    end_ms=segment_info['end_ms'],
+                    task_id=task_id,
+                    clip_id=task.clip_id
+                )
+                
+                # 临时替换 video_url 为裁剪后的片段
+                original_video_url = task.video_url
+                task.video_url = segment_video_url
+                
+                try:
+                    # 执行替换
+                    result = await self.execute_background_replace(task_id, progress_callback)
+                    
+                    # ★★★ 检查是否所有分片都已完成，如果是则合并 ★★★
+                    if result.status == ReplaceStatus.COMPLETED:
+                        parent_task_id = segment_info.get('parent_task_id')
+                        if parent_task_id:
+                            merged_url = await self.check_and_merge_segments(
+                                parent_task_id=parent_task_id,
+                                clip_id=task.clip_id,
+                            )
+                            if merged_url:
+                                logger.info(f"[VideoReplace] ★ 所有分片已完成并合并: {merged_url[:60]}...")
+                                # TODO: 更新 clip 的 videoUrl，或创建一个合并后的总任务
+                    
+                    return result
+                finally:
+                    # 恢复原始 URL
+                    task.video_url = original_video_url
+            else:
+                # 普通任务，直接执行
+                return await self.execute_background_replace(task_id, progress_callback)
+        except Exception as e:
+            # ★★★ 治本：裁剪或执行过程中任何异常都要更新任务状态 ★★★
+            import traceback
+            logger.error(f"[VideoReplace] 分片任务执行失败: {task_id}, error: {e}\n{traceback.format_exc()}")
+            task.status = ReplaceStatus.FAILED
+            task.error = str(e) if str(e) else repr(e)
+            task.updated_at = datetime.utcnow()
+            await self._update_task_in_db(task)
+            raise
+    
+    async def _cut_video_segment(
+        self,
+        video_url: str,
+        start_ms: int,
+        end_ms: int,
+        task_id: str,
+        clip_id: Optional[str] = None
+    ) -> str:
+        """
+        裁剪视频片段
+        
+        使用 ffmpeg 裁剪视频，上传到临时存储，返回 URL。
+        """
+        import tempfile
+        from .supabase_client import get_file_url, supabase
+        
+        logger.info(f"[VideoReplace] 裁剪视频: {start_ms}ms - {end_ms}ms")
+        
+        # ★★★ 治本：解析 localhost URL 为可直接访问的 URL ★★★
+        resolved_url = video_url
+        if "localhost" in video_url or "127.0.0.1" in video_url:
+            if clip_id:
+                logger.info(f"[VideoReplace] 检测到本地 URL，尝试解析: {video_url[:50]}...")
+                from app.services.background_replace_workflow import resolve_video_download_url
+                resolved = await resolve_video_download_url(clip_id)
+                if resolved:
+                    resolved_url = resolved
+                    logger.info(f"[VideoReplace] 解析成功: {resolved_url[:80]}...")
+                else:
+                    raise ValueError(f"无法解析 clip {clip_id} 的视频 URL，请确保视频已上传到云端")
+            else:
+                raise ValueError(f"无法下载本地 URL {video_url}，缺少 clip_id 无法解析")
+        
+        # 下载原视频
+        response = await self.http_client.get(resolved_url, follow_redirects=True)
+        response.raise_for_status()
+        
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as input_file:
+            input_file.write(response.content)
+            input_path = input_file.name
+        
+        output_path = input_path.replace(".mp4", f"_segment_{task_id[:8]}.mp4")
+        
+        try:
+            # 使用 ffmpeg 裁剪（异步执行，不阻塞事件循环）
+            start_seconds = start_ms / 1000
+            duration_seconds = (end_ms - start_ms) / 1000
+            
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", input_path,
+                "-ss", str(start_seconds),
+                "-t", str(duration_seconds),
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-preset", "fast",
+                output_path
+            ]
+            
+            # ★★★ 使用 asyncio.create_subprocess_exec 避免阻塞 ★★★
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                raise RuntimeError(f"ffmpeg 裁剪失败: {stderr.decode()}")
+            
+            # 上传到临时存储（在线程池中执行，避免阻塞）
+            def _read_and_upload():
+                with open(output_path, "rb") as f:
+                    segment_data = f.read()
+                supabase.storage.from_("clips").upload(
+                    storage_path,
+                    segment_data,
+                    file_options={"content-type": "video/mp4", "upsert": "true"}
+                )
+            
+            storage_path = f"temp/segments/{task_id}.mp4"
+            await asyncio.get_event_loop().run_in_executor(None, _read_and_upload)
+            
+            # 获取公开 URL
+            segment_url = get_file_url("clips", storage_path, expires_in=3600)
+            
+            logger.info(f"[VideoReplace] 裁剪完成: {duration_seconds:.1f}s, URL: {segment_url[:60]}...")
+            return segment_url
+            
+        finally:
+            # 清理临时文件
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+    async def merge_segment_videos(
+        self,
+        segment_video_urls: List[str],
+        output_task_id: str
+    ) -> str:
+        """
+        合并多个分片视频
+        
+        Args:
+            segment_video_urls: 按顺序排列的分片视频 URL 列表
+            output_task_id: 输出任务 ID（用于命名）
+            
+        Returns:
+            合并后的视频 URL
+        """
+        import tempfile
+        from .supabase_client import get_file_url, supabase
+        
+        if not segment_video_urls:
+            raise ValueError("没有要合并的视频")
+        
+        if len(segment_video_urls) == 1:
+            return segment_video_urls[0]
+        
+        logger.info(f"[VideoReplace] 合并 {len(segment_video_urls)} 个分片视频")
+        
+        # 下载所有分片视频
+        segment_paths = []
+        try:
+            for i, url in enumerate(segment_video_urls):
+                response = await self.http_client.get(url, follow_redirects=True)
+                response.raise_for_status()
+                
+                with tempfile.NamedTemporaryFile(suffix=f"_seg{i}.mp4", delete=False) as f:
+                    f.write(response.content)
+                    segment_paths.append(f.name)
+            
+            # 创建 ffmpeg 合并列表
+            list_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+            for path in segment_paths:
+                list_file.write(f"file '{path}'\n")
+            list_file.close()
+            
+            # 输出文件
+            output_path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+            
+            # 使用 ffmpeg concat 合并（异步执行，不阻塞事件循环）
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", list_file.name,
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-preset", "fast",
+                output_path
+            ]
+            
+            # ★★★ 使用 asyncio.create_subprocess_exec 避免阻塞 ★★★
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                raise RuntimeError(f"ffmpeg 合并失败: {stderr.decode()}")
+            
+            # 上传合并后的视频（在线程池中执行，避免阻塞）
+            storage_path = f"processed/{output_task_id}_merged.mp4"
+            
+            def _read_and_upload_merged():
+                with open(output_path, "rb") as f:
+                    merged_data = f.read()
+                supabase.storage.from_("clips").upload(
+                    storage_path,
+                    merged_data,
+                    file_options={"content-type": "video/mp4", "upsert": "true"}
+                )
+            
+            await asyncio.get_event_loop().run_in_executor(None, _read_and_upload_merged)
+            
+            # 获取公开 URL
+            merged_url = get_file_url("clips", storage_path, expires_in=86400)  # 24小时有效
+            
+            logger.info(f"[VideoReplace] 合并完成: {merged_url[:60]}...")
+            return merged_url
+            
+        finally:
+            # 清理临时文件
+            for path in segment_paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+            if 'list_file' in dir() and os.path.exists(list_file.name):
+                os.unlink(list_file.name)
+            if 'output_path' in dir() and os.path.exists(output_path):
+                os.unlink(output_path)
+
+    async def check_and_merge_segments(
+        self,
+        parent_task_id: str,
+        clip_id: str,
+    ) -> Optional[str]:
+        """
+        检查分片任务是否全部完成，如果完成则合并
+        
+        Args:
+            parent_task_id: 父任务 ID
+            clip_id: Clip ID
+            
+        Returns:
+            合并后的视频 URL，如果还未全部完成则返回 None
+        """
+        # 从数据库获取所有分片任务
+        try:
+            result = supabase.table("tasks").select(
+                "id, status, result_url, metadata"
+            ).eq("clip_id", clip_id).execute()
+            
+            if not result.data:
+                return None
+            
+            # 筛选属于同一父任务的分片任务
+            segment_tasks = [
+                t for t in result.data
+                if t.get("metadata", {}).get("parent_task_id") == parent_task_id
+            ]
+            
+            if not segment_tasks:
+                return None
+            
+            # 检查是否全部完成
+            all_completed = all(t.get("status") == "completed" for t in segment_tasks)
+            if not all_completed:
+                pending = sum(1 for t in segment_tasks if t.get("status") != "completed")
+                logger.info(f"[VideoReplace] 还有 {pending}/{len(segment_tasks)} 个分片任务未完成")
+                return None
+            
+            # 按 segment_index 排序
+            segment_tasks.sort(key=lambda t: t.get("metadata", {}).get("segment_index", 0))
+            
+            # 获取所有结果 URL
+            segment_urls = [t.get("result_url") for t in segment_tasks if t.get("result_url")]
+            
+            if len(segment_urls) != len(segment_tasks):
+                logger.warning(f"[VideoReplace] 部分分片任务没有结果 URL")
+                return None
+            
+            # 合并视频
+            merged_url = await self.merge_segment_videos(segment_urls, parent_task_id)
+            
+            logger.info(f"[VideoReplace] 所有分片已合并: {merged_url[:60]}...")
+            return merged_url
+            
+        except Exception as e:
+            logger.error(f"[VideoReplace] 检查分片任务失败: {e}")
+            return None
+
+    async def create_background_replace_task(
+        self,
+        clip_id: str,
+        video_url: str,
+        new_background_url: str,
+        prompt: Optional[str] = None,
+        user_id: Optional[str] = None,
+        project_id: Optional[str] = None
+    ) -> ReplaceTask:
+        """
+        ★★★ 治本方案：创建背景替换任务（立即返回，异步执行）★★★
+        
+        只创建任务记录，不执行实际替换。
+        实际替换由 execute_background_replace 在后台执行。
+        
+        Returns:
+            ReplaceTask: 刚创建的任务（状态为 PENDING）
+        """
+        task = ReplaceTask(
+            id=str(uuid.uuid4()),
+            clip_id=clip_id,
+            video_url=video_url,
+            strategy=ReplaceStrategy.BACKGROUND_SWAP,
+            status=ReplaceStatus.PENDING,
+            progress=0,
+            new_background_url=new_background_url,
+            prompt=prompt,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        self._tasks[task.id] = task
+        
+        # 保存到数据库
+        if user_id:
+            await self._save_task_to_db(task, user_id, project_id)
+        
+        logger.info(f"[VideoReplace] 创建背景替换任务: {task.id}")
+        return task
+    
+    async def execute_background_replace(
+        self,
+        task_id: str,
+        progress_callback: Optional[callable] = None
+    ) -> ReplaceTask:
+        """
+        ★★★ 治本方案：执行背景替换（在后台异步调用）★★★
+        
+        Args:
+            task_id: 任务 ID
+            progress_callback: 进度回调
+            
+        Returns:
+            ReplaceTask: 完成后的任务
+        """
+        task = self._tasks.get(task_id)
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+        
+        video_url = task.video_url
+        clip_id = task.clip_id
+        new_background_url = task.new_background_url
+        
+        try:
+            # Step 0: 解析视频 URL（将 localhost URL 转换为公开可访问的 URL）
+            from app.services.background_replace_workflow import resolve_video_download_url
+            
+            resolved_url = video_url
+            if "localhost" in video_url or "127.0.0.1" in video_url:
+                logger.info(f"[VideoReplace] 检测到本地 URL，尝试解析: {video_url[:50]}...")
+                resolved = await resolve_video_download_url(clip_id)
+                if resolved:
+                    resolved_url = resolved
+                    logger.info(f"[VideoReplace] 解析成功: {resolved_url[:80]}...")
+                else:
+                    raise ValueError(f"无法解析 clip {clip_id} 的视频 URL，请确保视频已上传到云端")
+            
+            # Step 1: 初始化视频 (0-10%)
+            await self._update_status(task, ReplaceStatus.INITIALIZING, 5, "正在初始化视频...", progress_callback)
+            
+            try:
+                init_result = await self.kling.init_video_selection(video_url=resolved_url)
+            except Exception as e:
+                error_str = str(e)
+                # ★ 治本：解析 Kling API 的具体错误
+                if "400" in error_str:
+                    # 400 错误通常是参数问题
+                    raise ValueError(f"视频不符合 Kling API 要求（需要 MP4/MOV 格式，2-5秒或7-10秒，720-2160px）: {error_str}")
+                raise
+                
+            if init_result.get("code") != 0:
+                error_msg = init_result.get("message", str(init_result))
+                # 如果是时长限制问题，给出明确提示
+                if "duration" in error_msg.lower() or "时长" in error_msg:
+                    raise ValueError(f"视频时长不符合要求（需要2-5秒或7-10秒）: {error_msg}")
+                raise ValueError(f"初始化视频失败: {error_msg}")
+            
+            data = init_result.get("data", {})
+            task.session_id = data.get("session_id")
+            video_duration_ms = data.get("original_duration", 0)
+            video_duration = video_duration_ms / 1000  # ms -> s
+            video_width = data.get("width", 720)
+            video_height = data.get("height", 1280)
+            logger.info(f"[VideoReplace] 初始化成功: session_id={task.session_id}, duration={video_duration}s, size={video_width}x{video_height}")
+            
+            # 计算目标 duration（必须匹配 API 要求：5 或 10）
+            if video_duration <= 5:
+                target_duration = "5"
+            else:
+                target_duration = "10"
+            
+            # Step 2: 选择人物区域（选中人物，让 AI 知道要保留什么）(10-25%)
+            # 文档说明：选中的点会被识别为一个语义对象
+            # 我们选中人物中心点，AI 会自动分割出整个人物
+            await self._update_status(task, ReplaceStatus.SELECTING, 15, "正在识别人物区域...", progress_callback)
+            
+            # 在画面中心偏上位置标记人物（通常人物头部在这个区域）
+            # 多个点帮助 AI 更好地识别整个人物
+            person_points = [
+                {"x": 0.5, "y": 0.3},   # 头部区域
+                {"x": 0.5, "y": 0.5},   # 躯干区域
+            ]
+            
+            selection_result = await self.kling.add_video_selection(
+                session_id=task.session_id,
+                frame_index=0,  # 第一帧标记
+                points=person_points
+            )
+            
+            if selection_result.get("code") != 0:
+                raise ValueError(f"选择人物区域失败: {selection_result.get('message', str(selection_result))}")
+            
+            await self._update_status(task, ReplaceStatus.SELECTING, 25, "人物区域已识别", progress_callback)
+            
+            # Step 3: 提交替换任务 (25-90%)
+            await self._update_status(task, ReplaceStatus.PROCESSING, 30, "正在替换背景...", progress_callback)
+            
+            # ★★★ 治本：使用正确的 API 方法 create_multi_elements_task ★★★
+            # 构建替换 prompt：使用新背景图片替换视频中的背景（非选中区域）
+            swap_prompt = f"使用<<<image_1>>>中的背景场景，替换<<<video_1>>>中的背景"
+            
+            swap_result = await self.kling.create_multi_elements_task(
+                session_id=task.session_id,
+                edit_mode="swap",
+                prompt=swap_prompt,
+                options={
+                    "image_list": [new_background_url],
+                    "duration": target_duration,
+                    "mode": "std",
+                }
+            )
+            
+            if swap_result.get("code") != 0:
+                raise ValueError(f"替换请求失败: {swap_result.get('message', str(swap_result))}")
+            
+            task.task_id = swap_result.get("data", {}).get("task_id")
+            logger.info(f"[VideoReplace] 替换任务已提交: task_id={task.task_id}")
+            
+            # 轮询等待完成
+            result_url = await self._poll_task_completion(
+                task, progress_callback,
+                start_progress=35, end_progress=90,
+                max_wait_seconds=300
+            )
+            
+            # Step 4: 处理音频（如果 Kling 没有保留）(90-100%)
+            await self._update_status(task, ReplaceStatus.MERGING, 95, "正在处理音频...", progress_callback)
+            
+            # 先检查生成的视频是否有音频
+            # TODO: 如果没有，需要从原视频提取并合并
+            final_url = result_url
+            
+            # 上传结果到我们的存储（避免 Kling URL 过期）
+            try:
+                final_url = await self._upload_to_storage(result_url, task.id)
+            except Exception as e:
+                logger.warning(f"[VideoReplace] 上传到存储失败，使用原 URL: {e}")
+            
+            # 完成
+            task.result_video_url = final_url
+            await self._update_status(task, ReplaceStatus.COMPLETED, 100, "替换完成！", progress_callback)
+            
+            return task
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"[VideoReplace] 背景替换失败: {e}\n{traceback.format_exc()}")
+            task.status = ReplaceStatus.FAILED
+            task.error = str(e) if str(e) else repr(e)
+            task.updated_at = datetime.utcnow()
+            # ★★★ 治本修复：将失败状态同步到数据库 ★★★
+            await self._update_task_in_db(task)
+            if progress_callback:
+                await progress_callback(task.progress, f"失败: {e}")
+            raise
+
     async def replace_background(
         self,
         clip_id: str,
@@ -258,6 +977,9 @@ class VideoElementReplaceService:
     ) -> ReplaceTask:
         """
         替换视频背景（策略A - 治本方案）
+        
+        ★★★ 已废弃：请使用 create_background_replace_task + execute_background_replace ★★★
+        此方法保留是为了兼容性，内部会调用新方法。
         
         使用 Kling multi-elements API 直接替换视频背景，
         保持人物动作、口型、音频完全不变。
@@ -316,7 +1038,16 @@ class VideoElementReplaceService:
             # Step 1: 初始化视频 (0-10%)
             await self._update_status(task, ReplaceStatus.INITIALIZING, 5, "正在初始化视频...", progress_callback)
             
-            init_result = await self.kling.init_video_selection(video_url=resolved_url)
+            try:
+                init_result = await self.kling.init_video_selection(video_url=resolved_url)
+            except Exception as e:
+                error_str = str(e)
+                # ★ 治本：解析 Kling API 的具体错误
+                if "400" in error_str:
+                    # 400 错误通常是参数问题
+                    raise ValueError(f"视频不符合 Kling API 要求（需要 MP4/MOV 格式，2-5秒或7-10秒，720-2160px）: {error_str}")
+                raise
+                
             if init_result.get("code") != 0:
                 error_msg = init_result.get("message", str(init_result))
                 # 如果是时长限制问题，给出明确提示
@@ -418,6 +1149,9 @@ class VideoElementReplaceService:
             logger.error(f"[VideoReplace] 背景替换失败: {e}\n{traceback.format_exc()}")
             task.status = ReplaceStatus.FAILED
             task.error = str(e) if str(e) else repr(e)
+            task.updated_at = datetime.utcnow()
+            # ★★★ 治本修复：将失败状态同步到数据库 ★★★
+            await self._update_task_in_db(task)
             if progress_callback:
                 await progress_callback(task.progress, f"失败: {e}")
             raise
@@ -558,6 +1292,9 @@ class VideoElementReplaceService:
             logger.error(f"[VideoReplace] 人物替换失败: {e}")
             task.status = ReplaceStatus.FAILED
             task.error = str(e)
+            task.updated_at = datetime.utcnow()
+            # ★★★ 治本修复：将失败状态同步到数据库 ★★★
+            await self._update_task_in_db(task)
             if progress_callback:
                 await progress_callback(task.progress, f"失败: {e}")
             raise

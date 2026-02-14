@@ -30,9 +30,9 @@ import {
   AITaskResponse,
   AITaskStatus,
   AITaskType 
-} from '@/features/editor/lib/rabbit-hole-api';
+} from '@/lib/api/kling-tasks';
 import { projectApi } from '@/lib/api';
-import { RabbitLoader } from '@/components/common/RabbitLoader';
+import { LepusLoader } from '@/components/common/LepusLoader';
 import { toast } from '@/lib/stores/toast-store';
 import { UserMaterialsView } from './UserMaterialsView';
 
@@ -59,6 +59,12 @@ const TASK_TYPE_CONFIG: Record<AITaskType, { label: string; color: string; icon:
   image_generation: { label: '图像生成', color: 'pink', icon: Image },
   omni_image: { label: 'Omni-Image', color: 'fuchsia', icon: Image },
   face_swap: { label: 'AI换脸', color: 'orange', icon: Video },
+  skin_enhance: { label: '皮肤增强', color: 'rose', icon: Image },
+  relight: { label: '重新打光', color: 'yellow', icon: Image },
+  outfit_swap: { label: '换装', color: 'indigo', icon: Image },
+  ai_stylist: { label: 'AI造型师', color: 'purple', icon: Image },
+  outfit_shot: { label: '穿搭展示', color: 'emerald', icon: Image },
+  doubao_image: { label: 'Doubao生图', color: 'sky', icon: Image },
 };
 
 // ============================================
@@ -68,8 +74,8 @@ const TASK_TYPE_CONFIG: Record<AITaskType, { label: string; color: string; icon:
 function StatusBadge({ status }: { status: AITaskStatus }) {
   const config = {
     pending: { label: '等待中', className: 'bg-gray-100 text-gray-600' },
-    processing: { label: '处理中', className: 'bg-blue-100 text-blue-600' },
-    completed: { label: '已完成', className: 'bg-green-100 text-green-600' },
+    processing: { label: '处理中', className: 'bg-gray-100 text-gray-600' },
+    completed: { label: '已完成', className: 'bg-gray-100 text-gray-600' },
     failed: { label: '失败', className: 'bg-red-100 text-red-600' },
     cancelled: { label: '已取消', className: 'bg-gray-100 text-gray-500' },
   };
@@ -144,14 +150,14 @@ function TaskCard({ task, onAddToProject, addedTaskIds, selectMode, isSelected, 
           <div className="w-full h-full flex flex-col items-center justify-center">
             {task.status === 'processing' ? (
               <>
-                <RabbitLoader size={32} />
+                <LepusLoader size={32} />
                 <span className="text-xs text-gray-500 mt-2">{task.progress}%</span>
               </>
             ) : task.status === 'failed' ? (
               <XCircle size={32} className="text-red-400" />
             ) : (
               <>
-                <RabbitLoader size={32} />
+                <LepusLoader size={32} />
                 <span className="text-xs text-gray-400 mt-2">加载中...</span>
               </>
             )}
@@ -191,7 +197,7 @@ function TaskCard({ task, onAddToProject, addedTaskIds, selectMode, isSelected, 
         {/* 处理中状态 */}
         {task.status === 'processing' && (
           <div className="absolute bottom-2 right-2">
-            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-500 text-white">
+            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-700 text-white">
               处理中 {task.progress}%
             </span>
           </div>
@@ -243,7 +249,7 @@ function TaskCard({ task, onAddToProject, addedTaskIds, selectMode, isSelected, 
               预览
             </a>
             {isAdded ? (
-              <div className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-green-100 rounded-lg text-xs text-green-700">
+              <div className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-gray-100 rounded-lg text-xs text-gray-700">
                 <CheckCircle size={12} />
                 已添加
               </div>
@@ -353,8 +359,8 @@ function AICreationsContent() {
         setShowProjectSelector(false);
         setSelectedTaskId(null);
         
-        // 添加成功后跳转到编辑器页面
-        window.location.href = `/editor?project=${result.project_id}`;
+        // 添加成功后跳转到视觉编辑器页面
+        window.location.href = `/visual-editor?project=${result.project_id}`;
       }
     } catch (err) {
       console.error('添加到项目失败:', err);
@@ -474,7 +480,7 @@ function AICreationsContent() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as AITaskStatus | '')}
-              className="h-8 px-2 bg-gray-100 border-0 rounded-lg text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              className="h-8 px-2 bg-gray-100 border-0 rounded-lg text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400"
             >
               <option value="">全部状态</option>
               <option value="completed">已完成</option>
@@ -486,7 +492,7 @@ function AICreationsContent() {
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
-              className="h-8 px-2 bg-gray-100 border-0 rounded-lg text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              className="h-8 px-2 bg-gray-100 border-0 rounded-lg text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400"
             >
               <option value="">全部类型</option>
               {Object.entries(TASK_TYPE_CONFIG).map(([key, config]) => (
@@ -518,7 +524,7 @@ function AICreationsContent() {
                   disabled={selectedTaskIds.size === 0 || deleting}
                   className="h-8 px-3 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors flex items-center space-x-1.5 disabled:opacity-50"
                 >
-                  {deleting ? <RabbitLoader size={16} /> : <Trash2 size={16} />}
+                  {deleting ? <LepusLoader size={16} /> : <Trash2 size={16} />}
                   <span>删除 ({selectedTaskIds.size})</span>
                 </button>
                 <button
@@ -543,7 +549,7 @@ function AICreationsContent() {
             <p className="text-gray-600 mb-4">{error}</p>
             <button
               onClick={loadTasks}
-              className="px-4 py-2 bg-violet-500 hover:bg-violet-600 text-white rounded-lg text-sm"
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm"
             >
               重试
             </button>
@@ -592,12 +598,12 @@ function AICreationsContent() {
               <button
                 onClick={() => confirmAddToProject(null)}
                 disabled={addingToProject}
-                className="w-full px-4 py-3 text-left hover:bg-violet-50 transition-colors flex items-center gap-3 disabled:opacity-50 border-b border-gray-200"
+                className="w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors flex items-center gap-3 disabled:opacity-50 border-b border-gray-200"
               >
-                <div className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center">
-                  <Plus size={16} className="text-violet-600" />
+                <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
+                  <Plus size={16} className="text-gray-600" />
                 </div>
-                <span className="text-sm text-violet-600 font-medium">新建项目并编辑</span>
+                <span className="text-sm text-gray-600 font-medium">新建项目并编辑</span>
               </button>
               
               {loadingProjects ? (
@@ -649,7 +655,7 @@ export function MyMaterialsView() {
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl flex items-center justify-center">
+            <div className="w-10 h-10 bg-gray-700 rounded-xl flex items-center justify-center">
               <FolderHeart size={20} className="text-white" />
             </div>
             <div>

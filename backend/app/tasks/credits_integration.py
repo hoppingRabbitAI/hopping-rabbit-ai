@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - AI 任务积分集成
+Lepus AI - AI 任务积分集成
 在 AI 任务创建和完成时管理积分
 
 用法:
@@ -23,24 +23,18 @@ TASK_TYPE_TO_MODEL_KEY = {
     # ========================================
     # 会话级收费 (创建项目时一次性收费)
     # ========================================
-    "ai-create": "ai_create",              # AI 智能剪辑 - 100 积分/次
     "voice-extract": None,                  # 提取字幕/音频 - 免费
     
     # ========================================
     # 基础功能 (免费，积分设为 0)
     # ========================================
     "transcribe": "whisper_transcribe",
-    "filler_detection": "filler_detection",
-    "stem_separation": "stem_separation",
-    "diarization": "diarization",
-    "vad": "vad",
     
     # ========================================
     # 智能功能 (免费，积分设为 0)
     # ========================================
     "smart_clip": "smart_clip",
     "smart_camera": "smart_camera",
-    "smart_clean": "smart_clean",
     "ai_analysis": "gpt4_analysis",
     
     # ========================================

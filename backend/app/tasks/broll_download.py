@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - B-roll 下载任务
+Lepus AI - B-roll 下载任务
 使用 Celery 后台任务下载 B-roll 视频到 Supabase Storage
 ★ 优化：下载后异步上传到 Cloudflare Stream 获取 HLS
 """
@@ -141,8 +141,6 @@ def download_broll_video(
             "width": video_data.get("width"),
             "height": video_data.get("height"),
             "broll_metadata": broll_metadata,
-            # ★★★ 关键：Pexels 视频是 H.264，不需要转码 ★★★
-            "needs_transcode": False,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }

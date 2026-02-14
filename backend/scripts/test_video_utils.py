@@ -2,12 +2,12 @@
 测试视频工具函数
 
 运行方式:
-cd /Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend
+cd /Users/hexiangyang/rabbit-ai/lepus-ai/backend
 python -m scripts.test_video_utils
 """
 
 import sys
-sys.path.insert(0, '/Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend')
+sys.path.insert(0, '/Users/hexiangyang/rabbit-ai/lepus-ai/backend')
 
 from app.services.video_utils import (
     detect_video_orientation,

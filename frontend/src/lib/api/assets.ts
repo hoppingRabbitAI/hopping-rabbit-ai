@@ -1,7 +1,7 @@
 /**
  * 资源管理 API
  */
-import type { Asset } from '@/features/editor/types';
+import type { Asset } from '@/types/editor';
 import type {
   ApiResponse,
   PresignUploadResponse,
@@ -33,7 +33,7 @@ const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB
 // 进度日志节流间隔（毫秒）
 const PROGRESS_LOG_THROTTLE = 500;
 
-export class AssetApi extends ApiClient {
+class AssetApi extends ApiClient {
   /**
    * 获取资源列表
    */
@@ -101,6 +101,34 @@ export class AssetApi extends ApiClient {
   }
 
   /**
+   * ★ 为 AI 生成任务预创建占位 asset 记录
+   * 返回真实 asset_id，用于创建 placeholder FreeNode 时避免 FK 约束报错
+   */
+  async createPlaceholderAsset(data: {
+    project_id: string;
+    file_type: 'video' | 'image';
+    name?: string;
+  }): Promise<ApiResponse<{ asset_id: string }>> {
+    return this.request('/assets/create-placeholder', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  /**
+   * ★ AI 生成完成后，将占位 asset 标记为 ready 并写入真实 URL
+   */
+  async finalizePlaceholderAsset(assetId: string, data: {
+    result_url: string;
+    output_asset_id?: string;
+  }): Promise<ApiResponse<unknown>> {
+    return this.request(`/assets/${assetId}/finalize-placeholder`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  /**
    * 获取波形数据
    */
   async getWaveform(assetId: string): Promise<ApiResponse<WaveformData>> {
@@ -141,7 +169,7 @@ export const assetApi = new AssetApi();
 /**
  * 上传进度回调
  */
-export type UploadProgressCallback = (progress: {
+type UploadProgressCallback = (progress: {
   bytesUploaded: number;
   bytesTotal: number;
   percentage: number;

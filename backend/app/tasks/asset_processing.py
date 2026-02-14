@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 资源处理任务
+Lepus AI - 资源处理任务
 处理上传的媒体文件：
 - 生成代理视频（低分辨率预览）
 - 提取波形数据
@@ -1732,7 +1732,7 @@ async def extract_media_metadata(file_url: str) -> dict:
 try:
     from ..celery_config import celery_app, update_task_progress, update_task_status
     
-    @celery_app.task(bind=True, queue="cpu_low")
+    @celery_app.task(bind=True, queue="gpu")
     def asset_processing_task(
         self,
         task_id: str,

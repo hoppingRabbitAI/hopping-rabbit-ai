@@ -161,7 +161,7 @@ class MultiStepRefineService:
                 "image_list": image_list,
                 "aspect_ratio": aspect_ratio,
                 "n": n,
-                "model_name": "kling-v2-1"  # 使用最新模型
+                "model_name": "kling-image-o1"  # omni-image 专用模型
             })
             
             if create_result.get("code") != 0:

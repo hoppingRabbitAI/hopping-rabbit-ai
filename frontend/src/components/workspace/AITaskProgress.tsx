@@ -22,7 +22,7 @@ import {
   AITaskStatus,
   AITaskType,
   addAITaskToProject
-} from '@/features/editor/lib/rabbit-hole-api';
+} from '@/lib/api/kling-tasks';
 import { projectApi } from '@/lib/api';
 
 // 使用单例 Supabase 客户端（用于 Realtime 订阅）
@@ -60,6 +60,12 @@ const TASK_TYPE_CONFIG: Record<AITaskType, { label: string; color: string }> = {
   image_generation: { label: '图像生成', color: 'pink' },
   omni_image: { label: 'Omni-Image', color: 'fuchsia' },
   face_swap: { label: 'AI换脸', color: 'orange' },
+  skin_enhance: { label: '皮肤增强', color: 'rose' },
+  relight: { label: '重新打光', color: 'yellow' },
+  outfit_swap: { label: '换装', color: 'indigo' },
+  ai_stylist: { label: 'AI造型师', color: 'purple' },
+  outfit_shot: { label: '穿搭展示', color: 'emerald' },
+  doubao_image: { label: 'Doubao生图', color: 'sky' },
 };
 
 // ============================================
@@ -71,9 +77,9 @@ function StatusIcon({ status }: { status: AITaskStatus }) {
     case 'pending':
       return <Clock size={20} className="text-gray-400" />;
     case 'processing':
-      return <Loader2 size={20} className="text-blue-500 animate-spin" />;
+      return <Loader2 size={20} className="text-gray-500 animate-spin" />;
     case 'completed':
-      return <CheckCircle size={20} className="text-green-500" />;
+      return <CheckCircle size={20} className="text-gray-500" />;
     case 'failed':
       return <XCircle size={20} className="text-red-500" />;
     case 'cancelled':
@@ -89,21 +95,21 @@ function StatusIcon({ status }: { status: AITaskStatus }) {
 
 function ProgressBar({ progress, color }: { progress: number; color: string }) {
   const colorClasses: Record<string, string> = {
-    violet: 'bg-violet-500',
-    blue: 'bg-blue-500',
-    cyan: 'bg-cyan-500',
-    teal: 'bg-teal-500',
-    green: 'bg-green-500',
-    amber: 'bg-amber-500',
-    pink: 'bg-pink-500',
-    fuchsia: 'bg-fuchsia-500',
-    orange: 'bg-orange-500',
+    violet: 'bg-gray-500',
+    blue: 'bg-gray-500',
+    cyan: 'bg-gray-500',
+    teal: 'bg-gray-500',
+    green: 'bg-gray-500',
+    amber: 'bg-gray-500',
+    pink: 'bg-gray-500',
+    fuchsia: 'bg-gray-500',
+    orange: 'bg-gray-500',
   };
   
   return (
     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
       <div 
-        className={`h-full ${colorClasses[color] || 'bg-blue-500'} transition-all duration-300`}
+        className={`h-full ${colorClasses[color] || 'bg-gray-500'} transition-all duration-300`}
         style={{ width: `${progress}%` }}
       />
     </div>
@@ -132,6 +138,7 @@ export function AITaskProgress({
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [addingToProject, setAddingToProject] = useState(false);
   const [addedProjectId, setAddedProjectId] = useState<string | null>(null);
+  const [stuckWarning, setStuckWarning] = useState<string | null>(null);
 
   // 加载项目列表
   const loadProjects = useCallback(async () => {
@@ -160,8 +167,8 @@ export function AITaskProgress({
         setShowProjectSelector(false);
         onAddedToProject?.(result.asset_id, result.project_id);
         
-        // 添加成功后跳转到编辑器页面
-        window.location.href = `/editor?project=${result.project_id}`;
+        // 添加成功后跳转到视觉编辑器页面
+        window.location.href = `/visual-editor?project=${result.project_id}`;
       }
     } catch (err) {
       console.error('添加到项目失败:', err);
@@ -265,6 +272,26 @@ export function AITaskProgress({
     };
   }, [taskId, isSubscribed, onComplete, onClose, autoClose]);
 
+  // 卡住检测：任务 pending 超过 30 秒 或 processing 超过 10 分钟，提示用户
+  useEffect(() => {
+    if (!task || task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+      setStuckWarning(null);
+      return;
+    }
+    const timer = setInterval(() => {
+      if (!task.created_at) return;
+      const elapsed = (Date.now() - new Date(task.created_at).getTime()) / 1000;
+      if (task.status === 'pending' && elapsed > 30) {
+        setStuckWarning(`任务已等待 ${Math.floor(elapsed / 60)} 分钟，Celery Worker 可能未监听对应队列。请检查后台服务。`);
+      } else if (task.status === 'processing' && elapsed > 600) {
+        setStuckWarning(`任务已处理 ${Math.floor(elapsed / 60)} 分钟，可能卡住。可尝试关闭后重新提交。`);
+      } else {
+        setStuckWarning(null);
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [task]);
+
   // 重试（重新加载初始状态）
   const handleRetry = useCallback(async () => {
     setError(null);
@@ -345,12 +372,20 @@ export function AITaskProgress({
           </div>
         )}
 
+        {/* 卡住警告 */}
+        {stuckWarning && (
+          <div className="flex items-start gap-2 p-3 bg-gray-100 rounded-lg">
+            <Clock size={16} className="text-gray-500 mt-0.5 flex-shrink-0" />
+            <p className="text-sm text-gray-600">{stuckWarning}</p>
+          </div>
+        )}
+
         {/* 完成结果 */}
         {task?.status === 'completed' && task.output_url && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg">
-              <CheckCircle size={16} className="text-green-500" />
-              <span className="text-sm text-green-700">生成完成！</span>
+            <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+              <CheckCircle size={16} className="text-gray-500" />
+              <span className="text-sm text-gray-700">生成完成！</span>
             </div>
             
             {/* 预览/下载/添加到项目 */}
@@ -377,7 +412,7 @@ export function AITaskProgress({
             {/* 添加到项目按钮 */}
             <div className="relative">
               {addedProjectId ? (
-                <div className="flex items-center justify-center gap-2 py-2 px-4 bg-green-100 rounded-lg text-sm text-green-700">
+                <div className="flex items-center justify-center gap-2 py-2 px-4 bg-gray-100 rounded-lg text-sm text-gray-700">
                   <CheckCircle size={16} />
                   已添加到项目
                 </div>
@@ -391,7 +426,7 @@ export function AITaskProgress({
                       }
                     }}
                     disabled={addingToProject}
-                    className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-violet-500 hover:bg-violet-600 disabled:bg-violet-300 rounded-lg text-sm text-white transition-colors"
+                    className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-300 rounded-lg text-sm text-white transition-colors"
                   >
                     {addingToProject ? (
                       <Loader2 size={16} className="animate-spin" />
@@ -408,7 +443,7 @@ export function AITaskProgress({
                       {/* 新建项目按钮 - 始终显示在最上面 */}
                       <button
                         onClick={() => handleAddToProject(null)}
-                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-violet-50 transition-colors border-b border-gray-200 flex items-center gap-2 text-violet-600 font-medium"
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition-colors border-b border-gray-200 flex items-center gap-2 text-gray-600 font-medium"
                       >
                         <Plus size={16} />
                         新建项目并编辑
@@ -477,8 +512,8 @@ function getStatusLabel(status?: AITaskStatus): string {
 function getStatusBadgeClass(status?: AITaskStatus): string {
   switch (status) {
     case 'pending': return 'bg-gray-100 text-gray-600';
-    case 'processing': return 'bg-blue-100 text-blue-600';
-    case 'completed': return 'bg-green-100 text-green-600';
+    case 'processing': return 'bg-gray-100 text-gray-600';
+    case 'completed': return 'bg-gray-100 text-gray-600';
     case 'failed': return 'bg-red-100 text-red-600';
     case 'cancelled': return 'bg-gray-100 text-gray-500';
     default: return 'bg-gray-100 text-gray-600';
@@ -526,7 +561,7 @@ export function AITaskList({ tasks, onTaskClick }: AITaskListProps) {
               </p>
             </div>
             {task.status === 'processing' && (
-              <span className="text-sm text-blue-500">{task.progress}%</span>
+              <span className="text-sm text-gray-500">{task.progress}%</span>
             )}
           </div>
         );

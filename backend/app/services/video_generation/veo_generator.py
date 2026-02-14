@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Google Veo 视频生成器
+Lepus AI - Google Veo 视频生成器
 
 实现 VideoGeneratorBase 接口
 注意: Veo API 目前处于预览阶段，需要申请访问权限

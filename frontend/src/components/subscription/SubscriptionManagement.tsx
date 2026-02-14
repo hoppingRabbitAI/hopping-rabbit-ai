@@ -78,13 +78,13 @@ function formatDate(dateString?: string): string {
 function getTierIcon(slug: string) {
   switch (slug) {
     case 'creator':
-      return <Rocket className="w-5 h-5 text-pink-500" />;
+      return <Rocket className="w-5 h-5 text-gray-500" />;
     case 'ultimate':
-      return <Gem className="w-5 h-5 text-purple-500" />;
+      return <Gem className="w-5 h-5 text-gray-500" />;
     case 'pro':
-      return <Crown className="w-5 h-5 text-amber-500" />;
+      return <Crown className="w-5 h-5 text-gray-500" />;
     case 'basic':
-      return <Zap className="w-5 h-5 text-blue-500" />;
+      return <Zap className="w-5 h-5 text-gray-500" />;
     default:
       return <Zap className="w-5 h-5 text-gray-500" />;
   }
@@ -212,7 +212,7 @@ export function SubscriptionManagement({
       {message && (
         <div className={`mx-6 mt-4 p-3 rounded-lg flex items-center gap-2 ${
           message.type === 'success' 
-            ? 'bg-green-50 text-green-700 border border-green-200' 
+            ? 'bg-gray-50 text-gray-700 border border-gray-200' 
             : 'bg-red-50 text-red-700 border border-red-200'
         }`}>
           {message.type === 'success' ? (
@@ -235,7 +235,7 @@ export function SubscriptionManagement({
             </p>
           </div>
           {isCanceled && (
-            <span className="ml-auto px-2 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded">
+            <span className="ml-auto px-2 py-1 bg-gray-100 text-gray-700 text-xs font-medium rounded">
               已取消续期
             </span>
           )}
@@ -263,7 +263,7 @@ export function SubscriptionManagement({
             )}
             <div className="flex justify-between">
               <span className="text-gray-600">自动续期</span>
-              <span className={`font-medium ${subscription.auto_renew ? 'text-green-600' : 'text-gray-500'}`}>
+              <span className={`font-medium ${subscription.auto_renew ? 'text-gray-600' : 'text-gray-500'}`}>
                 {subscription.auto_renew ? '已开启' : '已关闭'}
               </span>
             </div>
@@ -284,8 +284,8 @@ export function SubscriptionManagement({
           {isFree && (
             <button
               onClick={handleUpgrade}
-              className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-pink-600 
-                       text-white font-medium rounded-lg hover:opacity-90 transition-opacity
+              className="w-full py-3 px-4 bg-gray-800 
+                       text-white font-medium rounded-lg hover:bg-gray-700 transition-colors
                        flex items-center justify-center gap-2"
             >
               <Crown className="w-5 h-5" />
@@ -301,8 +301,8 @@ export function SubscriptionManagement({
               {subscription.plan.slug !== 'creator' && (
                 <button
                   onClick={handleUpgrade}
-                  className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-pink-600 
-                           text-white font-medium rounded-lg hover:opacity-90 transition-opacity
+                  className="w-full py-3 px-4 bg-gray-800 
+                           text-white font-medium rounded-lg hover:bg-gray-700 transition-colors
                            flex items-center justify-center gap-2"
                 >
                   <Crown className="w-5 h-5" />
@@ -316,8 +316,8 @@ export function SubscriptionManagement({
                 <button
                   onClick={handleReactivate}
                   disabled={isLoading}
-                  className="w-full py-3 px-4 bg-green-600 text-white font-medium rounded-lg 
-                           hover:bg-green-700 transition-colors flex items-center justify-center gap-2
+                  className="w-full py-3 px-4 bg-gray-800 text-white font-medium rounded-lg 
+                           hover:bg-gray-700 transition-colors flex items-center justify-center gap-2
                            disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isLoading ? (
@@ -347,8 +347,8 @@ export function SubscriptionManagement({
           {isExpired && (
             <button
               onClick={handleUpgrade}
-              className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-pink-600 
-                       text-white font-medium rounded-lg hover:opacity-90 transition-opacity
+              className="w-full py-3 px-4 bg-gray-800 
+                       text-white font-medium rounded-lg hover:bg-gray-700 transition-colors
                        flex items-center justify-center gap-2"
             >
               <RefreshCw className="w-5 h-5" />
@@ -385,8 +385,8 @@ export function SubscriptionManagement({
                 }
               }}
               disabled={isLoading}
-              className="w-full py-2 px-4 border-2 border-dashed border-orange-400 text-orange-600 
-                       font-mono text-sm rounded-lg hover:bg-orange-50 transition-colors
+              className="w-full py-2 px-4 border-2 border-dashed border-gray-400 text-gray-600 
+                       font-mono text-sm rounded-lg hover:bg-gray-50 transition-colors
                        flex items-center justify-center gap-2 disabled:opacity-50"
             >
               🔧 [DEV] 重置订阅状态（模拟新用户）
@@ -400,15 +400,15 @@ export function SubscriptionManagement({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl">
             <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-amber-100 rounded-full">
-                <AlertTriangle className="w-6 h-6 text-amber-600" />
+              <div className="p-2 bg-gray-100 rounded-full">
+                <AlertTriangle className="w-6 h-6 text-gray-600" />
               </div>
               <h4 className="text-lg font-semibold text-gray-800">确认取消订阅？</h4>
             </div>
 
             {/* 关键信息：服务持续到何时 */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-              <p className="text-blue-700 text-sm">
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
+              <p className="text-gray-700 text-sm">
                 您的 <span className="font-medium">{subscription.plan.name}</span> 会员权益将持续到 <span className="font-medium">{formatDate(subscription.current_period_end)}</span>，届时将自动降级为免费用户。
               </p>
             </div>
@@ -439,7 +439,7 @@ export function SubscriptionManagement({
                 value={cancelReason}
                 onChange={(e) => setCancelReason(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm
-                         focus:outline-none focus:ring-2 focus:ring-purple-500/30 bg-white"
+                         focus:outline-none focus:ring-2 focus:ring-gray-400/30 bg-white"
               >
                 <option value="">请选择原因...</option>
                 <option value="too_expensive">价格太贵</option>
@@ -463,8 +463,8 @@ export function SubscriptionManagement({
                   setShowCancelConfirm(false);
                   setCancelReason('');
                 }}
-                className="flex-1 py-2.5 px-4 bg-gradient-to-r from-purple-600 to-pink-600 
-                         text-white font-medium rounded-lg hover:opacity-90 transition-opacity"
+                className="flex-1 py-2.5 px-4 bg-gray-800 
+                         text-white font-medium rounded-lg hover:bg-gray-700 transition-colors"
               >
                 保留订阅
               </button>

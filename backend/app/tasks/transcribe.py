@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - ASR 转写任务
+Lepus AI - ASR 转写任务
 使用豆包大模型录音文件识别 API（火山引擎）
 
 API 文档: https://www.volcengine.com/docs/6561/1354868
@@ -172,7 +172,7 @@ async def _submit_asr_task(
     # 构建请求体
     body = {
         "user": {
-            "uid": "hoppingrabbit-user"
+            "uid": "lepus-user"
         },
         "audio": {
             "format": audio_format,
@@ -657,7 +657,7 @@ def _get_audio_format(url: str) -> str:
 try:
     from ..celery_config import celery_app, update_task_progress, update_task_status
     
-    @celery_app.task(bind=True, queue="cpu")
+    @celery_app.task(bind=True, queue="gpu")
     def transcribe_task(
         self,
         task_id: str,

@@ -21,8 +21,8 @@ function ErrorModal({
       <div className="relative w-full max-w-md mx-4 bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-700 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         {/* 头部 */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-zinc-700 bg-zinc-800/50">
-          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-amber-500/20">
-            <AlertTriangle className="w-5 h-5 text-amber-500" />
+          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-gray-200">
+            <AlertTriangle className="w-5 h-5 text-gray-500" />
           </div>
           <div>
             <h3 className="text-lg font-semibold text-white">检测到多个错误</h3>
@@ -65,7 +65,7 @@ function ErrorModal({
           </button>
           <button
             onClick={onConfirm}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-gray-800 hover:bg-gray-700 transition-colors"
           >
             <RefreshCw className="w-4 h-4" />
             清除缓存并刷新

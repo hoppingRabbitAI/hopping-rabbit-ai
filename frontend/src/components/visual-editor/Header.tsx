@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useVisualEditorStore } from '@/stores/visualEditorStore';
 import { 
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import TaskHistoryButton from './TaskHistoryButton';
 import TaskHistorySidebar from './TaskHistorySidebar';
+import PreviewSidebar from './PreviewSidebar';
 
 export default function Header() {
   const router = useRouter();
@@ -20,53 +21,28 @@ export default function Header() {
     projectId, 
     projectName, 
     isSaving,
-    shots,
-    replaceShotVideo,
   } = useVisualEditorStore();
+  
+  // ★ 预览侧边栏状态
+  const [showPreview, setShowPreview] = useState(false);
   
   const handleBack = () => {
     router.back();
   };
   
   const handlePreview = () => {
-    console.log('Preview');
+    setShowPreview(true);
   };
   
   const handleSave = async () => {
     console.log('Save');
   };
   
-  // ★ 处理替换 Clip 视频
-  const handleReplaceClip = useCallback((clipId: string, newVideoUrl: string, taskId: string) => {
-    console.log('[Header] 替换 Clip 视频:', { clipId, newVideoUrl, taskId });
-    replaceShotVideo(clipId, newVideoUrl);
-    // TODO: 可以在这里添加成功提示
-  }, [replaceShotVideo]);
-  
+
   const handleExportToEditor = async () => {
     if (projectId) {
-      try {
-        const { sessionId } = useVisualEditorStore.getState();
-        if (sessionId) {
-          const { authFetch } = await import('@/lib/supabase/session');
-          await authFetch(`/api/workspace/sessions/${sessionId}/workflow-config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              shots: shots.map(shot => ({
-                id: shot.id,
-                index: shot.index,
-                startTime: shot.startTime,
-                endTime: shot.endTime,
-                background: shot.background,
-              })),
-            }),
-          });
-        }
-      } catch (err) {
-        console.error('Failed to save config:', err);
-      }
-      router.push(`/editor?project=${projectId}`);
+      // ★ 工作流配置保存（将来可直接存到 project 表的 metadata 字段）
+      router.push('/p');
     }
   };
   
@@ -91,12 +67,6 @@ export default function Header() {
           </div>
         </div>
         
-        {/* 分镜数量 */}
-        {shots.length > 0 && (
-          <div className="ml-4 px-2.5 py-1 bg-gray-100 rounded-lg text-xs text-gray-600 font-medium">
-            {shots.length} 个分镜
-          </div>
-        )}
       </div>
       
       {/* 右侧：操作按钮 */}
@@ -143,7 +113,12 @@ export default function Header() {
       {/* 任务历史侧边栏 */}
       <TaskHistorySidebar 
         projectId={projectId ?? undefined} 
-        onReplaceClip={handleReplaceClip}
+      />
+
+      {/* ★ 预览侧边栏 */}
+      <PreviewSidebar 
+        isOpen={showPreview}
+        onClose={() => setShowPreview(false)}
       />
     </header>
   );

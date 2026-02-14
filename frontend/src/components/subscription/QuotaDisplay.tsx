@@ -63,9 +63,9 @@ function getTierLabel(tier: string): string {
 function getTierBadgeStyle(tier: string): string {
   switch (tier) {
     case 'pro':
-      return 'bg-gradient-to-r from-amber-500 to-orange-500 text-white';
+      return 'bg-gray-700 text-white';
     case 'enterprise':
-      return 'bg-gradient-to-r from-purple-500 to-pink-500 text-white';
+      return 'bg-gray-800 text-white';
     default:
       return 'bg-gray-600 text-gray-200';
   }
@@ -82,12 +82,12 @@ interface ProgressBarProps {
   showWarning?: boolean;
 }
 
-function ProgressBar({ used, total, colorClass = 'bg-blue-500', showWarning = true }: ProgressBarProps) {
+function ProgressBar({ used, total, colorClass = 'bg-gray-500', showWarning = true }: ProgressBarProps) {
   // -1 表示无限制
   if (total === -1) {
     return (
       <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-        <div className="h-full bg-green-500 w-1/4" />
+        <div className="h-full bg-gray-500 w-1/4" />
       </div>
     );
   }
@@ -99,7 +99,7 @@ function ProgressBar({ used, total, colorClass = 'bg-blue-500', showWarning = tr
   let barColor = colorClass;
   if (showWarning) {
     if (isDanger) barColor = 'bg-red-500';
-    else if (isWarning) barColor = 'bg-amber-500';
+    else if (isWarning) barColor = 'bg-gray-500';
   }
 
   return (
@@ -233,7 +233,7 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
           {quota.tier === 'free' && onUpgradeClick && (
             <button
               onClick={onUpgradeClick}
-              className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              className="text-xs text-gray-400 hover:text-gray-300 transition-colors"
             >
               升级
             </button>
@@ -278,8 +278,8 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
         {quota.tier === 'free' && onUpgradeClick && (
           <button
             onClick={onUpgradeClick}
-            className="flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-blue-500 to-purple-500 
-                       text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+            className="flex items-center gap-1 px-3 py-1 bg-gray-800 
+                       text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
           >
             升级 Pro
             <ChevronRight className="w-4 h-4" />
@@ -296,7 +296,7 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
             label="免费试用"
             used={quota.free_trials_used}
             total={quota.free_trials_total}
-            colorClass="bg-purple-500"
+            colorClass="bg-gray-500"
           />
         )}
 
@@ -306,7 +306,7 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
           label="今日 AI 任务"
           used={quota.ai_tasks_used_today}
           total={quota.ai_tasks_daily_limit}
-          colorClass="bg-blue-500"
+          colorClass="bg-gray-500"
         />
 
         {/* 存储空间 */}
@@ -316,7 +316,7 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
           used={quota.storage_used_mb}
           total={quota.storage_limit_mb}
           format={formatStorage}
-          colorClass="bg-green-500"
+          colorClass="bg-gray-500"
         />
 
         {/* 项目数 */}
@@ -325,14 +325,14 @@ export function QuotaDisplay({ onUpgradeClick, compact = false, className = '' }
           label="项目数量"
           used={0} // TODO: 从 API 获取实际项目数
           total={quota.max_projects}
-          colorClass="bg-amber-500"
+          colorClass="bg-gray-500"
         />
       </div>
 
       {/* 底部提示 */}
       {quota.tier === 'free' && quota.free_trials_remaining <= 2 && (
-        <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-          <p className="text-amber-400 text-sm">
+        <div className="mt-4 p-3 bg-gray-100 border border-gray-200 rounded-lg">
+          <p className="text-gray-600 text-sm">
             ⚡ 免费试用即将用尽，升级 Pro 解锁更多功能！
           </p>
         </div>

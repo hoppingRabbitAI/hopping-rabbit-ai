@@ -47,16 +47,14 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   'voice_enhance': '声音优化',
   'style_transfer': '风格迁移',
   'asr': '语音转文字',
-  'stem_separation': '人声分离',
-  'smart_clean': '智能清理',
   'extract_audio': '音频提取',
   'clip_split': '分镜拆分',  // ★ 新增：分镜拆分任务
 };
 
 export const TASK_STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   'pending': { label: '排队中', color: 'text-gray-500' },
-  'processing': { label: '处理中', color: 'text-blue-500' },
-  'completed': { label: '已完成', color: 'text-green-500' },
+  'processing': { label: '处理中', color: 'text-gray-500' },
+  'completed': { label: '已完成', color: 'text-gray-500' },
   'failed': { label: '失败', color: 'text-red-500' },
   'cancelled': { label: '已取消', color: 'text-gray-400' },
 };
@@ -83,6 +81,8 @@ interface TaskHistoryState {
   updateTask: (taskId: string, updates: Partial<TaskHistoryItem>) => void;
   // ★ 治本：乐观更新 - 立即添加任务到列表
   addOptimisticTask: (task: Partial<TaskHistoryItem>) => void;
+  // ★ 删除任务
+  deleteTask: (taskId: string) => Promise<boolean>;
 }
 
 export const useTaskHistoryStore = create<TaskHistoryState>((set, get) => ({
@@ -110,10 +110,11 @@ export const useTaskHistoryStore = create<TaskHistoryState>((set, get) => ({
     try {
       const params = new URLSearchParams();
       if (projectId) params.set('project_id', projectId);
-      params.set('limit', '50');
+      params.set('limit', '30');
       
       const { filter } = get();
       if (filter.status) params.set('status', filter.status);
+      if (filter.taskType) params.set('task_type', filter.taskType);
       
       const response = await authFetch(`/api/tasks?${params.toString()}`);
       const data = await response.json();
@@ -170,4 +171,28 @@ export const useTaskHistoryStore = create<TaskHistoryState>((set, get) => ({
       processingCount: state.processingCount + 1,
     };
   }),
+  
+  // ★ 删除任务
+  deleteTask: async (taskId: string) => {
+    try {
+      const response = await authFetch(`/api/kling/ai-task/${taskId}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        // 从本地状态中移除
+        set(state => ({
+          tasks: state.tasks.filter(t => t.id !== taskId),
+          processingCount: state.tasks.filter(
+            t => t.id !== taskId && (t.status === 'pending' || t.status === 'processing')
+          ).length,
+        }));
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('[TaskHistory] 删除任务失败:', error);
+      return false;
+    }
+  },
 }));

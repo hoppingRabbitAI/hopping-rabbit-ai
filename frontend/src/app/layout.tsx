@@ -9,8 +9,8 @@ import { PricingModal } from "@/components/subscription/PricingModal";
 import Script from "next/script";
 
 export const metadata: Metadata = {
-  title: "HoppingRabbit AI - 智能口播视频剪辑",
-  description: "像编辑文档一样编辑视频，AI 自动去静音、去废话、智能运镜",
+  title: "Lepus AI - 看到什么想变成什么",
+  description: "传张照片就能做到 — 参考图驱动的 AI 变身平台",
 };
 
 export default function RootLayout({
@@ -134,7 +134,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="antialiased min-h-screen bg-[#FAFAFA] text-gray-900" data-app-loaded="true">
+      <body className="antialiased min-h-screen bg-surface-base text-hr-text-primary" data-app-loaded="true">
         <ErrorBoundary>
           <AuthGuard>{children}</AuthGuard>
         </ErrorBoundary>

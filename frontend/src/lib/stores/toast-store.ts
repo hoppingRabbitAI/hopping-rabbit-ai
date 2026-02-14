@@ -64,4 +64,22 @@ export const toast = {
   info: (message: string, duration?: number) => {
     useToastStore.getState().addToast({ type: 'info', message, duration });
   },
+  /** 持久 toast（不自动消失），返回 dismiss 函数 */
+  persistent: (message: string, type: ToastType = 'info') => {
+    const id = generateId();
+    useToastStore.getState().addToast({ type, message, duration: 0 });
+    // addToast 内部会生成新 id，我们需要拿到它
+    // 由于 addToast 是同步的，直接取最后一条
+    const toasts = useToastStore.getState().toasts;
+    const actualId = toasts[toasts.length - 1]?.id ?? id;
+    return {
+      id: actualId,
+      dismiss: () => useToastStore.getState().removeToast(actualId),
+      update: (msg: string) => {
+        const store = useToastStore.getState();
+        store.removeToast(actualId);
+        store.addToast({ type, message: msg, duration: 0 });
+      },
+    };
+  },
 };

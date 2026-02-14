@@ -32,7 +32,7 @@ export interface RenderProgress {
  * @param onProgress 进度回调（可选）
  * @returns 渲染后的视频 Blob
  */
-export async function renderRemotionConfig(
+async function renderRemotionConfig(
   request: RenderRemotionRequest,
   onProgress?: (progress: RenderProgress) => void
 ): Promise<Blob> {
@@ -82,63 +82,4 @@ export async function renderAndDownload(
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-/**
- * 渲染并上传到 Supabase Storage
- * 返回可用于编辑器的视频 URL
- */
-export async function renderAndUpload(
-  request: RenderRemotionRequest,
-  projectId: string,
-  onProgress?: (progress: RenderProgress) => void
-): Promise<{
-  url: string;
-  clipId: string;
-}> {
-  onProgress?.({ progress: 0, status: '渲染视频...' });
-  
-  const blob = await renderRemotionConfig(request, (p) => {
-    onProgress?.({ ...p, progress: Math.round(p.progress * 0.8) });
-  });
-  
-  onProgress?.({ progress: 80, status: '上传视频...' });
-  
-  // 上传到后端
-  const formData = new FormData();
-  formData.append('file', blob, 'remotion-render.mp4');
-  formData.append('project_id', projectId);
-  formData.append('type', 'rendered_clip');
-  formData.append('metadata', JSON.stringify({
-    source: 'remotion',
-    duration_ms: request.config.total_duration_ms,
-    text_count: request.config.text_components?.length || 0,
-    broll_count: request.config.broll_components?.length || 0,
-  }));
-  
-  // ★ 治本：获取 session token 用于鉴权
-  const uploadSession = await getSessionSafe();
-  const uploadHeaders: HeadersInit = {};
-  if (uploadSession?.access_token) {
-    uploadHeaders['Authorization'] = `Bearer ${uploadSession.access_token}`;
-  }
-  
-  const uploadResponse = await fetch('/api/assets/upload', {
-    method: 'POST',
-    headers: uploadHeaders,
-    body: formData,
-  });
-  
-  if (!uploadResponse.ok) {
-    throw new Error('上传失败');
-  }
-  
-  const { url, asset_id } = await uploadResponse.json();
-  
-  onProgress?.({ progress: 100, status: '完成' });
-  
-  return {
-    url,
-    clipId: asset_id,
-  };
 }

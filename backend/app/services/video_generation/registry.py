@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 模型注册表
+Lepus AI - 模型注册表
 
 管理所有视频生成模型和提供商
 """

@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Pydantic Models
+Lepus AI - Pydantic Models
 适配新表结构 (2026-01-07)
 
 变化说明：
@@ -297,24 +297,6 @@ class ExtractAudioRequest(BaseModel):
     duration: Optional[float] = None  # 殥秒，截取多长
 
 
-class StemSeparationRequest(BaseModel):
-    asset_id: str
-    stems: list[str] = ["vocals", "accompaniment"]
-
-
-class SpeakerDiarizationRequest(BaseModel):
-    asset_id: str
-    num_speakers: Optional[int] = None
-    min_speakers: int = 1
-    max_speakers: int = 10
-
-
-class SmartCleanRequest(BaseModel):
-    project_id: str
-    max_silence_duration: float = 2.0
-    remove_filler_words: bool = True
-
-
 # ============================================
 # 导出相关
 # ============================================
@@ -360,3 +342,121 @@ class VersionConflictError(BaseModel):
     error: str = "version_conflict"
     message: str
     server_version: int
+
+
+# ============================================
+# Lepus AI — PRD v1.1 模型
+# ============================================
+
+class RouteStep(BaseModel):
+    """路由步骤 — 单个 AI 能力节点"""
+    capability: str
+    params: dict = {}
+    prompt_template: str = ""
+    reason: Optional[str] = None
+    estimated_credits: Optional[int] = None
+
+
+class GoldenPreset(BaseModel):
+    """黄金预设 — 验证过的效果组合"""
+    id: str
+    name: str
+    description: Optional[str] = None
+
+
+class RouteResult(BaseModel):
+    """路由结果 — IntentRouter 输出"""
+    route: List[RouteStep] = []
+    overall_description: str = ""
+    suggested_golden_preset: Optional[str] = None
+    suggested_output_duration: float = 0.0
+    total_estimated_credits: int = 0
+    confidence: float = 0.0
+
+
+class TrendTemplateModel(BaseModel):
+    """热门模板 (PRD §6 — 对应 trend_templates 表)"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    preview_video_url: Optional[str] = None
+    before_url: Optional[str] = None
+    after_url: Optional[str] = None
+    category: str
+    route: List[RouteStep] = []
+    golden_preset: Optional[dict] = None
+    output_duration: float = 0
+    output_aspect_ratio: str = "1:1"
+    author_type: str = "official"
+    tags: List[str] = []
+    usage_count: int = 0
+    trending_score: int = 0
+    status: str = "draft"
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class TrendTemplateCreate(BaseModel):
+    """创建热门模板"""
+    name: str
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    preview_video_url: Optional[str] = None
+    category: str
+    route: List[RouteStep] = []
+    golden_preset: Optional[dict] = None
+    output_duration: float = 0
+    output_aspect_ratio: str = "1:1"
+    author_type: str = "official"
+    tags: List[str] = []
+
+
+class CanvasSessionModel(BaseModel):
+    """画布会话 (PRD §7 — 对应 canvas_sessions 表)"""
+    id: str
+    user_id: str
+    template_id: Optional[str] = None
+    state: dict = {}
+    status: str = "draft"
+    title: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    route_result: Optional[dict] = None
+    subject_url: Optional[str] = None
+    reference_url: Optional[str] = None
+    text_input: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class CapabilityRegistryModel(BaseModel):
+    """能力注册表 (PRD §5 — 对应 capability_registry 表)"""
+    type: str
+    name: str
+    description: Optional[str] = None
+    param_schema: dict = {}
+    requires_face: bool = False
+    estimated_time: int = 30
+    credit_cost: int = 1
+    sort_order: int = 0
+    enabled: bool = True
+
+
+class CapabilityExecutionModel(BaseModel):
+    """能力执行记录 (对应 capability_executions 表)"""
+    id: str
+    session_id: str
+    user_id: str
+    capability_type: str
+    input_urls: List[str] = []
+    params: dict = {}
+    status: str = "queued"
+    result_url: Optional[str] = None
+    error: Optional[str] = None
+    credits_used: int = 0
+    duration_ms: Optional[int] = None
+    chain_id: Optional[str] = None
+    chain_order: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

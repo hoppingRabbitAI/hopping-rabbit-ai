@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Credit Service
+Lepus AI - Credit Service
 积分服务 - 管理用户积分的消耗、发放、查询
 
 功能:

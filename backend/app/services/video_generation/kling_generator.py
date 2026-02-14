@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Kling AI 视频生成器
+Lepus AI - Kling AI 视频生成器
 
 实现 VideoGeneratorBase 接口
 """
@@ -48,7 +48,7 @@ class KlingVideoGenerator(VideoGeneratorBase):
     async def text_to_video(
         self,
         prompt: str,
-        model: str = "kling-v2-1-master",
+        model: str = "kling-v2-6",
         duration: int = 5,
         aspect_ratio: str = "16:9",
         **options
@@ -95,7 +95,7 @@ class KlingVideoGenerator(VideoGeneratorBase):
     async def image_to_video(
         self,
         image: str,
-        model: str = "kling-v2-5-turbo",
+        model: str = "kling-v2-6",
         prompt: str = "",
         duration: int = 5,
         **options

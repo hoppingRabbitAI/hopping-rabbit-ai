@@ -1,5 +1,5 @@
 /**
- * HoppingRabbit AI - Subscription Components
+ * Lepus AI - Subscription Components
  * 订阅、积分和配额相关组件导出
  */
 

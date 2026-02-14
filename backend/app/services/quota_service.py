@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 用户配额服务
+Lepus AI - 用户配额服务
 管理用户的试用次数、AI 任务配额、存储限制等
 """
 from typing import Optional, Dict, Any

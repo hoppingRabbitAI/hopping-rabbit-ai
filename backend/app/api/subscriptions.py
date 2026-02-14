@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 订阅 API
+Lepus AI - 订阅 API
 处理订阅相关的 HTTP 请求
 
 端点:
@@ -278,28 +278,6 @@ async def reactivate_subscription(
         raise HTTPException(status_code=500, detail="恢复订阅失败，请稍后重试")
 
 
-@router.get("/upgrade-options")
-async def get_upgrade_options(
-    user_id: str = Depends(get_current_user_id),
-):
-    """
-    获取当前用户可升级的订阅选项
-    
-    返回比当前计划更高级的所有计划
-    """
-    service = get_subscription_service()
-    
-    try:
-        options = await service.get_upgrade_options(user_id)
-        return {
-            "success": True,
-            **options,
-        }
-        
-    except Exception as e:
-        logger.error(f"获取升级选项失败: {e}")
-        raise HTTPException(status_code=500, detail="获取升级选项失败")
-
 
 # ============================================
 # 积分充值 API (Top-up)
@@ -393,7 +371,7 @@ async def topup_credits(
                     "currency": "usd",
                     "unit_amount": pack["price_cents"],
                     "product_data": {
-                        "name": f"HoppingRabbit 积分充值",
+                        "name": f"Lepus 积分充值",
                         "description": pack["description"],
                     },
                 },

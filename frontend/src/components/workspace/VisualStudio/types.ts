@@ -2,7 +2,7 @@
 
 /**
  * AI 视觉工作室 - 类型定义 v3
- * 
+ *
  * 设计理念：
  * 1. 先让 AI 分析视频，识别分镜
  * 2. 用户基于分镜结果，逐镜或全局定制背景
@@ -62,12 +62,40 @@ export interface CanvasConfig {
     backgroundColor?: string;
 }
 
+export interface TemplateWorkflow {
+    shot_type?: string;
+    camera_move?: string;
+    pacing?: string;
+    style?: {
+        color?: string;
+        light?: string;
+        [key: string]: unknown;
+    } | string;
+    [key: string]: unknown;
+}
+
+export interface TemplateRenderSpec {
+    endpoint: string;
+    prompt: string;
+    negative_prompt?: string;
+    duration?: string;
+    model_name?: string;
+    cfg_scale?: number;
+    mode?: string;
+    aspect_ratio?: string;
+    images?: string[];
+    video_url?: string;
+    workflow?: TemplateWorkflow;
+}
+
 export interface TemplateItem {
     id: string;
     name: string;
     url: string;
     thumbnailUrl: string;
     category: string;
+    tags?: string[];
+    renderSpec?: TemplateRenderSpec;
 }
 
 export interface TemplateConfig {
@@ -85,6 +113,8 @@ export const TEMPLATE_CATEGORIES = [
     { id: 'life', name: '生活' },
     { id: 'nature', name: '自然' },
     { id: 'tech', name: '科技' },
+    { id: 'ad', name: '广告' },
+    { id: 'transition', name: '转场' },
     { id: 'festival', name: '节日' },
     { id: 'solid', name: '纯色' },
 ];
@@ -106,10 +136,10 @@ export interface VisualStudioConfig {
     analysisStatus: AnalysisStatus;
     shots: Shot[];
     selectedShotId: string | null;
-    
+
     // 全局背景设置（应用到所有分镜）
     globalBackground: ShotBackground | null;
-    
+
     // 是否使用全局背景
     useGlobalBackground: boolean;
 }

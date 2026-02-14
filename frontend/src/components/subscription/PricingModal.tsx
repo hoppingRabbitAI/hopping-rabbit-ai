@@ -28,9 +28,9 @@ import {
 function getPlanIcon(slug: string) {
   switch (slug) {
     case 'basic': return <Zap className="w-5 h-5 text-gray-400" />;
-    case 'pro': return <Crown className="w-5 h-5 text-amber-400" />;
-    case 'ultimate': return <Gem className="w-5 h-5 text-pink-400" />;
-    case 'creator': return <Rocket className="w-5 h-5 text-pink-400" />;
+    case 'pro': return <Crown className="w-5 h-5 text-gray-400" />;
+    case 'ultimate': return <Gem className="w-5 h-5 text-gray-400" />;
+    case 'creator': return <Rocket className="w-5 h-5 text-gray-400" />;
     default: return <Zap className="w-5 h-5 text-gray-400" />;
   }
 }
@@ -41,9 +41,9 @@ function getPlanIcon(slug: string) {
 
 function Badge({ text, color = 'green' }: { text: string; color?: 'green' | 'yellow' | 'pink' }) {
   const colorClasses = {
-    green: 'bg-green-100 text-green-700 border-green-200',
-    yellow: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    pink: 'bg-pink-100 text-pink-700 border-pink-200',
+    green: 'bg-gray-100 text-gray-700 border-gray-200',
+    yellow: 'bg-gray-100 text-gray-700 border-gray-200',
+    pink: 'bg-gray-100 text-gray-700 border-gray-200',
   };
   
   return (
@@ -169,7 +169,7 @@ export function PricingModal() {
 
   const handleSubscribe = async (planSlug: string) => {
     if (!accessToken) {
-      router.push('/login?redirect=/workspace');
+      router.push('/login?redirect=/p');
       closePricingModal();
       return;
     }
@@ -233,7 +233,7 @@ export function PricingModal() {
               升级您的计划
             </h2>
             {getQuotaMessage() && (
-              <p className="text-amber-600 mb-2">{getQuotaMessage()}</p>
+              <p className="text-gray-600 mb-2">{getQuotaMessage()}</p>
             )}
             <p className="text-gray-500">
               选择适合您的计划，解锁更多强大功能
@@ -269,7 +269,7 @@ export function PricingModal() {
               {/* 计划列表 - 动态显示 */}
               {plansLoading ? (
                 <div className="flex items-center justify-center py-20">
-                  <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
+                  <Loader2 className="w-8 h-8 animate-spin text-gray-500" />
                   <span className="ml-2 text-gray-500">加载中...</span>
                 </div>
               ) : plansError ? (
@@ -295,18 +295,18 @@ export function PricingModal() {
                         className={`relative bg-white rounded-xl flex flex-col
                                     border transition-all duration-300 shadow-sm ${
                                       plan.isPopular
-                                        ? 'border-purple-400 shadow-purple-100'
+                                        ? 'border-gray-400 shadow-gray-100'
                                         : plan.isSpecial
-                                        ? 'border-pink-300'
+                                        ? 'border-gray-300'
                                         : isCurrent
-                                        ? 'border-green-400'
+                                        ? 'border-gray-400'
                                         : 'border-gray-200 hover:border-gray-300'
                                     }`}
                       >
                         {/* 热门标签 */}
                         {plan.isPopular && (
                           <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                            <span className="px-2 py-1 bg-gradient-to-r from-purple-500 to-pink-500 
+                            <span className="px-2 py-1 bg-gray-800 
                                            text-white text-[10px] font-bold rounded-full whitespace-nowrap">
                               ◆ MOST POPULAR
                             </span>
@@ -316,7 +316,7 @@ export function PricingModal() {
                         {/* 特殊标签 */}
                         {plan.isSpecial && plan.specialLabel && (
                           <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                            <span className="px-2 py-1 bg-gradient-to-r from-pink-500 to-rose-500 
+                            <span className="px-2 py-1 bg-gray-700 
                                            text-white text-[9px] font-bold rounded-full whitespace-nowrap">
                               {plan.specialLabel}
                             </span>
@@ -326,7 +326,7 @@ export function PricingModal() {
                         {/* 当前计划标签 */}
                         {isCurrent && !plan.isPopular && !plan.isSpecial && (
                           <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                            <span className="px-2 py-1 bg-green-500 text-white text-[10px] font-bold rounded-full">
+                            <span className="px-2 py-1 bg-gray-700 text-white text-[10px] font-bold rounded-full">
                               当前计划
                             </span>
                           </div>
@@ -338,7 +338,7 @@ export function PricingModal() {
                             {plan.icon}
                             <h3 className="text-lg font-bold text-gray-900">{plan.name}</h3>
                             {(plan.isSpecial || plan.isPopular) && (
-                              <span className="px-1.5 py-0.5 bg-pink-100 text-pink-600 text-[9px] font-bold rounded">
+                              <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-[9px] font-bold rounded">
                                 85% OFF
                               </span>
                             )}
@@ -363,7 +363,7 @@ export function PricingModal() {
                             disabled={isCurrent || isLoading || isSubscribing}
                             className={`w-full py-2 px-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${
                               plan.ctaVariant === 'pink'
-                                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:opacity-90'
+                                ? 'bg-gray-800 text-white hover:bg-gray-700'
                                 : 'bg-gray-900 text-white hover:bg-gray-800'
                             } ${(isCurrent || isLoading || isSubscribing) ? 'opacity-50 cursor-not-allowed' : ''}`}
                           >
@@ -383,8 +383,8 @@ export function PricingModal() {
                         {/* 积分信息 */}
                         <div className="px-4 pb-3 border-t border-gray-100 pt-3">
                           <div className="flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-yellow-500" />
-                            <span className="text-purple-600 font-bold text-xs">
+                            <Sparkles className="w-3.5 h-3.5 text-gray-500" />
+                            <span className="text-gray-600 font-bold text-xs">
                               {plan.creditsPerMonth.toLocaleString()} credits/month
                             </span>
                           </div>
@@ -404,7 +404,7 @@ export function PricingModal() {
                                 }`}
                               >
                                 {feature.included ? (
-                                  <Check className="w-3 h-3 flex-shrink-0 text-green-500 mt-0.5" />
+                                  <Check className="w-3 h-3 flex-shrink-0 text-gray-500 mt-0.5" />
                                 ) : (
                                   <X className="w-3 h-3 flex-shrink-0 text-gray-300 mt-0.5" />
                                 )}
@@ -431,7 +431,7 @@ export function PricingModal() {
                                 }`}
                               >
                                 {item.included ? (
-                                  <Check className="w-3 h-3 flex-shrink-0 text-green-500 mt-0.5" />
+                                  <Check className="w-3 h-3 flex-shrink-0 text-gray-500 mt-0.5" />
                                 ) : (
                                   <X className="w-3 h-3 flex-shrink-0 text-gray-300 mt-0.5" />
                                 )}
@@ -512,18 +512,18 @@ export function PricingModal() {
                         }
                       }}
                       disabled={isSubscribing}
-                      className="p-4 bg-white rounded-xl border border-gray-200 hover:border-purple-400 hover:shadow-md transition-all text-left disabled:opacity-50"
+                      className="p-4 bg-white rounded-xl border border-gray-200 hover:border-gray-400 hover:shadow-md transition-all text-left disabled:opacity-50"
                     >
                       <div className="text-xl font-bold text-gray-800">
                         {pack.credits.toLocaleString()}
                         {pack.bonus > 0 && (
-                          <span className="text-purple-500 text-sm ml-2">
+                          <span className="text-gray-500 text-sm ml-2">
                             +{pack.bonus} bonus
                           </span>
                         )}
                       </div>
                       <div className="text-sm text-gray-500">积分</div>
-                      <div className="mt-2 text-lg font-bold text-purple-600">
+                      <div className="mt-2 text-lg font-bold text-gray-600">
                         ${pack.price}
                       </div>
                     </button>
@@ -541,7 +541,7 @@ export function PricingModal() {
           <div className="mt-6 text-center text-sm text-gray-400">
             <p>所有计划均支持 7 天无理由退款</p>
             <p className="mt-1">
-              如有任何问题，请联系 support@hoppingrabbit.ai
+              如有任何问题，请联系 support@lepus.ai
             </p>
           </div>
         </div>

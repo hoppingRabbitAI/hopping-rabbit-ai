@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 订阅服务
+Lepus AI - 订阅服务
 管理用户订阅的创建、查询、取消和续期
 
 设计原则:

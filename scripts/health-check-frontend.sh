@@ -5,7 +5,7 @@
 
 set -e
 
-echo "🔍 HoppingRabbit 前端健康检查..."
+echo "🔍 Lepus 前端健康检查..."
 echo ""
 
 # 颜色定义

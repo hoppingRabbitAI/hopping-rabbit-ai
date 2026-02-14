@@ -6,10 +6,8 @@
  * - client: 基础客户端
  * - projects: 项目管理
  * - assets: 资源管理
- * - clips: 片段管理
  * - tasks: AI 任务
- * - export: 导出功能
- * - smart: 智能剪辑
+ * - materials: 素材管理
  */
 
 // 类型导出
@@ -19,24 +17,45 @@ export * from './types';
 export { ApiClient, API_BASE_URL, getAuthToken, handleAuthExpired } from './client';
 
 // 媒体代理
-export { getAssetStreamUrl, getProxyUrl, needsProxy, getAssetThumbnailUrl, fetchAssetThumbnailUrl, getCloudflareThumbnailUrl } from './media-proxy';
+export { getAssetStreamUrl } from './media-proxy';
 
-// 模块化 API
-export { projectApi, ProjectApi } from './projects';
-export { assetApi, AssetApi, uploadVideo } from './assets';
-export { clipsApi, ClipsApi } from './clips';
-export { tracksApi, TracksApi } from './tracks';
-export { taskApi, TaskApi, transcribeVideo } from './tasks';
-export { exportApi, ExportApi, exportVideo } from './export';
-export { smartApi, SmartApi } from './smart';
-export { brollApi, BRollApi } from './broll';
+// 核心 API
+export { projectApi } from './projects';
+export { assetApi, uploadVideo } from './assets';
+export { taskApi } from './tasks';
 export { materialsApi, MaterialsApi } from './materials';
-export type { 
-  UserMaterial, 
-  AvatarItem, 
-  VoiceSampleItem, 
-  MaterialType, 
-  AssetCategory,
-  MaterialPreferences 
+export { exportApi } from './export';
+export type {
+  UserMaterial,
+  AvatarItem,
+  VoiceSampleItem,
 } from './materials';
 
+// ---- Lepus AI 核心 API (PRD v1.1) ----
+export { intentRouterApi } from './intent-router';
+export type { AnalyzeRequest, AnalyzeTextRequest, IntentParseRequest } from './intent-router';
+export { capabilityApi } from './capabilities';
+export type { CapabilityDefinition, ExecuteChainRequest } from './capabilities';
+export { canvasApi } from './canvas';
+export type { CanvasSession, OpenCanvasRequest, OpenCanvasResponse } from './canvas';
+export { trendTemplateApi } from './trend-templates';
+export { digitalAvatarApi } from './digital-avatars';
+
+// ---- Canvas Nodes API (Visual Editor 直连) ----
+export {
+  listCanvasNodes,
+  updateCanvasNode,
+  deleteCanvasNode,
+  batchCreateCanvasNodes,
+  reorderCanvasNodes,
+  syncCanvasEdges,
+} from './canvas-nodes';
+export type {
+  CanvasNodeRow,
+  CanvasEdgeRow,
+  ListCanvasNodesResponse,
+  BatchCreateNodeItem,
+} from './canvas-nodes';
+
+// ---- Prompt Library API ----
+export { promptLibraryApi } from './prompt-library';

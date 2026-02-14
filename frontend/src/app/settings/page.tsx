@@ -24,7 +24,7 @@ import {
   ShoppingCart,
   Clock
 } from 'lucide-react';
-import { useAuthStore } from '@/features/editor/store/auth-store';
+import { useAuthStore } from '@/stores/authStore';
 import { SubscriptionStatus } from '@/components/subscription/SubscriptionStatus';
 import { pricingModal } from '@/lib/stores/pricing-modal-store';
 import { toast } from '@/lib/stores/toast-store';
@@ -336,9 +336,9 @@ function SubscriptionTab({ onUpgradeClick, refreshTrigger = 0 }: SubscriptionTab
       case 'grant':
         return { icon: <Gift className="w-4 h-4" />, color: 'text-green-500', bg: 'bg-green-50' };
       case 'refund':
-        return { icon: <RefreshCw className="w-4 h-4" />, color: 'text-blue-500', bg: 'bg-blue-50' };
+        return { icon: <RefreshCw className="w-4 h-4" />, color: 'text-gray-500', bg: 'bg-gray-50' };
       case 'purchase':
-        return { icon: <ShoppingCart className="w-4 h-4" />, color: 'text-purple-500', bg: 'bg-purple-50' };
+        return { icon: <ShoppingCart className="w-4 h-4" />, color: 'text-gray-500', bg: 'bg-gray-50' };
       case 'expire':
         return { icon: <Clock className="w-4 h-4" />, color: 'text-gray-500', bg: 'bg-gray-100' };
       default:
@@ -744,7 +744,7 @@ export default function SettingsPage() {
         <div className="max-w-5xl mx-auto px-6 py-4">
           <div className="flex items-center gap-4">
             <Link
-              href="/workspace"
+              href="/p"
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <ArrowLeft className="w-5 h-5 text-gray-500" />

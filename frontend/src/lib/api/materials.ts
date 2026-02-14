@@ -70,7 +70,7 @@ export interface VoiceSampleItem {
 }
 
 /** 素材上传请求 */
-export interface MaterialUploadRequest {
+interface MaterialUploadRequest {
   file_name: string;
   content_type: string;
   file_size: number;
@@ -81,21 +81,21 @@ export interface MaterialUploadRequest {
 }
 
 /** 素材上传响应 */
-export interface MaterialUploadResponse {
+interface MaterialUploadResponse {
   asset_id: string;
   upload_url: string;
   storage_path: string;
 }
 
 /** 声音克隆请求 */
-export interface VoiceCloneRequest {
+interface VoiceCloneRequest {
   asset_id: string;
   voice_name: string;
   language?: string;
 }
 
 /** 声音克隆响应 */
-export interface VoiceCloneResponse {
+interface VoiceCloneResponse {
   clone_id: string;
   name: string;
   fish_audio_reference_id: string;
@@ -103,7 +103,7 @@ export interface VoiceCloneResponse {
 }
 
 /** 用户素材偏好设置 */
-export interface MaterialPreferences {
+interface MaterialPreferences {
   default_avatar_id?: string;
   default_voice_type: 'preset' | 'cloned';
   default_voice_id?: string;
@@ -115,7 +115,7 @@ export interface MaterialPreferences {
 }
 
 /** 设置默认素材请求 */
-export interface SetDefaultMaterialRequest {
+interface SetDefaultMaterialRequest {
   material_type: 'avatar' | 'voice';
   asset_id?: string;
   voice_type?: 'preset' | 'cloned';
@@ -196,6 +196,7 @@ export class MaterialsApi extends ApiClient {
     duration?: number;
     width?: number;
     height?: number;
+    asset_category?: AssetCategory;
   }): Promise<ApiResponse<UserMaterial>> {
     const params = new URLSearchParams({
       material_type: data.material_type,
@@ -205,6 +206,7 @@ export class MaterialsApi extends ApiClient {
     });
     if (data.display_name) params.set('display_name', data.display_name);
     if (data.tags) params.set('tags', data.tags);
+    if (data.asset_category) params.set('asset_category', data.asset_category);
 
     return this.request(`/materials/confirm-upload?${params.toString()}`, {
       method: 'POST',
@@ -252,6 +254,16 @@ export class MaterialsApi extends ApiClient {
   }
 
   /**
+   * 将素材提升到用户素材库
+   * 把 project_asset / ai_generated 转为 user_material
+   */
+  async promoteToLibrary(assetId: string): Promise<ApiResponse<{ success: boolean; message: string }>> {
+    return this.request(`/materials/${assetId}/promote-to-library`, {
+      method: 'POST',
+    });
+  }
+
+  /**
    * 克隆声音
    */
   async cloneVoice(data: VoiceCloneRequest): Promise<ApiResponse<VoiceCloneResponse>> {
@@ -281,10 +293,10 @@ export class MaterialsApi extends ApiClient {
   /**
    * 从 URL 导入素材到素材库
    */
-  async importFromUrl(sourceUrl: string): Promise<ApiResponse<{ success: boolean; asset: UserMaterial }>> {
+  async importFromUrl(sourceUrl: string, assetCategory?: AssetCategory): Promise<ApiResponse<{ success: boolean; asset: UserMaterial }>> {
     return this.request('/materials/import-from-url', {
       method: 'POST',
-      body: JSON.stringify({ source_url: sourceUrl }),
+      body: JSON.stringify({ source_url: sourceUrl, asset_category: assetCategory || 'user_material' }),
     });
   }
 
@@ -299,6 +311,8 @@ export class MaterialsApi extends ApiClient {
       displayName?: string;
       tags?: string[];
       onProgress?: (progress: number) => void;
+      /** 素材分类：project_asset 仅项目内使用，不进入素材库 */
+      assetCategory?: AssetCategory;
     }
   ): Promise<ApiResponse<UserMaterial>> {
     try {
@@ -364,6 +378,7 @@ export class MaterialsApi extends ApiClient {
         duration,
         width,
         height,
+        asset_category: options?.assetCategory,
       });
 
       options?.onProgress?.(100);

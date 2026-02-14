@@ -1,11 +1,11 @@
 /**
  * AI 任务 API
  */
-import type { TaskStatus, TranscriptSegment } from '@/features/editor/types';
+import type { TaskStatus } from '@/types/editor';
 import type { ApiResponse, TaskStartResponse, TaskResultWithData } from './types';
 import { ApiClient } from './client';
 
-export class TaskApi extends ApiClient {
+class TaskApi extends ApiClient {
   /**
    * 启动 ASR 语音转写任务（针对整个 asset）
    */
@@ -167,32 +167,3 @@ export class TaskApi extends ApiClient {
 }
 
 export const taskApi = new TaskApi();
-
-/**
- * 便捷函数：转写视频
- */
-export async function transcribeVideo(assetId: string): Promise<TranscriptSegment[]> {
-  const api = new TaskApi();
-  
-  // 1. 启动 ASR 任务
-  const startResult = await api.startASRTask({
-    asset_id: assetId,
-    language: 'zh',
-    enable_word_timestamps: true,
-  });
-
-  if (startResult.error || !startResult.data) {
-    throw new Error(startResult.error?.message || '启动转写任务失败');
-  }
-
-  // 2. 轮询直到完成
-  const result = await api.pollTaskUntilComplete<{ segments: TranscriptSegment[] }>(
-    startResult.data.task_id
-  );
-
-  if (result.error || !result.data?.result) {
-    throw new Error(result.error?.message || '转写失败');
-  }
-
-  return result.data.result.segments;
-}

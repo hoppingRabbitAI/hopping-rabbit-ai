@@ -13,31 +13,20 @@
 import React, { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Handle, Position } from '@xyflow/react';
+import { useMenuCoordination } from './useMenuCoordination';
 import type { NodeProps } from '@xyflow/react';
-import { Play, Pause, Loader2, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Play, Pause, Loader2, AlertCircle, RefreshCw, X, Scissors, Trash2, ListVideo, Check, ImagePlus, Plus, Layers, Sparkles, Copy, Eye, Lock, LockOpen, PenSquare, FolderHeart, StopCircle } from 'lucide-react';
 import type { ClipNodeData } from './types';
 import { clipPlaybackService } from '../services/ClipPlaybackService';
 import { useTaskHistoryStore } from '@/stores/taskHistoryStore';
+import { useVisualEditorStore } from '@/stores/visualEditorStore';
+import { MaterialsApi } from '@/lib/api/materials';
+import { toast } from '@/lib/stores/toast-store';
+import { cancelAITask } from '@/lib/api/kling-tasks';
 import Hls from 'hls.js';
 
-// 拆分片段类型
-interface SplitSegment {
-  start_ms: number;
-  end_ms: number;
-  transcript: string;
-  confidence: number;
-}
-
-interface SplitAnalysisResult {
-  can_split: boolean;
-  reason: string;
-  segment_count: number;
-  segments: SplitSegment[];
-  split_strategy: string;
-}
-
-// 图片比例缓存 - 避免重复检测
-const imageRatioCache = new Map<string, boolean>();
+// 图片比例缓存 - 存储实际宽高比（width / height），精确自适应
+const imageRatioCache = new Map<string, number>();
 
 // 播放状态类型
 type PlaybackState = 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 'error';
@@ -45,26 +34,22 @@ type PlaybackState = 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | '
 // 拆分状态类型（简化版：直接拆分，无预览）
 type SplitState = 'idle' | 'menu' | 'analyzing' | 'error';
 
-// 拆分策略类型
-type SplitStrategy = 'sentence' | 'scene' | 'paragraph';
-
-// 策略配置
-const SPLIT_STRATEGIES: { id: SplitStrategy; name: string }[] = [
-  { id: 'sentence', name: '分句' },
-  { id: 'scene', name: '分镜' },
-  { id: 'paragraph', name: '分段' },
-];
-
 function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData }) {
+  // ★ 判断媒体类型：图片节点 vs 视频节点
+  const isImageNode = data.mediaType === 'image';
+  
   // ★ 统一的播放状态机
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   // ★ 拆分状态
   const [splitState, setSplitState] = useState<SplitState>('idle');
-  const [splitResult, setSplitResult] = useState<SplitAnalysisResult | null>(null);
-  const [selectedStrategy, setSelectedStrategy] = useState<SplitStrategy | null>(null);
+  const [splitErrorMsg, setSplitErrorMsg] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  
+  // ★ 保存到素材库状态
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
+  const [savedToLibrary, setSavedToLibrary] = useState(false);
   
   // 视频相关
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -77,10 +62,17 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
   const [preloadedUrl, setPreloadedUrl] = useState<{ url: string; isHls: boolean } | null>(null);
   const preloadAttempted = useRef(false);
   
-  // 先从缓存读取，如果没有则根据 aspectRatio 预判
-  const cachedRatio = data.thumbnail ? imageRatioCache.get(data.thumbnail) : undefined;
+  // ★ 图片实际宽高比（width / height），用于精确自适应卡片尺寸
   const aspectRatioVertical = data.aspectRatio === '9:16' || data.aspectRatio === 'vertical';
-  const [isVertical, setIsVertical] = useState<boolean | null>(cachedRatio ?? (data.thumbnail ? null : aspectRatioVertical));
+  const hasExplicitAspectRatio = !!data.aspectRatio;
+  const cachedWHRatio = (!hasExplicitAspectRatio && data.thumbnail) ? imageRatioCache.get(data.thumbnail) : undefined;
+  // 从 data.aspectRatio 推断默认数值比例
+  const defaultWHRatio = aspectRatioVertical ? 9 / 16 : 16 / 9;
+  const [whRatio, setWhRatio] = useState<number | null>(
+    hasExplicitAspectRatio ? defaultWHRatio : (cachedWHRatio ?? (data.thumbnail ? null : defaultWHRatio))
+  );
+  // 向后兼容：isVertical 从 whRatio 派生
+  const isVertical = whRatio !== null ? whRatio < 1 : null;
   const hasChecked = useRef(false);
   
   const formatTime = (seconds: number) => {
@@ -91,46 +83,143 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
     return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
   };
   
-  // ★ 右键菜单处理
+  // ★★★ 自动检测视频元数据：当 duration=0 或 aspectRatio 可能不准时，通过加载 metadata 获取真实时长和比例 ★★★
+  const metadataProbed = useRef(false);
+  useEffect(() => {
+    if (metadataProbed.current) return;
+    if (!data.isFreeNode || !data.videoUrl || isImageNode) return;
+    const needsDuration = !data.duration || data.duration <= 0;
+    // ★★★ 关键修复：始终探测 aspectRatio（不信任已有值），因为占位创建时可能继承了源节点的错误比例
+    // HLS 视频无法通过 video 元素探测
+    if (data.videoUrl.includes('.m3u8')) return;
+    // 如果 duration 已正确且已跳过探测一次，才跳过（首次始终探测 aspectRatio）
+    if (!needsDuration && metadataProbed.current) return;
+    
+    metadataProbed.current = true;
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.src = data.videoUrl;
+    probe.onloadedmetadata = () => {
+      const updates: Record<string, unknown> = {};
+      
+      // ★ 探测时长
+      const realDuration = probe.duration;
+      if (needsDuration && realDuration && isFinite(realDuration) && realDuration > 0) {
+        updates.duration = realDuration;
+      }
+      
+      // ★ 探测宽高比 — 始终以实际视频像素为准（治本）
+      const vw = probe.videoWidth;
+      const vh = probe.videoHeight;
+      if (vw > 0 && vh > 0) {
+        const detectedRatio: '9:16' | '16:9' = vh > vw ? '9:16' : '16:9';
+        if (detectedRatio !== data.aspectRatio) {
+          updates.aspectRatio = detectedRatio;
+          console.log(`[ClipNode] ★ aspectRatio 纠正: ${data.aspectRatio} → ${detectedRatio} (实际 ${vw}x${vh})`);
+        }
+      }
+      
+      if (Object.keys(updates).length > 0) {
+        console.log(`[ClipNode] ★ 视频元数据探测:`, {
+          clipId: data.clipId,
+          duration: (updates.duration as number)?.toFixed(2) || '(unchanged)',
+          aspectRatio: updates.aspectRatio || '(unchanged)',
+          videoSize: `${vw}x${vh}`,
+        });
+        const { updateFreeNode } = useVisualEditorStore.getState();
+        updateFreeNode(data.clipId, updates as any);
+      }
+      
+      probe.removeAttribute('src');
+      probe.load();
+    };
+    probe.onerror = () => {
+      console.warn('[ClipNode] 探测视频元数据失败');
+      probe.removeAttribute('src');
+    };
+  }, [data.isFreeNode, data.duration, data.aspectRatio, data.videoUrl, data.clipId]);
+  
+  // ★ 菜单协调：打开自己时关闭其他菜单，收到关闭事件时关闭自己
+  const { broadcastCloseMenus } = useMenuCoordination(() => {
+    setSplitState('idle');
+    setMenuPosition(null);
+  });
+
+  // ★ 右键菜单处理 — 不需要先左键选中
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     
     if (!data.clipId) return;
     
-    // 计算菜单位置（clip 右侧 8px，与 clip 顶部对齐）
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setMenuPosition({ x: rect.right + 8, y: rect.top });
-    }
+    broadcastCloseMenus();  // ★ 通知其他菜单关闭
+    // ★ 使用鼠标位置而非节点位置，更直观
+    setMenuPosition({ x: e.clientX, y: e.clientY });
     setSplitState('menu');
-  }, [data.clipId]);
+  }, [data.clipId, broadcastCloseMenus]);
   
   // ★ 关闭菜单
   const closeMenu = useCallback(() => {
     setSplitState('idle');
     setMenuPosition(null);
   }, []);
+
+  // ★ 取消生成任务 + 删除节点
+  const handleCancelAndDelete = useCallback(async () => {
+    closeMenu();
+    if (!data.clipId) return;
+    
+    // 1. 取消关联的 AI 任务
+    if (data.generatingTaskId) {
+      try {
+        await cancelAITask(data.generatingTaskId as string);
+        console.log('[ClipNode] ✅ 已取消 AI 任务:', data.generatingTaskId);
+      } catch (err) {
+        console.warn('[ClipNode] ⚠️ 取消任务失败（可能已完成）:', err);
+        // 即使取消失败也继续删除节点
+      }
+    }
+    
+    // 2. 删除节点
+    if (data.isFreeNode && data.onDeleteFreeNode) {
+      (data.onDeleteFreeNode as (id: string) => void)(data.clipId);
+    } else {
+      useVisualEditorStore.getState().deleteShot(data.clipId);
+    }
+    
+    toast.success('已取消任务并删除');
+  }, [closeMenu, data.clipId, data.generatingTaskId, data.isFreeNode, data.onDeleteFreeNode]);
+
+  const emitInsertMenuEvent = useCallback((direction: 'before' | 'after', e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!data.clipId) return;
+
+    window.dispatchEvent(new CustomEvent('workflow-close-all-menus'));
+    window.dispatchEvent(new CustomEvent(direction === 'before' ? 'add-node-before' : 'add-node-after', {
+      detail: {
+        clipId: data.clipId,
+        anchorX: e.clientX,
+        anchorY: e.clientY,
+      },
+    }));
+  }, [data.clipId]);
   
-  // ★ 选择拆分策略并直接执行拆分（不需要预览）
-  const handleSelectStrategy = useCallback(async (strategy: SplitStrategy) => {
-    setSelectedStrategy(strategy);
-    setSplitState('analyzing');  // 复用 analyzing 状态显示加载中
+  // ★ 一键拆镜头（场景检测）
+  const handleSplit = useCallback(async () => {
+    setSplitState('analyzing');
     setMenuPosition(null);
+    setSplitErrorMsg(null);
     
     if (!data.clipId) return;
     
-    // ★ 获取任务历史 store 方法
     const { addOptimisticTask, updateTask, open: openTaskHistory } = useTaskHistoryStore.getState();
     
     try {
       const { authFetch } = await import('@/lib/supabase/session');
       
-      // Step 1: 创建直接拆分任务（分析+执行一步完成）
       const response = await authFetch(`/api/clips/${data.clipId}/split`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strategy }),
       });
       
       if (!response.ok) {
@@ -140,26 +229,19 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
       const { task_id } = await response.json();
       console.log('[ClipNode] 创建拆分任务:', task_id);
       
-      // ★ 治标治本：添加乐观任务到历史侧边栏
-      const strategyLabel = SPLIT_STRATEGIES.find(s => s.id === strategy)?.name || strategy;
       addOptimisticTask({
         id: task_id,
         task_type: 'clip_split',
         status: 'processing',
         progress: 0,
-        status_message: `正在${strategyLabel}...`,
+        status_message: '场景检测中...',
         clip_id: data.clipId,
-        input_params: {
-          clip_id: data.clipId,
-          strategy: strategy,
-        },
+        input_params: { clip_id: data.clipId },
       });
-      
-      // 打开任务历史侧边栏
       openTaskHistory();
       
-      // Step 2: 轮询任务状态
-      const maxAttempts = 60; // 最多等待 120 秒
+      // 轮询任务状态
+      const maxAttempts = 90; // 最多等待 180 秒（场景检测可能较慢）
       const pollInterval = 2000;
       
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -171,20 +253,16 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
         }
         
         const task = await statusResponse.json();
-        console.log(`[ClipNode] 任务状态 (${attempt + 1}/${maxAttempts}):`, task.status, task.progress);
         
-        // ★ 更新任务进度
         if (task.progress !== undefined) {
           updateTask(task_id, {
             progress: task.progress,
-            status_message: task.progress < 50 ? '分析中...' : '拆分中...',
+            status_message: task.progress < 50 ? '场景检测中...' : '拆分中...',
           });
         }
         
         if (task.status === 'completed') {
           const result = task.result;
-          
-          // ★ 更新任务为完成状态
           updateTask(task_id, {
             status: 'completed',
             progress: 100,
@@ -192,63 +270,34 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
           });
           
           if (result.success) {
-            // 拆分成功，通知父组件刷新
             console.log('[ClipNode] ✅ 拆分成功:', result.message);
             window.dispatchEvent(new CustomEvent('clips-updated'));
             setSplitState('idle');
           } else {
-            // 无法拆分
             console.warn('[ClipNode] ⚠️ 无法拆分:', result.reason);
-            setSplitResult({
-              can_split: false,
-              reason: result.reason || '无法拆分此片段',
-              segment_count: 0,
-              segments: [],
-              split_strategy: strategy
-            });
+            setSplitErrorMsg(result.reason || '无法拆分此片段');
             setSplitState('error');
           }
           return;
         } else if (task.status === 'failed') {
-          // 更新任务历史为失败状态
-          if (taskId) {
-            updateTask(taskId, { 
-              status: 'failed', 
-              progress: 100,
-              error: task.error_message || task.error || '拆分任务失败'
-            });
-          }
-          throw new Error(task.error_message || task.error || '拆分任务失败');
+          updateTask(task_id, {
+            status: 'failed',
+            progress: 100,
+            error_message: task.error_message || '拆分任务失败'
+          });
+          throw new Error(task.error_message || '拆分任务失败');
         }
-        // 继续轮询...
       }
       
-      // 超时也更新任务状态
-      if (taskId) {
-        updateTask(taskId, { 
-          status: 'failed', 
-          progress: 100,
-          error: '拆分超时，请重试'
-        });
-      }
+      updateTask(task_id, {
+        status: 'failed',
+        progress: 100,
+        error_message: '拆分超时，请重试'
+      });
       throw new Error('拆分超时，请重试');
     } catch (error) {
       console.error('[ClipNode] 拆分失败:', error);
-      // 更新任务历史为失败状态
-      if (taskId) {
-        updateTask(taskId, { 
-          status: 'failed', 
-          progress: 100,
-          error: error instanceof Error ? error.message : '拆分失败'
-        });
-      }
-      setSplitResult({
-        can_split: false,
-        reason: error instanceof Error ? error.message : '拆分失败',
-        segment_count: 0,
-        segments: [],
-        split_strategy: 'none'
-      });
+      setSplitErrorMsg(error instanceof Error ? error.message : '拆分失败');
       setSplitState('error');
     }
   }, [data.clipId]);
@@ -256,26 +305,59 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
   // ★ 取消拆分（关闭错误提示）
   const handleCancelSplit = useCallback(() => {
     setSplitState('idle');
-    setSplitResult(null);
+    setSplitErrorMsg(null);
   }, []);
   
-  // ★ 取消选中时自动关闭菜单
+  // ★★★ 关键修复：当 data.videoUrl 变化时（视频替换后），重置预加载状态和播放状态 ★★★
+  // ★ 用 ref 追踪上一次的 videoUrl，只在 URL 真正变化时才执行重置，避免 playbackState 触发无限循环
+  const prevVideoUrlRef = useRef(data.videoUrl);
   useEffect(() => {
-    if (!selected && splitState === 'menu') {
-      setSplitState('idle');
-      setMenuPosition(null);
+    // ★ 图片节点不需要视频相关逻辑
+    if (isImageNode) return;
+    
+    const prevUrl = prevVideoUrlRef.current;
+    prevVideoUrlRef.current = data.videoUrl;
+    
+    // ★ 只有 URL 真正变化时才处理（防止 playbackState 变化触发的无限循环）
+    if (data.videoUrl === prevUrl) return;
+    
+    // 如果有直接的 videoUrl，清除预加载缓存（确保使用新 URL）
+    if (data.videoUrl) {
+      console.log('[ClipNode] 检测到 videoUrl 变化，清除预加载缓存:', data.videoUrl.slice(-50));
+      setPreloadedUrl(null);
+      preloadAttempted.current = true;  // 不再预加载原始视频
+      
+      // 如果正在播放，停止并重置状态（切换了视频源，需要重新开始）
+      if (videoRef.current && videoRef.current.src) {
+        console.log('[ClipNode] 视频 URL 变化，重置播放状态');
+        videoRef.current.pause();
+        videoRef.current.removeAttribute('src');
+        videoRef.current.load();
+      }
+      // 内联清理 HLS
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      setVideoUrl(null);
+      setPlaybackState('idle');
     }
-  }, [selected, splitState]);
+  }, [data.videoUrl]);
   
   // ★ 预加载：组件挂载或 assetId 变化时提前获取 URL
+  // ★★★ 注意：如果已有 data.videoUrl，跳过预加载（替换视频后优先使用直接 URL）
   useEffect(() => {
+    // ★ 图片节点不需要预加载视频
+    if (isImageNode) return;
+    // 如果已有直接 videoUrl，不需要预加载原始素材
+    if (data.videoUrl) return;
     if (!data.assetId || preloadAttempted.current) return;
     preloadAttempted.current = true;
     
     clipPlaybackService.getPlaybackUrl(data.assetId)
       .then(result => {
         setPreloadedUrl(result);
-        console.log(`[ClipNode] 预加载完成: ${data.assetId.slice(0, 8)}`, result.isHls ? 'HLS' : 'MP4');
+        console.log(`[ClipNode] 预加载完成: ${data.assetId!.slice(0, 8)}`, result.isHls ? 'HLS' : 'MP4');
       })
       .catch(err => {
         console.warn('[ClipNode] 预加载失败:', err);
@@ -338,9 +420,9 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
       return;
     }
     
-    // 检查是否有 assetId
-    if (!data.assetId) {
-      console.warn('[ClipNode] 无法播放：缺少 assetId');
+    // 检查是否有 assetId 或直接 videoUrl
+    if (!data.assetId && !data.videoUrl) {
+      console.warn('[ClipNode] 无法播放：缺少 assetId 或 videoUrl');
       setPlaybackState('error');
       setErrorMessage('缺少视频资源');
       return;
@@ -351,8 +433,18 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
     setErrorMessage(null);
     
     try {
-      // 优先使用预加载的 URL
-      const result = preloadedUrl || await clipPlaybackService.getPlaybackUrl(data.assetId);
+      // ★★★ 关键修复：始终优先使用直接 videoUrl（替换后的视频）
+      if (data.videoUrl) {
+        console.log('[ClipNode] 使用替换后的视频 URL (完整):', data.videoUrl);
+        setVideoUrl(data.videoUrl);
+        // 根据 URL 判断是否是 HLS（与其他 clip 一致的逻辑）
+        setIsHls(data.videoUrl.includes('.m3u8'));
+        return;
+      }
+      
+      // 否则使用预加载的 URL 或从服务获取
+      const result = preloadedUrl || await clipPlaybackService.getPlaybackUrl(data.assetId!);
+      console.log('[ClipNode] 使用原始素材 URL:', result.url.slice(-50));
       setVideoUrl(result.url);
       setIsHls(result.isHls);
       // 状态会在视频事件中更新为 buffering -> playing
@@ -365,6 +457,8 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
   
   // ★ 视频加载和播放控制 - 支持 HLS
   useEffect(() => {
+    // ★ 图片节点不需要视频播放
+    if (isImageNode) return;
     if (!videoUrl) return;
     
     const video = videoRef.current;
@@ -450,7 +544,8 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
       const videoEndPosition = data.sourceEnd !== undefined 
         ? data.sourceEnd / 1000  // 毫秒转秒
         : data.endTime;
-      if (videoEndPosition !== undefined && video.currentTime >= videoEndPosition) {
+      // ★★★ 关键修复：当 endTime 为 0（AI 生成视频 duration 未知时），不自动停止，让视频自然播完
+      if (videoEndPosition && videoEndPosition > 0 && video.currentTime >= videoEndPosition) {
         stopPlayback();
       }
     };
@@ -490,20 +585,26 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
     };
   }, [cleanupHls]);
 
-  // 从缩略图自动检测视频比例（只检测一次）
-  // ★ 如果没有 thumbnail，使用 aspectRatio 属性判断
+  // 从缩略图自动检测比例（只检测一次）
+  // ★ 优先使用 data.aspectRatio → 图片缓存 → 图片加载探测
   useEffect(() => {
+    // ★ 如果有明确的 aspectRatio，直接使用（最高优先级）
+    if (data.aspectRatio) {
+      const ratio = (data.aspectRatio === '9:16' || data.aspectRatio === 'vertical') ? 9 / 16 : 16 / 9;
+      setWhRatio(ratio);
+      return;
+    }
+    
     if (!data.thumbnail) {
-      // 没有缩略图时，根据 aspectRatio 判断
-      const vertical = data.aspectRatio === '9:16' || data.aspectRatio === 'vertical';
-      setIsVertical(vertical);
+      // 没有缩略图也没有 aspectRatio，默认横屏
+      setWhRatio(16 / 9);
       return;
     }
     
     // 已有缓存或已检测过，跳过
     if (imageRatioCache.has(data.thumbnail) || hasChecked.current) {
       if (imageRatioCache.has(data.thumbnail)) {
-        setIsVertical(imageRatioCache.get(data.thumbnail)!);
+        setWhRatio(imageRatioCache.get(data.thumbnail)!);
       }
       return;
     }
@@ -512,94 +613,304 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
     
     const img = new Image();
     img.onload = () => {
-      const vertical = img.height > img.width;
-      imageRatioCache.set(data.thumbnail!, vertical);
-      setIsVertical(vertical);
+      const ratio = img.naturalWidth / img.naturalHeight;
+      imageRatioCache.set(data.thumbnail!, ratio);
+      setWhRatio(ratio);
     };
     img.onerror = () => {
-      // 加载失败时也使用 aspectRatio
-      const vertical = data.aspectRatio === '9:16' || data.aspectRatio === 'vertical';
-      imageRatioCache.set(data.thumbnail!, vertical);
-      setIsVertical(vertical);
+      // 加载失败时使用 aspectRatio 推断
+      const ratio = (data.aspectRatio === '9:16' || data.aspectRatio === 'vertical') ? 9 / 16 : 16 / 9;
+      imageRatioCache.set(data.thumbnail!, ratio);
+      setWhRatio(ratio);
     };
     img.src = data.thumbnail;
   }, [data.thumbnail, data.aspectRatio]);
 
   // 等待检测完成 - ★ 仍然需要渲染 Handle，否则边无法连接
-  if (isVertical === null) {
+  if (whRatio === null) {
     return (
       <div className="relative w-40 h-60 bg-gray-200 rounded-xl animate-pulse flex items-center justify-center">
-        <Handle
-          type="target"
-          position={Position.Left}
-          id="target"
-          className="!w-3 !h-3 !bg-gray-400 !border-2 !border-white"
-        />
+        <Handle type="target" position={Position.Left} id="target" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="source" position={Position.Right} id="source" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="target" position={Position.Top} id="target-top" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="source" position={Position.Bottom} id="source-bottom" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="target" position={Position.Bottom} id="target-bottom" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="source" position={Position.Top} id="source-top" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="source" position={Position.Left} id="source-left" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        <Handle type="target" position={Position.Right} id="target-right" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" />
+        {/* ★ Prompt 输入 handles（PromptNode 连线用） */}
+        <Handle type="target" position={Position.Left} id="prompt-in" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" style={{ top: '30%' }} />
+        <Handle type="target" position={Position.Left} id="negative-prompt-in" className="!w-1 !h-1 !bg-transparent !border-0 !rounded-full" style={{ top: '70%' }} />
         <Play className="w-8 h-8 text-gray-400" />
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="source"
-          className="!w-3 !h-3 !bg-blue-500 !border-2 !border-white"
-        />
       </div>
     );
   }
 
-  // 根据视频比例设置尺寸
-  // 竖屏 9:16: 宽160, 高284
-  // 横屏 16:9: 宽320, 高180
+  // ★ 根据实际宽高比自适应卡片尺寸
+  // 竖屏基准宽160，横屏基准宽320，高度从真实比例计算
   const cardWidth = isVertical ? 160 : 320;
-  const previewHeight = isVertical ? 284 : 180;
+  const rawHeight = whRatio ? Math.round(cardWidth / whRatio) : (isVertical ? 284 : 180);
+  // 限制高度范围，避免极端比例导致卡片过高或过矮
+  const previewHeight = Math.max(120, Math.min(400, rawHeight));
+  
+  // ★ AI 生成中状态
+  const isGenerating = !!data.generatingTaskId;
+
+  // ★ 空节点渲染 — 虚线框 + 连接提示
+  if (data.isEmpty && !isGenerating) {
+    const hasUpstream = (data.upstreamCount || 0) > 0;
+    return (
+      <>
+      <div
+        ref={containerRef}
+        className={`
+          group relative rounded-xl transition-all duration-200
+          ${selected ? 'shadow-lg shadow-gray-300' : 'shadow-sm'}
+          overflow-hidden
+        `}
+        style={{ width: 200 }}
+        onContextMenu={handleContextMenu}
+      >
+        {/* 连接 handles */}
+        <div className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 transition-all duration-200">
+          <Handle type="target" position={Position.Left} id="target" className="!w-4 !h-4 !bg-white !border-[1.5px] !border-gray-300 hover:!border-gray-800 hover:!bg-gray-50 !rounded-full !cursor-pointer !shadow-sm transition-all" />
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><Plus size={8} className="text-gray-400" /></div>
+        </div>
+        <div className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 transition-all duration-200">
+          <Handle type="source" position={Position.Right} id="source" className="!w-4 !h-4 !bg-white !border-[1.5px] !border-gray-300 hover:!border-gray-800 hover:!bg-gray-50 !rounded-full !cursor-pointer !shadow-sm transition-all" />
+        </div>
+        <Handle type="target" position={Position.Top} id="target-top" className="!w-1 !h-1 !bg-transparent !border-0" />
+        <Handle type="source" position={Position.Bottom} id="source-bottom" className="!w-1 !h-1 !bg-transparent !border-0" />
+        <Handle type="target" position={Position.Bottom} id="target-bottom" className="!w-1 !h-1 !bg-transparent !border-0" />
+        <Handle type="source" position={Position.Top} id="source-top" className="!w-1 !h-1 !bg-transparent !border-0" />
+        <Handle type="source" position={Position.Left} id="source-left" className="!w-1 !h-1 !bg-transparent !border-0" />
+        <Handle type="target" position={Position.Right} id="target-right" className="!w-1 !h-1 !bg-transparent !border-0" />
+        <Handle type="target" position={Position.Left} id="prompt-in" className="!w-1 !h-1 !bg-transparent !border-0" style={{ top: '30%' }} />
+        <Handle type="target" position={Position.Left} id="negative-prompt-in" className="!w-1 !h-1 !bg-transparent !border-0" style={{ top: '70%' }} />
+
+        {/* 空节点主体 */}
+        <div
+          className={`
+            flex flex-col items-center justify-center gap-3 py-8
+            border-2 border-dashed rounded-xl transition-all duration-200
+            ${selected ? 'border-gray-900 bg-gray-50' : 'border-gray-300 bg-gray-50/80 hover:border-gray-400 hover:bg-gray-100/60'}
+          `}
+        >
+          {hasUpstream ? (
+            <>
+              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                <Sparkles size={18} className="text-gray-500" />
+              </div>
+              <div className="text-center px-3">
+                <div className="text-xs font-medium text-gray-600 mb-1">
+                  {data.upstreamCount} 个输入已连接
+                </div>
+                <button
+                  onClick={() => data.onGenerateFromEmpty?.(data.clipId)}
+                  className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-xs font-medium rounded-lg transition-colors shadow-sm"
+                >
+                  ✨ 选择 AI 能力
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
+                <Plus size={18} className="text-gray-400" />
+              </div>
+              <div className="text-center px-3">
+                <div className="text-xs text-gray-400">
+                  连接素材到此节点
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ★ 空节点右键菜单 — 精简版：只保留有意义的操作 */}
+      {splitState === 'menu' && menuPosition && createPortal(
+        <>
+          <div className="fixed inset-0 z-[100]" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
+          <div
+            ref={(el) => {
+              if (!el) return;
+              const rect = el.getBoundingClientRect();
+              const pad = 8;
+              let x = menuPosition.x;
+              let y = menuPosition.y;
+              if (x + rect.width > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - rect.width - pad);
+              if (y + rect.height > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - rect.height - pad);
+              el.style.left = `${x}px`;
+              el.style.top = `${y}px`;
+              el.style.opacity = '1';
+            }}
+            className="fixed z-[101] bg-white/95 backdrop-blur-lg rounded-lg shadow-xl border border-gray-200/80 py-1 w-[180px] opacity-0"
+            style={{ left: -9999, top: -9999 }}
+          >
+            {/* 选择 AI 能力（有上游连接时显示） */}
+            {(data.upstreamCount || 0) > 0 && (
+              <>
+                <button
+                  className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-gray-100 transition-colors"
+                  onClick={() => { closeMenu(); data.onGenerateFromEmpty?.(data.clipId); }}
+                >
+                  <Sparkles size={15} className="text-gray-500 shrink-0" />
+                  <span className="text-[13px] text-gray-700">选择 AI 能力</span>
+                </button>
+                <div className="my-1 mx-2.5 border-t border-gray-100" />
+              </>
+            )}
+            {/* 删除节点 */}
+            <button
+              className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-red-50 transition-colors"
+              onClick={() => {
+                closeMenu();
+                if (data.clipId) {
+                  if (data.isFreeNode && data.onDeleteFreeNode) {
+                    (data.onDeleteFreeNode as (id: string) => void)(data.clipId);
+                  } else {
+                    useVisualEditorStore.getState().deleteShot(data.clipId);
+                  }
+                }
+              }}
+            >
+              <Trash2 size={15} className="text-red-500 shrink-0" />
+              <span className="text-[13px] text-red-600">删除节点</span>
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
+      </>
+    );
+  }
 
   return (
     <div
       ref={containerRef}
       className={`
-        relative bg-white rounded-xl shadow-lg border-2 transition-all duration-200
-        ${selected ? 'border-blue-500 shadow-blue-200' : 'border-gray-200 hover:border-gray-300'}
+        group relative bg-white rounded-xl shadow-lg border-2 transition-all duration-200
+        ${isGenerating 
+          ? 'border-gray-300 shadow-sm'
+          : selected ? 'border-gray-900 shadow-gray-200' : 'border-gray-200 hover:border-gray-300'}
         overflow-hidden
       `}
       style={{ width: cardWidth }}
       onContextMenu={handleContextMenu}
     >
-      {/* 连接点 - 左侧输入 */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="target"
-        className="!w-3 !h-3 !bg-gray-400 !border-2 !border-white"
-      />
+      {/* 连接点 - 左侧输入（hover 时显示） */}
+      <div className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-200">
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="target"
+          className="!w-4 !h-4 !bg-white !border-[1.5px] !border-gray-300 hover:!border-gray-800 hover:!bg-gray-50 !rounded-full !cursor-pointer !shadow-sm transition-all"
+          onClick={(e) => emitInsertMenuEvent('before', e)}
+          onContextMenu={(e) => emitInsertMenuEvent('before', e)}
+        />
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <Plus size={8} className="text-gray-400" />
+        </div>
+      </div>
       
       {/* 缩略图 / 视频播放区域 */}
       <div 
         className="relative overflow-hidden"
         style={{ height: previewHeight }}
       >
-        {/* ★ 视频元素 - 始终存在但按需显示，避免灰屏 */}
-        <video
-          ref={videoRef}
-          className={`w-full h-full object-cover absolute inset-0 ${
-            playbackState === 'idle' || playbackState === 'error' ? 'hidden' : ''
-          }`}
-          playsInline
-          preload="metadata"
-        />
+        {/* ===== 图片节点：只显示静态图片 ===== */}
+        {isImageNode ? (
+          <>
+            {data.thumbnail ? (
+              <img
+                src={data.thumbnail}
+                alt={`Image ${data.index + 1}`}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full bg-gray-100 flex flex-col items-center justify-center gap-2">
+                <ImagePlus className="w-8 h-8 text-gray-400" />
+                <span className="text-xs text-gray-500">图片</span>
+              </div>
+            )}
+            {/* 图片类型标签 */}
+            <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 rounded text-white text-xs font-medium">
+              图片
+            </div>
+          </>
+        ) : (
+          <>
+            {/* ===== 视频节点：完整播放功能 ===== */}
+            {/* ★ 视频元素 - 始终存在但按需显示，避免灰屏 */}
+            <video
+              ref={videoRef}
+              className={`w-full h-full object-cover absolute inset-0 ${
+                playbackState === 'idle' || playbackState === 'error' ? 'hidden' : ''
+              }`}
+              playsInline
+              preload="metadata"
+            />
         
         {/* 缩略图 - 空闲或错误时显示 */}
         {(playbackState === 'idle' || playbackState === 'error') && data.thumbnail && (
-          <img
-            src={data.thumbnail}
-            alt={`Clip ${data.index + 1}`}
-            className="w-full h-full object-cover"
-          />
+          /\.(mp4|webm|mov)(\?|$)/i.test(data.thumbnail) ? (
+            <video
+              src={data.thumbnail}
+              className="w-full h-full object-cover"
+              muted
+              playsInline
+              preload="metadata"
+              onLoadedData={(e) => {
+                const video = e.currentTarget;
+                video.currentTime = 0;
+                video.pause();
+              }}
+            />
+          ) : (
+            <img
+              src={data.thumbnail}
+              alt={`Clip ${data.index + 1}`}
+              className="w-full h-full object-cover"
+            />
+          )
         )}
         
-        {/* 无缩略图时的占位符 */}
+        {/* ★ 无缩略图时：优先用 videoUrl 首帧 → 预加载 URL → 加载中 */}
         {(playbackState === 'idle' || playbackState === 'error') && !data.thumbnail && (
-          <div className="w-full h-full bg-gray-900 flex items-center justify-center">
-            <Play className="w-12 h-12 text-gray-600" />
-          </div>
+          data.videoUrl ? (
+            <video
+              src={data.videoUrl}
+              className="w-full h-full object-cover"
+              muted
+              playsInline
+              preload="metadata"
+              onLoadedData={(e) => {
+                const video = e.currentTarget;
+                video.currentTime = 0;
+                video.pause();
+              }}
+            />
+          ) : preloadedUrl ? (
+            <video
+              src={preloadedUrl.url}
+              className="w-full h-full object-cover"
+              muted
+              playsInline
+              preload="metadata"
+              onLoadedData={(e) => {
+                // 暂停在首帧
+                const video = e.currentTarget;
+                video.currentTime = 0;
+                video.pause();
+              }}
+            />
+          ) : (
+            <div className="w-full h-full bg-gray-800 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="w-8 h-8 text-gray-400 animate-spin" />
+              <span className="text-xs text-gray-500">加载中...</span>
+            </div>
+          )
         )}
         
         {/* ★ 缓冲中指示器 - 覆盖在视频上 */}
@@ -629,26 +940,45 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
           </div>
         )}
         
-        {/* 播放按钮 - 点击触发播放/暂停 */}
+        {/* 播放按钮 — idle/loading: hover 时居中显示; playing: 右下角小按钮不遮挡; paused: 居中半透明 */}
         {selected && playbackState !== 'error' && (
-          <div 
-            className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer"
-            onClick={handlePlayClick}
-          >
-            <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg hover:scale-105 transition-transform">
-              {playbackState === 'loading' ? (
-                <Loader2 className="w-6 h-6 text-gray-800 animate-spin" />
-              ) : playbackState === 'buffering' ? (
-                <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
-              ) : playbackState === 'playing' ? (
-                <Pause className="w-6 h-6 text-gray-800" />
-              ) : playbackState === 'paused' ? (
-                <Play className="w-6 h-6 text-green-600 ml-0.5" />
-              ) : (
-                <Play className="w-6 h-6 text-gray-800 ml-0.5" />
-              )}
+          playbackState === 'playing' ? (
+            // ★ 播放中：右下角小按钮，不遮挡视频画面
+            <div
+              className="absolute bottom-2 right-2 cursor-pointer z-10"
+              onClick={handlePlayClick}
+            >
+              <div className="w-8 h-8 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center shadow transition-colors">
+                <Pause className="w-4 h-4 text-white" />
+              </div>
             </div>
-          </div>
+          ) : playbackState === 'paused' ? (
+            // ★ 暂停中：居中显示，轻遮罩
+            <div 
+              className="absolute inset-0 flex items-center justify-center bg-black/10 cursor-pointer"
+              onClick={handlePlayClick}
+            >
+              <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg hover:scale-105 transition-transform">
+                <Play className="w-6 h-6 text-gray-800 ml-0.5" />
+              </div>
+            </div>
+          ) : (
+            // ★ idle / loading / buffering：hover 时居中显示
+            <div 
+              className="absolute inset-0 flex items-center justify-center bg-black/0 hover:bg-black/20 cursor-pointer opacity-0 group-hover:opacity-100 transition-all"
+              onClick={handlePlayClick}
+            >
+              <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg hover:scale-105 transition-transform">
+                {playbackState === 'loading' ? (
+                  <Loader2 className="w-6 h-6 text-gray-800 animate-spin" />
+                ) : playbackState === 'buffering' ? (
+                  <Loader2 className="w-6 h-6 text-gray-500 animate-spin" />
+                ) : (
+                  <Play className="w-6 h-6 text-gray-800 ml-0.5" />
+                )}
+              </div>
+            </div>
+          )
         )}
         
         {/* 时长标签 - 播放时隐藏 */}
@@ -661,31 +991,234 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
         
         {/* ★ 暂停状态标签 */}
         {playbackState === 'paused' && (
-          <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-blue-600 rounded text-white text-xs">
+          <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/70 rounded text-white text-xs">
             已暂停
           </div>
         )}
+          </>
+        )}
+
+        {/* ★ AI 生成中遮罩层 — 当 generatingTaskId 存在时显示 */}
+        {isGenerating && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-100/90 backdrop-blur-[1px]">
+            <img
+              src="/rabbit-loading.gif"
+              alt="loading"
+              className="w-12 h-12 mb-2 opacity-70"
+            />
+            <span className="text-gray-500 text-xs">
+              {data.generatingCapability || 'AI 生成中'}
+            </span>
+            <span className="text-gray-400 text-[10px] mt-0.5">处理中，请稍候...</span>
+          </div>
+        )}
+
+        {/* ★ Edit 按钮 — 底部右侧，hover 显示，点击打开 Compositor 全屏合成编辑器 */}
+        {data.onOpenCompositor && (
+          <button
+            className="absolute bottom-2 right-2 z-10 flex items-center gap-1 px-2 py-1 bg-white/90 hover:bg-white rounded-md shadow-md border border-gray-200 text-gray-700 text-xs font-medium opacity-0 group-hover:opacity-100 transition-all duration-200 hover:scale-105 backdrop-blur-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              (data.onOpenCompositor as (id: string) => void)(data.clipId);
+            }}
+            title="打开合成编辑器"
+          >
+            <PenSquare size={12} />
+            Edit
+          </button>
+        )}
       </div>
       
-      {/* ★ 右键菜单 - 使用 Portal 渲染到 body，彻底避免被裁切 */}
+      {/* ★ 右键菜单 — Figma/Linear 风格紧凑菜单，viewport-aware 定位 */}
       {splitState === 'menu' && menuPosition && createPortal(
         <>
-          {/* 遮罩层 - 点击关闭菜单 */}
-          <div className="fixed inset-0 z-[100]" onClick={closeMenu} />
-          {/* 菜单 */}
+          {/* 遮罩层 - 点击/右键关闭菜单 */}
+          <div className="fixed inset-0 z-[100]" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
+          {/* 菜单面板 — 紧凑单行样式，viewport-aware 自动翻转 */}
           <div 
-            className="fixed z-[101] bg-white rounded-md shadow-lg border border-gray-200 py-1"
-            style={{ left: menuPosition.x, top: menuPosition.y }}
+            ref={(el) => {
+              if (!el) return;
+              // ★ viewport-aware：渲染后检测溢出，自动翻转位置
+              const rect = el.getBoundingClientRect();
+              const pad = 8;
+              let x = menuPosition.x;
+              let y = menuPosition.y;
+              if (x + rect.width > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - rect.width - pad);
+              if (y + rect.height > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - rect.height - pad);
+              el.style.left = `${x}px`;
+              el.style.top = `${y}px`;
+              el.style.opacity = '1';
+            }}
+            className="fixed z-[101] bg-white/95 backdrop-blur-lg rounded-lg shadow-xl border border-gray-200/80 py-1 w-[200px] max-h-[min(420px,80vh)] overflow-y-auto opacity-0 [scrollbar-width:thin] [scrollbar-color:rgba(0,0,0,0.1)_transparent]"
+            style={{ left: -9999, top: -9999 }}
           >
-            {SPLIT_STRATEGIES.map((strategy) => (
+            {/* ★ 生成中：只显示「取消任务」，不提供其他操作 */}
+            {isGenerating ? (
               <button
-                key={strategy.id}
-                className="w-full px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-100 text-left whitespace-nowrap"
-                onClick={() => handleSelectStrategy(strategy.id)}
+                className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-red-50 transition-colors"
+                onClick={handleCancelAndDelete}
               >
-                {strategy.name}
+                <StopCircle size={15} className="text-red-500 shrink-0" />
+                <span className="text-[13px] text-red-600">取消任务</span>
               </button>
-            ))}
+            ) : (
+            <>
+            {/* ★ 打开/预览 */}
+            <button
+              className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-gray-100 transition-colors"
+              onClick={() => {
+                closeMenu();
+                if (data.thumbnail || data.videoUrl) {
+                  window.dispatchEvent(new CustomEvent('preview-media', { detail: { clipId: data.clipId, url: data.videoUrl || data.thumbnail, mediaType: data.mediaType } }));
+                }
+              }}
+            >
+              <Eye size={15} className="text-gray-500 shrink-0" />
+              <span className="text-[13px] text-gray-700">打开 / 预览</span>
+            </button>
+
+            {/* 分隔线 */}
+            <div className="my-1 mx-2.5 border-t border-gray-100" />
+
+            {/* 复制 */}
+            <button
+              className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-gray-100 transition-colors"
+              onClick={() => {
+                closeMenu();
+                if (data.clipId) {
+                  window.dispatchEvent(new CustomEvent('duplicate-node', { detail: { clipId: data.clipId, isFreeNode: !!data.isFreeNode } }));
+                }
+              }}
+            >
+              <Copy size={15} className="text-gray-500 shrink-0" />
+              <span className="text-[13px] text-gray-700">复制</span>
+            </button>
+
+            {/* 锁定/解锁 */}
+            {(() => {
+              const store = useVisualEditorStore.getState();
+              const isLocked = data.clipId ? store.isNodeLocked?.(data.clipId) ?? false : false;
+              return (
+                <button
+                  className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-gray-100 transition-colors"
+                  onClick={() => {
+                    closeMenu();
+                    if (data.clipId) {
+                      window.dispatchEvent(new CustomEvent('toggle-lock-node', { detail: { clipId: data.clipId, locked: !isLocked } }));
+                    }
+                  }}
+                >
+                  {isLocked ? <LockOpen size={15} className="text-gray-500 shrink-0" /> : <Lock size={15} className="text-gray-500 shrink-0" />}
+                  <span className="text-[13px] text-gray-700">{isLocked ? '解锁' : '锁定'}</span>
+                </button>
+              );
+            })()}
+
+            {/* 加入主线 */}
+            {(() => {
+              const isInTimeline = data.clipId ? useVisualEditorStore.getState().isInTimeline(data.clipId) : false;
+              return (
+                <button
+                  className={`w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 transition-colors ${
+                    isInTimeline ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100'
+                  }`}
+                  disabled={isInTimeline}
+                  onClick={() => {
+                    closeMenu();
+                    if (data.clipId && !isInTimeline) {
+                      const store = useVisualEditorStore.getState();
+                      store.addToTimeline(data.clipId);
+                    }
+                  }}
+                >
+                  {isInTimeline 
+                    ? <Check size={15} className="text-gray-500 shrink-0" />
+                    : <ListVideo size={15} className="text-gray-500 shrink-0" />
+                  }
+                  <span className={`text-[13px] ${isInTimeline ? 'text-gray-400' : 'text-gray-700'}`}>
+                    {isInTimeline ? '已在主线中' : '加入主线'}
+                  </span>
+                </button>
+              );
+            })()}
+            
+            {/* ★ 保存到素材库 */}
+            <button
+              className={`w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 transition-colors ${
+                savingToLibrary || savedToLibrary ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-100'
+              }`}
+              disabled={savingToLibrary || savedToLibrary}
+              onClick={async () => {
+                if (savingToLibrary || savedToLibrary) return;
+                setSavingToLibrary(true);
+                try {
+                  const api = new MaterialsApi();
+                  if (data.assetId) {
+                    const result = await api.promoteToLibrary(data.assetId);
+                    if (result.data?.success) {
+                      setSavedToLibrary(true);
+                      toast.success('已保存到素材库');
+                      setTimeout(() => setSavedToLibrary(false), 5000);
+                    } else {
+                      toast.error(result.error?.message || '保存失败');
+                    }
+                  } else {
+                    const url = data.videoUrl || data.thumbnail;
+                    if (!url) {
+                      toast.error('没有可保存的素材');
+                      return;
+                    }
+                    const result = await api.importFromUrl(url, 'user_material');
+                    if (result.data?.success) {
+                      setSavedToLibrary(true);
+                      toast.success('已保存到素材库');
+                      setTimeout(() => setSavedToLibrary(false), 5000);
+                    } else {
+                      toast.error('保存失败');
+                    }
+                  }
+                } catch (err) {
+                  toast.error('保存到素材库失败');
+                } finally {
+                  setSavingToLibrary(false);
+                  closeMenu();
+                }
+              }}
+            >
+              {savingToLibrary ? (
+                <Loader2 size={15} className="text-gray-500 animate-spin shrink-0" />
+              ) : savedToLibrary ? (
+                <Check size={15} className="text-gray-500 shrink-0" />
+              ) : (
+                <FolderHeart size={15} className="text-gray-500 shrink-0" />
+              )}
+              <span className={`text-[13px] ${savedToLibrary ? 'text-gray-500' : 'text-gray-700'}`}>
+                {savedToLibrary ? '已保存' : '保存到素材库'}
+              </span>
+            </button>
+
+            {/* 分隔线 */}
+            <div className="my-1 mx-2.5 border-t border-gray-100" />
+
+            {/* 删除 */}
+            <button
+              className="w-full px-2.5 py-1.5 text-left flex items-center gap-2.5 hover:bg-red-50 transition-colors"
+              onClick={() => {
+                closeMenu();
+                if (data.clipId) {
+                  if (data.isFreeNode && data.onDeleteFreeNode) {
+                    data.onDeleteFreeNode(data.clipId);
+                  } else {
+                    useVisualEditorStore.getState().deleteShot(data.clipId);
+                  }
+                }
+              }}
+            >
+              <Trash2 size={15} className="text-red-500 shrink-0" />
+              <span className="text-[13px] text-red-600">{data.isFreeNode ? '移除素材' : '删除分镜'}</span>
+            </button>
+            </>
+            )}
           </div>
         </>,
         document.body
@@ -694,16 +1227,16 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
       {/* 拆分分析中 */}
       {splitState === 'analyzing' && (
         <div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center gap-2 rounded-xl">
-          <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+          <Loader2 className="w-8 h-8 text-gray-500 animate-spin" />
           <span className="text-sm text-gray-600">拆分中...</span>
         </div>
       )}
       
       {/* 拆分失败/无法拆分 */}
-      {splitState === 'error' && splitResult && (
+      {splitState === 'error' && splitErrorMsg && (
         <div className="absolute inset-0 bg-white/95 flex flex-col items-center justify-center gap-2 rounded-xl p-3">
-          <AlertCircle className="w-8 h-8 text-orange-500" />
-          <span className="text-sm text-gray-700 text-center">{splitResult.reason}</span>
+          <AlertCircle className="w-8 h-8 text-red-500" />
+          <span className="text-sm text-gray-700 text-center">{splitErrorMsg}</span>
           <button 
             onClick={handleCancelSplit}
             className="px-3 py-1 bg-gray-100 rounded-full text-xs text-gray-600 hover:bg-gray-200"
@@ -713,15 +1246,84 @@ function ClipNodeComponent({ data, selected }: NodeProps & { data: ClipNodeData 
         </div>
       )}
       
-      {/* 连接点 - 右侧输出 */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="source"
-        className="!w-3 !h-3 !bg-blue-500 !border-2 !border-white"
-      />
+      {/* 连接点 - 右侧输出（hover 时显示） */}
+      <div className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-200">
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="source"
+          className="!w-4 !h-4 !bg-white !border-[1.5px] !border-gray-300 hover:!border-gray-800 hover:!bg-gray-50 !rounded-full !cursor-pointer !shadow-sm transition-all"
+          onClick={(e) => emitInsertMenuEvent('after', e)}
+          onContextMenu={(e) => emitInsertMenuEvent('after', e)}
+        />
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <Plus size={8} className="text-gray-400" />
+        </div>
+      </div>
+
+      {/* ★ 隐藏的 4 方向 handles — 供 canvas 自由连线智能选择最优方向 */}
+      <Handle type="target" position={Position.Top} id="target-top" className="!w-1 !h-1 !bg-transparent !border-0" />
+      <Handle type="source" position={Position.Bottom} id="source-bottom" className="!w-1 !h-1 !bg-transparent !border-0" />
+      <Handle type="target" position={Position.Bottom} id="target-bottom" className="!w-1 !h-1 !bg-transparent !border-0" />
+      <Handle type="source" position={Position.Top} id="source-top" className="!w-1 !h-1 !bg-transparent !border-0" />
+      <Handle type="source" position={Position.Left} id="source-left" className="!w-1 !h-1 !bg-transparent !border-0" />
+      <Handle type="target" position={Position.Right} id="target-right" className="!w-1 !h-1 !bg-transparent !border-0" />
+
+      {/* ★ Prompt 输入 handles（hover 时显示，PromptNode 连线用） */}
+      <div className="absolute left-0 -translate-x-1/2 z-10 opacity-0 group-hover:opacity-100 transition-all duration-200" style={{ top: '30%' }}>
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="prompt-in"
+          className="!w-3 !h-3 !rounded-full !cursor-pointer !shadow-sm transition-all"
+          style={{ background: '#9ca3af', border: '1.5px solid rgba(0,0,0,0.3)', position: 'relative' }}
+          title="Prompt 输入"
+        />
+      </div>
+      <div className="absolute left-0 -translate-x-1/2 z-10 opacity-0 group-hover:opacity-100 transition-all duration-200" style={{ top: '70%' }}>
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="negative-prompt-in"
+          className="!w-3 !h-3 !rounded-full !cursor-pointer !shadow-sm transition-all"
+          style={{ background: '#d1d5db', border: '1.5px solid rgba(0,0,0,0.3)', position: 'relative' }}
+          title="Negative Prompt 输入"
+        />
+      </div>
+      
     </div>
   );
 }
 
-export const ClipNode = memo(ClipNodeComponent);
+// ★★★ 关键修复：自定义 memo 比较函数，确保 data.videoUrl 变化时重新渲染 ★★★
+function arePropsEqual(prevProps: NodeProps & { data: ClipNodeData }, nextProps: NodeProps & { data: ClipNodeData }) {
+  // 如果 mediaType 变化了，必须重新渲染
+  if (prevProps.data.mediaType !== nextProps.data.mediaType) {
+    return false;
+  }
+  // 如果 videoUrl 变化了，必须重新渲染
+  if (prevProps.data.videoUrl !== nextProps.data.videoUrl) {
+    console.log('[ClipNode memo] videoUrl 变化，触发重新渲染:', prevProps.data.videoUrl?.slice(-30), '->', nextProps.data.videoUrl?.slice(-30));
+    return false;
+  }
+  // 如果选中状态变化，重新渲染
+  if (prevProps.selected !== nextProps.selected) {
+    return false;
+  }
+  // 如果 thumbnail 变化，重新渲染
+  if (prevProps.data.thumbnail !== nextProps.data.thumbnail) {
+    return false;
+  }
+  // 如果 clipId 变化，重新渲染
+  if (prevProps.data.clipId !== nextProps.data.clipId) {
+    return false;
+  }
+  // ★ 如果 generatingTaskId 变化，重新渲染（影响右键菜单内容）
+  if (prevProps.data.generatingTaskId !== nextProps.data.generatingTaskId) {
+    return false;
+  }
+  // 其他情况使用默认的浅比较
+  return true;
+}
+
+export const ClipNode = memo(ClipNodeComponent, arePropsEqual);

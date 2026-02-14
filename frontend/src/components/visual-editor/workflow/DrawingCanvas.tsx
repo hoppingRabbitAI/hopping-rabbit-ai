@@ -327,7 +327,7 @@ export function DrawingCanvas({
         {/* ★ 加载状态 - 覆盖在 canvas 上方 */}
         {loadState === 'loading' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 z-10">
-            <Loader2 className="w-8 h-8 text-blue-500 animate-spin mb-2" />
+            <Loader2 className="w-8 h-8 text-gray-500 animate-spin mb-2" />
             <span className="text-sm text-gray-400">加载关键帧...</span>
           </div>
         )}
@@ -361,14 +361,6 @@ export function DrawingCanvas({
           onMouseLeave={handleMouseUp}
         />
         
-        {/* 提示文字 - 只在加载成功且未绘制时显示 */}
-        {loadState === 'loaded' && !hasDrawing && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-black/50 text-white text-sm px-4 py-2 rounded-lg backdrop-blur-sm">
-              在要修改的区域涂抹
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

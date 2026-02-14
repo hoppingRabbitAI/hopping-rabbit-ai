@@ -1,1 +1,1 @@
-# HoppingRabbit AI Backend
+# Lepus AI Backend

@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 可灵AI Callback 接收器
+Lepus AI - 可灵AI Callback 接收器
 接收可灵AI的任务状态回调通知，实时更新任务状态
 
 回调协议:
@@ -199,6 +199,32 @@ def create_ai_output(
 # 回调处理
 # ============================================
 
+async def _publish_task_sse(ai_task: Dict, event_type: str, result_url: str = None, error: str = None):
+    """发送任务完成/失败的 SSE 事件到前端"""
+    session_id = ai_task.get("session_id")
+    if not session_id:
+        logger.warning(f"[Callback] 任务 {ai_task['id']} 无 session_id，跳过 SSE 推送")
+        return
+    try:
+        from ..services.ai_capability_service import get_ai_capability_service, TaskEvent
+        service = get_ai_capability_service()
+        event = TaskEvent(
+            task_id=ai_task["id"],
+            session_id=session_id,
+            event_type=event_type,
+            status="completed" if event_type == "completed" else "failed",
+            progress=100,
+            message="任务完成" if event_type == "completed" else error,
+            result_url=result_url,
+            error=error,
+            timestamp=datetime.utcnow().isoformat(),
+        )
+        await service._publish_event(event)
+        logger.info(f"[Callback] ✅ SSE 事件已推送: task={ai_task['id']}, type={event_type}")
+    except Exception as e:
+        logger.warning(f"[Callback] SSE 推送失败（不影响主流程）: {e}")
+
+
 async def process_callback_result(
     ai_task: Dict,
     payload: KlingCallbackPayload
@@ -209,6 +235,7 @@ async def process_callback_result(
     - 上传到我们的存储
     - 创建 ai_outputs 记录（不是 assets！）
     - 更新任务状态
+    - ★ 发送 SSE 事件通知前端
     """
     ai_task_id = ai_task["id"]
     user_id = ai_task["user_id"]
@@ -224,6 +251,7 @@ async def process_callback_result(
                 error_message="回调成功但无结果数据",
                 progress=100
             )
+            await _publish_task_sse(ai_task, "failed", error="回调成功但无结果数据")
             return
         
         # 处理图片结果
@@ -242,6 +270,17 @@ async def process_callback_result(
                 error_message="回调成功但结果为空",
                 progress=100
             )
+            await _publish_task_sse(ai_task, "failed", error="回调成功但结果为空")
+            return
+        
+        # ★ 处理成功后，发送 SSE completed 事件
+        # 重新读取任务以获取 output_url
+        try:
+            refreshed = _get_supabase().table("tasks").select("output_url").eq("id", ai_task_id).single().execute()
+            output_url = refreshed.data.get("output_url") if refreshed.data else None
+        except Exception:
+            output_url = None
+        await _publish_task_sse(ai_task, "completed", result_url=output_url)
             
     except Exception as e:
         logger.error(f"[Callback] 处理结果失败: {ai_task_id}, error={e}")
@@ -252,6 +291,7 @@ async def process_callback_result(
             error_message=f"处理回调结果失败: {str(e)}",
             progress=100
         )
+        await _publish_task_sse(ai_task, "failed", error=str(e))
 
 
 async def _process_image_results(
@@ -265,6 +305,7 @@ async def _process_image_results(
     update_ai_task(ai_task_id, progress=70, status_message=f"下载 {len(images)} 张图片...")
     
     output_ids = []
+    uploaded_images = []
     first_url = None
     
     for img in images:
@@ -295,6 +336,11 @@ async def _process_image_results(
             )
             
             output_ids.append(output_id)
+            uploaded_images.append({
+                "index": img.index,
+                "url": final_url,
+                "output_id": output_id,
+            })
             
             if first_url is None:
                 first_url = final_url
@@ -303,16 +349,17 @@ async def _process_image_results(
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
     
-    # 完成 - output_url 存第一张图，result_metadata 存所有输出 ID
+    # 完成 - output_url 存第一张图，metadata 存所有图片 URL（前端需要 images 数组）
     update_ai_task(
         ai_task_id,
         status="completed",
         progress=100,
         status_message=f"生成完成，共 {len(output_ids)} 张图片",
         output_url=first_url,
-        result_metadata={
+        metadata={
             "total_outputs": len(output_ids),
-            "output_ids": output_ids
+            "output_ids": output_ids,
+            "images": uploaded_images,
         },
         completed_at=datetime.utcnow().isoformat()
     )
@@ -380,7 +427,7 @@ async def _process_video_results(
         progress=100,
         status_message=f"生成完成，共 {len(output_ids)} 个视频",
         output_url=first_url,
-        result_metadata={
+        metadata={
             "total_outputs": len(output_ids),
             "output_ids": output_ids
         },

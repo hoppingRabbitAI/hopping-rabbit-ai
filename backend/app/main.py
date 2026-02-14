@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - FastAPI Application Entry
+Lepus AI - FastAPI Application Entry
 """
 import os
 from pathlib import Path
@@ -42,7 +42,6 @@ class HttpxFilter(logging.Filter):
     """过滤掉高频 Supabase 轮询请求的 httpx 日志"""
     
     FILTERED_PATTERNS = [
-        "workspace_sessions",  # workspace session 轮询
         "400 Bad Request",     # 缓存检查返回的 400（正常情况）
     ]
     
@@ -65,8 +64,8 @@ from app.api import api_router
 settings = get_settings()
 
 app = FastAPI(
-    title="HoppingRabbit AI",
-    description="智能口播视频剪辑 API",
+    title="Lepus AI",
+    description="智能视频创作 API",
     version="0.1.0",
 )
 
@@ -114,7 +113,7 @@ async def cache_options(file_path: str):
 @app.get("/cache/{file_path:path}")
 async def serve_cache_file(file_path: str):
     """提供缓存文件访问，支持 CORS"""
-    cache_dir = settings.cache_dir or "/tmp/hoppingrabbit_cache"
+    cache_dir = settings.cache_dir or "/tmp/lepus_cache"
     full_path = os.path.join(cache_dir, file_path)
     
     if not os.path.exists(full_path):
@@ -128,7 +127,7 @@ async def serve_cache_file(file_path: str):
 
 # 开发模式：挂载静态文件目录（用于访问本地存储的视频）
 if settings.dev_mode:
-    static_dir = "/tmp/hoppingrabbit_storage"
+    static_dir = "/tmp/lepus_storage"
     os.makedirs(static_dir, exist_ok=True)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -136,7 +135,7 @@ if settings.dev_mode:
 @app.get("/")
 async def root():
     return {
-        "message": "HoppingRabbit AI API",
+        "message": "Lepus AI API",
         "version": "0.1.0",
         "docs": "/docs",
         "dev_mode": settings.dev_mode,

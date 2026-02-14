@@ -48,9 +48,9 @@ const capabilityNames: Record<string, string> = {
 function getStatusIcon(status: Task['status']) {
   switch (status) {
     case 'processing':
-      return <Loader2 className="w-4 h-4 animate-spin text-blue-500" />;
+      return <Loader2 className="w-4 h-4 animate-spin text-gray-500" />;
     case 'completed':
-      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+      return <CheckCircle2 className="w-4 h-4 text-gray-500" />;
     case 'failed':
       return <XCircle className="w-4 h-4 text-red-500" />;
     default:
@@ -82,7 +82,7 @@ function TaskItem({ task }: { task: Task }) {
             <div className="mt-2">
               <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                  className="h-full bg-gray-800 transition-all duration-300"
                   style={{ width: `${task.progress}%` }}
                 />
               </div>
@@ -105,7 +105,7 @@ function TaskItem({ task }: { task: Task }) {
               href={task.resultUrl} 
               target="_blank" 
               rel="noopener noreferrer"
-              className="mt-1 text-xs text-blue-500 hover:underline"
+              className="mt-1 text-xs text-gray-600 hover:text-gray-800 hover:underline"
             >
               查看结果
             </a>
@@ -134,12 +134,12 @@ export function TaskProgressPanel({ tasks, isConnected, onClear }: TaskProgressP
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-purple-500" />
+          <Sparkles className="w-5 h-5 text-gray-500" />
           <span className="font-medium text-gray-800">
             AI 任务 ({activeTasks.length} 进行中)
           </span>
           {!isConnected && (
-            <span className="text-xs text-yellow-600 bg-yellow-50 px-2 py-0.5 rounded">
+            <span className="text-xs text-gray-600 bg-gray-50 px-2 py-0.5 rounded">
               重连中...
             </span>
           )}
@@ -170,7 +170,7 @@ export function TaskProgressPanel({ tasks, isConnected, onClear }: TaskProgressP
                       e.stopPropagation();
                       onClear();
                     }}
-                    className="text-xs text-blue-500 hover:underline"
+                    className="text-xs text-gray-600 hover:text-gray-800 hover:underline"
                   >
                     清除
                   </button>

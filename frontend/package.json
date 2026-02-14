@@ -1,5 +1,5 @@
 {
-  "name": "hoppingrabbit-frontend",
+  "name": "lepus-frontend",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -22,6 +22,7 @@
     "@xyflow/react": "^12.10.0",
     "clsx": "^2.1.1",
     "fabric": "^7.1.0",
+    "framer-motion": "^12.34.0",
     "heic2any": "^0.0.4",
     "hls.js": "^1.6.15",
     "lucide-react": "^0.460.0",

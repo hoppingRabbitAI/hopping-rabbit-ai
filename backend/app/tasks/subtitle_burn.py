@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 字幕烧录任务
+Lepus AI - 字幕烧录任务
 将字幕硬编码到视频中
 """
 import os
@@ -87,7 +87,7 @@ def generate_ass_content(
     
     # ASS 文件头
     header = f"""[Script Info]
-Title: HoppingRabbit AI Subtitles
+Title: Lepus AI Subtitles
 ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
@@ -227,7 +227,7 @@ async def burn_subtitles(
 try:
     from ..celery_config import celery_app, update_task_progress, update_task_status
     
-    @celery_app.task(bind=True, queue="cpu_high")
+    @celery_app.task(bind=True, queue="gpu")
     def burn_subtitles_task(
         self,
         task_id: str,

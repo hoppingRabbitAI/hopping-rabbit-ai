@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 口型同步 Celery 任务
+Lepus AI - 口型同步 Celery 任务
 异步处理口型同步任务，支持进度更新和结果存储
 
 任务流程:
@@ -138,7 +138,7 @@ def create_asset_record(
     
     asset_data = {
         "id": asset_id,
-        "project_id": "00000000-0000-0000-0000-000000000000",  # AI 生成的素材使用虚拟项目
+        "project_id": None,  # AI 生成的素材不属于任何项目
         "user_id": user_id,
         "name": f"AI生成_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
         "original_filename": "ai_generated.mp4",
@@ -164,7 +164,7 @@ def create_asset_record(
 @celery_app.task(
     bind=True,
     name="app.tasks.lip_sync.process_lip_sync",
-    queue="gpu_medium",  # AI 任务使用 GPU 队列
+    queue="gpu",
     autoretry_for=(Exception,),
     retry_backoff=True,
     retry_backoff_max=600,

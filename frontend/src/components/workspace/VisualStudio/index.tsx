@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { 
     ArrowLeft, 
     X, 
@@ -33,6 +33,12 @@ import {
     QUICK_PROMPTS,
     TemplateItem,
 } from './types';
+import {
+    fetchTemplateCandidates,
+    renderTemplate,
+    type TemplateCandidateItem,
+    type TemplateWorkflow,
+} from '@/lib/api/templates';
 
 // ==========================================
 // 工具函数
@@ -56,17 +62,38 @@ function formatTime(seconds: number): string {
 }
 
 // ==========================================
-// 模拟数据
+// 模板辅助函数
 // ==========================================
 
-const MOCK_TEMPLATES: TemplateItem[] = [
-    { id: '1', name: '极简白', url: '/templates/bg-minimal-white.jpg', thumbnailUrl: '/templates/bg-minimal-white-thumb.jpg', category: 'solid' },
-    { id: '2', name: '渐变蓝', url: '/templates/bg-gradient-blue.jpg', thumbnailUrl: '/templates/bg-gradient-blue-thumb.jpg', category: 'solid' },
-    { id: '3', name: '科技感', url: '/templates/bg-tech.jpg', thumbnailUrl: '/templates/bg-tech-thumb.jpg', category: 'tech' },
-    { id: '4', name: '暖色调', url: '/templates/bg-warm.jpg', thumbnailUrl: '/templates/bg-warm-thumb.jpg', category: 'life' },
-    { id: '5', name: '城市夜景', url: '/templates/bg-city-night.jpg', thumbnailUrl: '/templates/bg-city-night-thumb.jpg', category: 'life' },
-    { id: '6', name: '书房', url: '/templates/bg-study.jpg', thumbnailUrl: '/templates/bg-study-thumb.jpg', category: 'office' },
-];
+function getTemplateTags(template: TemplateItem): string[] {
+    const workflow = (template.renderSpec?.workflow || {}) as TemplateWorkflow;
+    const tags: string[] = [];
+    for (const key of ['shot_type', 'camera_move', 'pacing'] as const) {
+        const value = workflow[key];
+        if (value) tags.push(String(value));
+    }
+    const style = workflow.style;
+    if (style && typeof style === 'object') {
+        const styleObj = style as Record<string, unknown>;
+        if (styleObj.color) tags.push(String(styleObj.color));
+        if (styleObj.light) tags.push(String(styleObj.light));
+    } else if (style) {
+        tags.push(String(style));
+    }
+    if (tags.length > 0) return tags;
+    return (template.tags || []).map((item) => String(item));
+}
+
+
+function getTemplateRenderSummary(template: TemplateItem): string {
+    const spec = template.renderSpec;
+    if (!spec) return '';
+    const parts: string[] = [];
+    if (spec.duration) parts.push(`${spec.duration}s`);
+    if (spec.aspect_ratio) parts.push(spec.aspect_ratio);
+    if (spec.endpoint) parts.push(spec.endpoint);
+    return parts.join(' · ');
+}
 
 // ==========================================
 // 背景定制源选项
@@ -169,7 +196,7 @@ function ShotTimeline({
                                 </div>
                             )}
                             {shot.background && (
-                                <div className="absolute top-0.5 right-0.5 w-3 h-3 bg-green-500 rounded-full border border-white" />
+                                <div className="absolute top-0.5 right-0.5 w-3 h-3 bg-gray-500 rounded-full border border-white" />
                             )}
                         </div>
                         <div className="px-1 py-0.5 bg-gray-50 text-center">
@@ -193,11 +220,29 @@ function BackgroundEditor({
     onChange,
     applyScope,
     onApplyScopeChange,
+    templates,
+    templatePrompt,
+    onTemplatePromptChange,
+    onSearchTemplates,
+    isTemplateLoading,
+    templateError,
+    onRenderTemplate,
+    isRenderingTemplate,
+    renderTaskMessage,
 }: { 
     background: ShotBackground | null;
     onChange: (bg: ShotBackground | null) => void;
     applyScope: 'current' | 'all';
     onApplyScopeChange: (scope: 'current' | 'all') => void;
+    templates: TemplateItem[];
+    templatePrompt: string;
+    onTemplatePromptChange: (value: string) => void;
+    onSearchTemplates: () => void;
+    isTemplateLoading: boolean;
+    templateError: string | null;
+    onRenderTemplate: (template: TemplateItem) => void;
+    isRenderingTemplate: boolean;
+    renderTaskMessage: string | null;
 }) {
     const [activeSource, setActiveSource] = useState<BackgroundSource>(
         background?.source || 'ai-generate'
@@ -205,9 +250,13 @@ function BackgroundEditor({
     const [prompt, setPrompt] = useState(background?.aiGenerate?.prompt || '');
     const [selectedTemplateId, setSelectedTemplateId] = useState(background?.template?.selectedId);
     const [activeCategory, setActiveCategory] = useState('all');
-    
+
+    useEffect(() => {
+        setSelectedTemplateId(background?.template?.selectedId);
+    }, [background?.template?.selectedId]);
+
     const isCustomizing = background !== null;
-    
+
     const handleToggleCustomize = (customize: boolean) => {
         if (customize) {
             onChange({
@@ -218,7 +267,7 @@ function BackgroundEditor({
             onChange(null);
         }
     };
-    
+
     const handleSourceChange = (source: BackgroundSource) => {
         setActiveSource(source);
         onChange({
@@ -226,7 +275,7 @@ function BackgroundEditor({
             source,
         });
     };
-    
+
     const handlePromptChange = (newPrompt: string) => {
         setPrompt(newPrompt);
         onChange({
@@ -235,7 +284,7 @@ function BackgroundEditor({
             aiGenerate: { prompt: newPrompt },
         });
     };
-    
+
     const handleTemplateSelect = (template: TemplateItem) => {
         setSelectedTemplateId(template.id);
         onChange({
@@ -243,11 +292,13 @@ function BackgroundEditor({
             template: { selectedId: template.id, selectedTemplate: template },
         });
     };
-    
-    const filteredTemplates = activeCategory === 'all' 
-        ? MOCK_TEMPLATES 
-        : MOCK_TEMPLATES.filter(t => t.category === activeCategory);
-    
+
+    const selectedTemplate = templates.find((item) => item.id === selectedTemplateId);
+
+    const filteredTemplates = activeCategory === 'all'
+        ? templates
+        : templates.filter((t) => t.category === activeCategory);
+
     return (
         <div className="space-y-4">
             {/* 是否自定义背景 */}
@@ -275,7 +326,7 @@ function BackgroundEditor({
                     自定义背景
                 </button>
             </div>
-            
+
             {/* 自定义背景内容 */}
             {isCustomizing && (
                 <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
@@ -305,7 +356,7 @@ function BackgroundEditor({
                             应用全部
                         </button>
                     </div>
-                    
+
                     {/* 背景源选择 */}
                     <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
                         {BACKGROUND_SOURCES.map((item) => (
@@ -324,7 +375,7 @@ function BackgroundEditor({
                             </button>
                         ))}
                     </div>
-                    
+
                     {/* AI 生成 */}
                     {activeSource === 'ai-generate' && (
                         <div className="space-y-3">
@@ -364,7 +415,7 @@ function BackgroundEditor({
                             </button>
                         </div>
                     )}
-                    
+
                     {/* 画布绘制 */}
                     {activeSource === 'canvas' && (
                         <div className="space-y-3">
@@ -402,10 +453,26 @@ function BackgroundEditor({
                             </div>
                         </div>
                     )}
-                    
+
                     {/* 模板选择 */}
                     {activeSource === 'template' && (
                         <div className="space-y-3">
+                            <div className="flex gap-2">
+                                <input
+                                    value={templatePrompt}
+                                    onChange={(e) => onTemplatePromptChange(e.target.value)}
+                                    placeholder="输入风格关键词，如：科技感产品背景"
+                                    className="h-9 flex-1 rounded-lg border border-gray-200 px-2.5 text-xs text-gray-900 outline-none focus:border-gray-400"
+                                />
+                                <button
+                                    onClick={onSearchTemplates}
+                                    disabled={isTemplateLoading}
+                                    className="h-9 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-60"
+                                >
+                                    {isTemplateLoading ? '加载中' : '拉取'}
+                                </button>
+                            </div>
+
                             <div className="flex gap-1.5 overflow-x-auto pb-1">
                                 {TEMPLATE_CATEGORIES.slice(0, 5).map((cat) => (
                                     <button
@@ -422,29 +489,72 @@ function BackgroundEditor({
                                     </button>
                                 ))}
                             </div>
+
+                            {templateError && (
+                                <div className="rounded-lg border border-red-100 bg-red-50 px-2.5 py-2 text-xs text-red-600">
+                                    {templateError}
+                                </div>
+                            )}
+
                             <div className="grid grid-cols-3 gap-2">
-                                {filteredTemplates.map((template) => (
-                                    <button
-                                        key={template.id}
-                                        onClick={() => handleTemplateSelect(template)}
-                                        className={cn(
-                                            "aspect-video rounded-lg overflow-hidden border-2 transition-all relative",
-                                            selectedTemplateId === template.id
-                                                ? "border-gray-900 ring-2 ring-gray-900/20"
-                                                : "border-gray-200 hover:border-gray-400"
-                                        )}
-                                    >
-                                        <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-                                            <span className="text-[10px] text-gray-400">{template.name}</span>
-                                        </div>
-                                        {selectedTemplateId === template.id && (
-                                            <div className="absolute top-1 right-1 w-4 h-4 bg-gray-900 rounded-full flex items-center justify-center">
-                                                <Check size={10} className="text-white" />
+                                {filteredTemplates.map((template) => {
+                                    const tags = getTemplateTags(template);
+                                    const summary = getTemplateRenderSummary(template);
+                                    const thumbnailUrl = template.thumbnailUrl || template.renderSpec?.images?.[0] || '';
+                                    return (
+                                        <button
+                                            key={template.id}
+                                            onClick={() => handleTemplateSelect(template)}
+                                            className={cn(
+                                                "rounded-lg overflow-hidden border-2 transition-all relative text-left",
+                                                selectedTemplateId === template.id
+                                                    ? "border-gray-900 ring-2 ring-gray-900/20"
+                                                    : "border-gray-200 hover:border-gray-400"
+                                            )}
+                                        >
+                                            <div className="aspect-video bg-gray-100">
+                                                {thumbnailUrl ? (
+                                                    <img src={thumbnailUrl} alt={template.name} className="h-full w-full object-cover" />
+                                                ) : (
+                                                    <div className="h-full w-full flex items-center justify-center text-[10px] text-gray-400">{template.name}</div>
+                                                )}
                                             </div>
-                                        )}
-                                    </button>
-                                ))}
+                                            <div className="space-y-1 bg-white p-1.5">
+                                                <div className="truncate text-[10px] font-medium text-gray-700">{template.name}</div>
+                                                {summary && (
+                                                    <div className="truncate text-[10px] text-gray-500">{summary}</div>
+                                                )}
+                                                {tags.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {tags.slice(0, 2).map((tag) => (
+                                                            <span key={template.id + '-' + tag} className="rounded bg-gray-100 px-1 py-0.5 text-[10px] text-gray-600">{tag}</span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {selectedTemplateId === template.id && (
+                                                <div className="absolute top-1 right-1 w-4 h-4 bg-gray-900 rounded-full flex items-center justify-center">
+                                                    <Check size={10} className="text-white" />
+                                                </div>
+                                            )}
+                                        </button>
+                                    );
+                                })}
                             </div>
+
+                            <button
+                                onClick={() => selectedTemplate && onRenderTemplate(selectedTemplate)}
+                                disabled={!selectedTemplate || isRenderingTemplate}
+                                className="w-full py-2 rounded-lg text-sm font-medium bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                                {isRenderingTemplate ? '正在创建任务...' : '使用模板生成'}
+                            </button>
+
+                            {renderTaskMessage && (
+                                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-xs text-gray-700">
+                                    {renderTaskMessage}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -460,11 +570,27 @@ function BackgroundEditor({
 function AnalysisDoneState({ 
     config, 
     onChange,
-    mainVideoInfo,
+    templates,
+    templatePrompt,
+    onTemplatePromptChange,
+    onSearchTemplates,
+    isTemplateLoading,
+    templateError,
+    onRenderTemplate,
+    isRenderingTemplate,
+    renderTaskMessage,
 }: { 
     config: VisualStudioConfig;
     onChange: (config: VisualStudioConfig) => void;
-    mainVideoInfo?: VisualStudioPanelProps['mainVideoInfo'];
+    templates: TemplateItem[];
+    templatePrompt: string;
+    onTemplatePromptChange: (value: string) => void;
+    onSearchTemplates: () => void;
+    isTemplateLoading: boolean;
+    templateError: string | null;
+    onRenderTemplate: (template: TemplateItem, clipId?: string) => void;
+    isRenderingTemplate: boolean;
+    renderTaskMessage: string | null;
 }) {
     const selectedShot = config.shots.find(s => s.id === config.selectedShotId);
     const [applyScope, setApplyScope] = useState<'current' | 'all'>('all');
@@ -504,6 +630,11 @@ function AnalysisDoneState({
     const currentBackground = applyScope === 'all' 
         ? config.globalBackground 
         : selectedShot?.background || null;
+
+    const handleRenderTemplate = (template: TemplateItem) => {
+        const clipId = applyScope === 'current' ? selectedShot?.id : undefined;
+        onRenderTemplate(template, clipId);
+    };
     
     return (
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -532,6 +663,15 @@ function AnalysisDoneState({
                     onChange={handleBackgroundChange}
                     applyScope={applyScope}
                     onApplyScopeChange={setApplyScope}
+                    templates={templates}
+                    templatePrompt={templatePrompt}
+                    onTemplatePromptChange={onTemplatePromptChange}
+                    onSearchTemplates={onSearchTemplates}
+                    isTemplateLoading={isTemplateLoading}
+                    templateError={templateError}
+                    onRenderTemplate={handleRenderTemplate}
+                    isRenderingTemplate={isRenderingTemplate}
+                    renderTaskMessage={renderTaskMessage}
                 />
             </div>
         </div>
@@ -550,6 +690,84 @@ export default function VisualStudioPanel({
     onBack,
     onClose,
 }: VisualStudioPanelProps) {
+    const [templates, setTemplates] = useState<TemplateItem[]>([]);
+    const [templatePrompt, setTemplatePrompt] = useState('');
+    const [isTemplateLoading, setIsTemplateLoading] = useState(false);
+    const [templateError, setTemplateError] = useState<string | null>(null);
+    const [isTemplateRendering, setIsTemplateRendering] = useState(false);
+    const [renderTaskMessage, setRenderTaskMessage] = useState<string | null>(null);
+
+    const loadTemplateCandidates = useCallback(async (prompt: string) => {
+        setIsTemplateLoading(true);
+        setTemplateError(null);
+        try {
+            const result = await fetchTemplateCandidates({
+                scope: 'visual-studio',
+                template_kind: 'background',
+                limit: 5,
+                prompt: prompt || undefined,
+            });
+
+            const items: TemplateItem[] = (result.candidates || []).map((candidate: TemplateCandidateItem) => ({
+                id: candidate.template_id,
+                name: candidate.name,
+                url: candidate.render_spec?.images?.[0] || candidate.thumbnail_url || '',
+                thumbnailUrl: candidate.thumbnail_url || candidate.render_spec?.images?.[0] || '',
+                category: candidate.category || 'ad',
+                tags: candidate.tags || [],
+                renderSpec: candidate.render_spec,
+            }));
+
+            setTemplates(items);
+            if (items.length === 0) {
+                setTemplateError('没有找到匹配模板，换个描述再试试');
+            }
+        } catch (error) {
+            setTemplateError(error instanceof Error ? error.message : '加载模板候选失败');
+        } finally {
+            setIsTemplateLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        void loadTemplateCandidates('');
+    }, [loadTemplateCandidates]);
+
+    const handleRenderTemplate = useCallback(async (template: TemplateItem, clipId?: string) => {
+        if (!template.renderSpec) {
+            setTemplateError('所选模板缺少 render 规格，请更换模板');
+            return;
+        }
+
+        setIsTemplateRendering(true);
+        setTemplateError(null);
+        setRenderTaskMessage(null);
+        try {
+            const spec = template.renderSpec;
+            const result = await renderTemplate(template.id, {
+                prompt: templatePrompt || spec.prompt,
+                negative_prompt: spec.negative_prompt,
+                duration: spec.duration,
+                model_name: spec.model_name,
+                cfg_scale: spec.cfg_scale,
+                mode: spec.mode,
+                aspect_ratio: spec.aspect_ratio,
+                images: spec.images,
+                video_url: spec.video_url,
+                clip_id: clipId,
+                write_clip_metadata: true,
+                overrides: {
+                    kling_endpoint: spec.endpoint,
+                },
+            });
+
+            setRenderTaskMessage(`模板任务已创建：${result.task_id}`);
+        } catch (error) {
+            setTemplateError(error instanceof Error ? error.message : '模板渲染失败');
+        } finally {
+            setIsTemplateRendering(false);
+        }
+    }, [templatePrompt]);
     
     // 模拟 AI 分析
     const handleStartAnalysis = useCallback(async () => {
@@ -628,7 +846,15 @@ export default function VisualStudioPanel({
                             <AnalysisDoneState 
                                 config={config} 
                                 onChange={onChange}
-                                mainVideoInfo={mainVideoInfo}
+                                templates={templates}
+                                templatePrompt={templatePrompt}
+                                onTemplatePromptChange={setTemplatePrompt}
+                                onSearchTemplates={() => loadTemplateCandidates(templatePrompt.trim())}
+                                isTemplateLoading={isTemplateLoading}
+                                templateError={templateError}
+                                onRenderTemplate={handleRenderTemplate}
+                                isRenderingTemplate={isTemplateRendering}
+                                renderTaskMessage={renderTaskMessage}
                             />
                         )}
                     </div>
@@ -667,12 +893,12 @@ export default function VisualStudioPanel({
                         
                         {/* 分析状态提示 */}
                         {config.analysisStatus === 'done' && (
-                            <div className="mt-4 p-3 bg-green-50 rounded-lg">
-                                <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
+                            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                                <div className="flex items-center gap-2 text-gray-700 text-sm font-medium">
                                     <Check size={14} />
                                     分析完成
                                 </div>
-                                <p className="text-xs text-green-600 mt-1">
+                                <p className="text-xs text-gray-600 mt-1">
                                     已识别 {config.shots.length} 个分镜
                                 </p>
                             </div>

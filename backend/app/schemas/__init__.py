@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Pydantic Schemas
+Lepus AI - Pydantic Schemas
 """
 
 from .kling import *

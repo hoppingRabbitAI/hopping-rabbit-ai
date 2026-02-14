@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - TTS 语音合成服务
+Lepus AI - TTS 语音合成服务
 支持 Fish Audio API 实现文本转语音和声音克隆
 
 功能:
@@ -99,9 +99,6 @@ class TTSService:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or FISH_AUDIO_API_KEY
         self.base_url = FISH_AUDIO_BASE_URL
-        
-        if not self.api_key:
-            logger.warning("[TTS] 未配置 FISH_AUDIO_API_KEY，将使用 Mock 模式")
     
     def _get_headers(self) -> Dict[str, str]:
         """获取请求头"""

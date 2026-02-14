@@ -129,7 +129,8 @@ const WORKFLOW_STAGES: WorkflowStage[] = STRATEGY_A_STAGES;
 
 interface WorkflowProgressProps {
   workflowId: string;
-  sessionId: string;
+  projectId: string;
+  taskId?: string;  // ★ 关联的任务 ID，用于同步进度到 taskHistoryStore
   onComplete?: (resultUrl: string) => void;
   onError?: (error: string) => void;
   onClose?: () => void;
@@ -149,13 +150,17 @@ interface WorkflowStatus {
   strategyRecommendation?: string;
 }
 
+import { useTaskHistoryStore } from '@/stores/taskHistoryStore';
+
 export function BackgroundReplaceProgress({
   workflowId,
-  sessionId,
+  projectId,
+  taskId,
   onComplete,
   onError,
   onClose,
 }: WorkflowProgressProps) {
+  const updateTask = useTaskHistoryStore(state => state.updateTask);
   const [status, setStatus] = useState<WorkflowStatus>({
     status: 'pending',
     currentStage: 'created',
@@ -175,9 +180,83 @@ export function BackgroundReplaceProgress({
     return STRATEGY_A_STAGES; // 默认
   }, [status.detectedStrategy]);
 
-  // 连接 SSE
+  // ★★★ 轮询获取任务状态（作为 SSE 的后备方案）★★★
+  const pollWorkflowStatus = useCallback(async () => {
+    if (!workflowId) return;
+    
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/api\/?$/, '') || 'http://localhost:8000';
+      const response = await fetch(`${backendUrl}/api/background-replace/workflows/${workflowId}`);
+      
+      if (!response.ok) {
+        console.warn('[WorkflowProgress] 轮询失败:', response.status);
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('[WorkflowProgress] 轮询结果:', data);
+      
+      // 更新状态
+      if (data.status === 'completed') {
+        setStatus(prev => ({
+          ...prev,
+          status: 'completed',
+          currentStage: 'completed',
+          overallProgress: 100,
+          resultUrl: data.result_url,
+        }));
+        if (taskId) {
+          updateTask(taskId, {
+            status: 'completed',
+            progress: 100,
+            status_message: '处理完成',
+            output_url: data.result_url,
+            completed_at: new Date().toISOString(),
+          });
+        }
+        onComplete?.(data.result_url);
+        return true; // 停止轮询
+      } else if (data.status === 'failed') {
+        setStatus(prev => ({
+          ...prev,
+          status: 'failed',
+          error: data.error || '处理失败',
+        }));
+        if (taskId) {
+          updateTask(taskId, {
+            status: 'failed',
+            error_message: data.error || '处理失败',
+          });
+        }
+        onError?.(data.error || '处理失败');
+        return true; // 停止轮询
+      } else {
+        // 进行中
+        setStatus(prev => ({
+          ...prev,
+          status: 'running',
+          overallProgress: data.progress || prev.overallProgress,
+        }));
+        if (taskId) {
+          updateTask(taskId, {
+            status: 'processing',
+            progress: data.progress || 0,
+          });
+        }
+        return false; // 继续轮询
+      }
+    } catch (err) {
+      console.error('[WorkflowProgress] 轮询出错:', err);
+      return false;
+    }
+  }, [workflowId, taskId, updateTask, onComplete, onError]);
+
+  // 连接 SSE，失败时回退到轮询
   useEffect(() => {
     if (!workflowId) return;
+
+    let pollingTimer: ReturnType<typeof setInterval> | null = null;
+    let usePolling = false;
 
     const backendUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/api\/?$/, '') || 'http://localhost:8000';
     const eventSource = new EventSource(
@@ -195,16 +274,25 @@ export function BackgroundReplaceProgress({
         console.log('[WorkflowProgress] 收到事件:', data);
 
         if (data.event_type === 'progress' || data.event_type === 'stage_change') {
+          const progress = data.data?.overall_progress || 0;
+          const message = data.data?.message || data.data?.stage || '';
           setStatus(prev => ({
             ...prev,
             status: 'running',
             currentStage: data.data?.stage || prev.currentStage,
             stageProgress: data.data?.stage_progress || prev.stageProgress,
-            overallProgress: data.data?.overall_progress || prev.overallProgress,
-            message: data.data?.message,
+            overallProgress: progress,
+            message,
           }));
+          // ★ 同步进度到 taskHistoryStore
+          if (taskId) {
+            updateTask(taskId, {
+              status: 'processing',
+              progress,
+              status_message: message,
+            });
+          }
         } else if (data.event_type === 'strategy_detected') {
-          // [新增] 处理策略检测事件
           setStatus(prev => ({
             ...prev,
             detectedStrategy: data.data?.strategy,
@@ -219,6 +307,16 @@ export function BackgroundReplaceProgress({
             overallProgress: 100,
             resultUrl: data.data?.result_url,
           }));
+          // ★ 同步完成状态到 taskHistoryStore
+          if (taskId) {
+            updateTask(taskId, {
+              status: 'completed',
+              progress: 100,
+              status_message: '处理完成',
+              output_url: data.data?.result_url,
+              completed_at: new Date().toISOString(),
+            });
+          }
           onComplete?.(data.data?.result_url);
           eventSource.close();
         } else if (data.event_type === 'failed') {
@@ -227,6 +325,13 @@ export function BackgroundReplaceProgress({
             status: 'failed',
             error: data.data?.error || '处理失败',
           }));
+          // ★ 同步失败状态到 taskHistoryStore
+          if (taskId) {
+            updateTask(taskId, {
+              status: 'failed',
+              error_message: data.data?.error || '处理失败',
+            });
+          }
           onError?.(data.data?.error || '处理失败');
           eventSource.close();
         }
@@ -236,14 +341,31 @@ export function BackgroundReplaceProgress({
     };
 
     eventSource.onerror = () => {
-      console.error('[WorkflowProgress] SSE 连接错误');
+      console.error('[WorkflowProgress] SSE 连接错误，切换到轮询模式');
       setIsConnected(false);
+      eventSource.close();
+      
+      // ★★★ 回退到轮询模式 ★★★
+      if (!usePolling) {
+        usePolling = true;
+        console.log('[WorkflowProgress] 启动轮询...');
+        pollingTimer = setInterval(async () => {
+          const shouldStop = await pollWorkflowStatus();
+          if (shouldStop && pollingTimer) {
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+          }
+        }, 3000); // 每3秒轮询一次
+      }
     };
 
     return () => {
       eventSource.close();
+      if (pollingTimer) {
+        clearInterval(pollingTimer);
+      }
     };
-  }, [workflowId, onComplete, onError]);
+  }, [workflowId, taskId, updateTask, onComplete, onError, pollWorkflowStatus]);
 
   // 计时器
   useEffect(() => {
@@ -307,7 +429,7 @@ export function BackgroundReplaceProgress({
           <div className="relative h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
               className={`absolute left-0 top-0 h-full rounded-full transition-all duration-500 ${
-                status.status === 'failed' ? 'bg-red-500' : 'bg-gradient-to-r from-blue-500 to-indigo-600'
+                status.status === 'failed' ? 'bg-red-500' : 'bg-gray-800'
               }`}
               style={{ width: `${status.overallProgress}%` }}
             />
@@ -322,17 +444,17 @@ export function BackgroundReplaceProgress({
         {status.detectedStrategy && (
           <div className={`mx-6 mb-3 p-3 rounded-lg flex items-start gap-3 ${
             status.detectedStrategy === 'background_only' 
-              ? 'bg-green-50 border border-green-200' 
-              : 'bg-amber-50 border border-amber-200'
+              ? 'bg-gray-50 border border-gray-200' 
+              : 'bg-gray-50 border border-gray-200'
           }`}>
             {status.detectedStrategy === 'background_only' ? (
-              <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+              <CheckCircle className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" />
             ) : (
-              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" />
             )}
             <div>
               <div className={`text-sm font-medium ${
-                status.detectedStrategy === 'background_only' ? 'text-green-700' : 'text-amber-700'
+                status.detectedStrategy === 'background_only' ? 'text-gray-700' : 'text-gray-700'
               }`}>
                 {status.detectedStrategy === 'background_only' 
                   ? '检测到仅编辑背景' 
@@ -359,16 +481,16 @@ export function BackgroundReplaceProgress({
               <div
                 key={stage.id}
                 className={`flex items-center gap-4 p-3 rounded-xl transition-all ${
-                  stageStatus === 'active' ? 'bg-blue-50 border border-blue-200' :
-                  stageStatus === 'completed' ? 'bg-green-50' :
+                  stageStatus === 'active' ? 'bg-gray-50 border border-gray-200' :
+                  stageStatus === 'completed' ? 'bg-gray-50' :
                   stageStatus === 'failed' ? 'bg-red-50' :
                   'bg-gray-50'
                 }`}
               >
                 {/* 图标 */}
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                  stageStatus === 'active' ? 'bg-blue-500 text-white' :
-                  stageStatus === 'completed' ? 'bg-green-500 text-white' :
+                  stageStatus === 'active' ? 'bg-gray-800 text-white' :
+                  stageStatus === 'completed' ? 'bg-gray-500 text-white' :
                   stageStatus === 'failed' ? 'bg-red-500 text-white' :
                   'bg-gray-200 text-gray-400'
                 }`}>
@@ -386,8 +508,8 @@ export function BackgroundReplaceProgress({
                 {/* 文字 */}
                 <div className="flex-1">
                   <div className={`font-medium ${
-                    stageStatus === 'active' ? 'text-blue-700' :
-                    stageStatus === 'completed' ? 'text-green-700' :
+                    stageStatus === 'active' ? 'text-gray-800' :
+                    stageStatus === 'completed' ? 'text-gray-700' :
                     stageStatus === 'failed' ? 'text-red-700' :
                     'text-gray-400'
                   }`}>
@@ -400,7 +522,7 @@ export function BackgroundReplaceProgress({
 
                 {/* 阶段进度 */}
                 {stageStatus === 'active' && (
-                  <div className="text-sm font-medium text-blue-600">
+                  <div className="text-sm font-medium text-gray-600">
                     {status.stageProgress}%
                   </div>
                 )}
@@ -425,12 +547,12 @@ export function BackgroundReplaceProgress({
         {/* 完成状态 */}
         {status.status === 'completed' && (
           <div className="px-6 pb-4">
-            <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
-              <div className="flex items-center gap-2 text-green-700">
+            <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl">
+              <div className="flex items-center gap-2 text-gray-700">
                 <Check className="w-5 h-5" />
                 <span className="font-medium">背景替换完成！</span>
               </div>
-              <p className="mt-1 text-sm text-green-600">
+              <p className="mt-1 text-sm text-gray-600">
                 视频已更新，可以在时间轴中预览效果
               </p>
             </div>
@@ -450,7 +572,7 @@ export function BackgroundReplaceProgress({
           {status.status === 'completed' && (
             <button
               onClick={onClose}
-              className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-sm font-medium rounded-xl hover:from-blue-600 hover:to-indigo-700 transition-all"
+              className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white text-sm font-medium rounded-xl transition-all"
             >
               完成
             </button>
@@ -464,7 +586,7 @@ export function BackgroundReplaceProgress({
                 关闭
               </button>
               <button
-                className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-sm font-medium rounded-xl hover:from-blue-600 hover:to-indigo-700 transition-all"
+                className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white text-sm font-medium rounded-xl transition-all"
                 disabled
               >
                 重试（开发中）

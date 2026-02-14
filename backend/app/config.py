@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - Configuration
+Lepus AI - Configuration
 """
 from pydantic_settings import BaseSettings
 from functools import lru_cache
@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     volcengine_secret_key: Optional[str] = None
     doubao_model_endpoint: str = "doubao-seed-1-6-flash-250828"  # Flash 模型（速度快）
     doubao_seed_1_8_endpoint: str = "doubao-seed-1-8-251228"  # Seed-1.8 模型（更强推理能力）
+    doubao_image_model_endpoint: str = "ep-20260214085933-kv5kj"  # Seedream 4.0 生图模型
     
     # LLM (Google Gemini)
     # 获取 API Key: https://aistudio.google.com/app/apikey
@@ -48,23 +49,29 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"  # cpu 或 cuda
     
     # Storage
-    cache_dir: str = "/tmp/hoppingrabbit_cache"
+    cache_dir: str = "/tmp/lepus_cache"
     
     # Backend URL (用于生成完整的静态文件 URL)
     # 本地开发: http://localhost:8000
-    # 生产环境: https://api.hoppingrabbit.ai
+    # 生产环境: https://api.lepus.ai
     backend_url: str = "http://localhost:8000"
     
     # Callback URL (可灵AI回调地址)
     # 生产环境需设置为公网可访问的地址，如 https://api.example.com
     # 本地开发可用 ngrok 等工具暴露
-    callback_base_url: str = ""  # 例如: https://api.hoppingrabbit.ai
+    callback_base_url: str = ""  # 例如: https://api.lepus.ai
     
     # Stripe 配置
     stripe_secret_key: str = ""  # sk_test_xxx 或 sk_live_xxx
     stripe_webhook_secret: str = ""  # whsec_xxx
     stripe_success_url: str = "http://localhost:3000/settings?tab=billing&topup=success"
     stripe_cancel_url: str = "http://localhost:3000/settings?tab=billing&topup=cancelled"
+    
+    # ============================================
+    # Stability AI 配置
+    # ============================================
+    stability_api_key: Optional[str] = None  # 从 https://platform.stability.ai 获取
+    stability_api_base: str = "https://api.stability.ai"
     
     # CORS
     cors_origins: list[str] = [

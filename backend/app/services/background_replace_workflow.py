@@ -133,22 +133,38 @@ async def resolve_video_download_url(clip_id: str) -> Optional[str]:
             ])
             
             logger.info(f"[ResolveURL] 执行 ffmpeg 处理: {' '.join(cmd[:6])}...")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             
-            if result.returncode != 0:
-                logger.error(f"[ResolveURL] ffmpeg 处理失败: {result.stderr[:500]}")
+            # ★★★ 使用 asyncio 异步执行 ffmpeg，不阻塞事件循环 ★★★
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                logger.error(f"[ResolveURL] ffmpeg 处理超时")
+                return None
+            
+            if process.returncode != 0:
+                logger.error(f"[ResolveURL] ffmpeg 处理失败: {stderr.decode()[:500]}")
                 return None  # 不回退，直接失败
             
-            # 6. 上传裁剪后的视频到 Supabase Storage
-            with open(output_path, "rb") as f:
-                video_bytes = f.read()
-            
+            # 6. 上传裁剪后的视频到 Supabase Storage（在线程池中执行，避免阻塞）
             upload_path = f"clip-exports/{output_filename}"
-            supabase.storage.from_("ai-creations").upload(
-                path=upload_path,
-                file=video_bytes,
-                file_options={"content-type": "video/mp4"}
-            )
+            
+            def _read_and_upload():
+                with open(output_path, "rb") as f:
+                    video_bytes = f.read()
+                supabase.storage.from_("ai-creations").upload(
+                    path=upload_path,
+                    file=video_bytes,
+                    file_options={"content-type": "video/mp4"}
+                )
+            
+            await asyncio.get_event_loop().run_in_executor(None, _read_and_upload)
             
             # 7. 获取签名 URL
             clip_url = get_file_url("ai-creations", upload_path, expires_in=3600)
@@ -764,15 +780,20 @@ class VideoAnalysisAgent:
             else:
                 logger.info(f"[VideoAnalysis] 使用缓存视频: {tmp_path}")
             
-            # Step 2: 使用 ffprobe 获取视频信息
+            # Step 2: 使用 ffprobe 获取视频信息（异步执行）
             probe_cmd = [
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=r_frame_rate,duration",
                 "-of", "json", tmp_path
             ]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            probe_data = json.loads(probe_result.stdout)
+            probe_process = await asyncio.create_subprocess_exec(
+                *probe_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            probe_stdout, _ = await probe_process.communicate()
+            probe_data = json.loads(probe_stdout.decode())
             
             stream = probe_data.get("streams", [{}])[0]
             fps_str = stream.get("r_frame_rate", "30/1")
@@ -780,7 +801,7 @@ class VideoAnalysisAgent:
             fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else 30.0
             duration = float(stream.get("duration", 0))
             
-            # Step 3: 使用 ffmpeg 提取帧
+            # Step 3: 使用 ffmpeg 提取帧（异步执行）
             frames_dir = tempfile.mkdtemp()
             extract_cmd = [
                 "ffmpeg", "-i", tmp_path,
@@ -788,7 +809,12 @@ class VideoAnalysisAgent:
                 "-q:v", "2",
                 f"{frames_dir}/frame_%04d.jpg"
             ]
-            subprocess.run(extract_cmd, capture_output=True)
+            extract_process = await asyncio.create_subprocess_exec(
+                *extract_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await extract_process.communicate()
             
             # 加载帧
             frames = []
@@ -1427,7 +1453,15 @@ class VideoGenerationAgent:
                 "-c", "copy",
                 output_file.name
             ]
-            subprocess.run(cmd, capture_output=True, check=True)
+            # 异步执行 ffmpeg
+            stitch_process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            _, stitch_stderr = await stitch_process.communicate()
+            if stitch_process.returncode != 0:
+                raise RuntimeError(f"ffmpeg 拼接失败: {stitch_stderr.decode()[:200]}")
             
             # TODO: 上传到存储并返回 URL
             # 目前返回本地路径

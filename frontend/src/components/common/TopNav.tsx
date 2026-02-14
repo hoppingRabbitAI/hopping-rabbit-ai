@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, LogOut, Settings, User, Bell } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { useAuthStore } from '@/features/editor/store/auth-store';
+import { useAuthStore } from '@/stores/authStore';
 import { useCredits } from '@/lib/hooks/useCredits';
 
 interface TopNavProps {
@@ -12,7 +12,7 @@ interface TopNavProps {
   title?: string;
   /** 是否显示返回按钮 */
   showBack?: boolean;
-  /** 返回按钮点击处理（默认返回 /workspace） */
+  /** 返回按钮点击处理（默认返回 /p） */
   onBack?: () => void;
   /** 右侧额外操作按钮 */
   rightActions?: React.ReactNode;
@@ -63,7 +63,7 @@ export function TopNav({
     if (onBack) {
       onBack();
     } else {
-      router.push('/workspace');
+      router.push('/p');
     }
   };
 
@@ -94,7 +94,7 @@ export function TopNav({
         {/* Logo */}
         <div
           className="flex items-center space-x-2 cursor-pointer"
-          onClick={() => router.push('/workspace')}
+          onClick={() => router.push('/p')}
         >
           <div className="w-8 h-8 flex items-center justify-center overflow-hidden">
             <img src="/rabbit-logo.png" alt="Logo" className="w-full h-full object-contain" />
@@ -182,7 +182,7 @@ export function TopNav({
                     {(credits.credits_total_granted ?? 0) > 0 && (
                       <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all"
+                          className="h-full bg-gray-500 transition-all"
                           style={{
                             width: `${Math.min((credits.credits_balance / (credits.credits_total_granted ?? 1)) * 100, 100).toFixed(0)}%`,
                           }}

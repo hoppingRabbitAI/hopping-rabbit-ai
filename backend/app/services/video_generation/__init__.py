@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 统一视频生成服务
+Lepus AI - 统一视频生成服务
 
 支持多个模型提供商:
 - Kling AI (可灵)
@@ -15,7 +15,7 @@ HoppingRabbit AI - 统一视频生成服务
     models = list_models()
     
     # 获取生成器
-    generator = get_generator("kling-v2-1-master")
+    generator = get_generator("kling-v2-6")
     result = await generator.text_to_video(prompt="...")
 """
 

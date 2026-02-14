@@ -8,13 +8,15 @@ import type { Node, Edge } from '@xyflow/react';
 // 节点类型
 // ==========================================
 
-export type NodeType = 'clip' | 'processor' | 'output';
+export type NodeType = 'clip' | 'processor' | 'output' | 'prompt';
 
 // Clip 节点数据
 export interface ClipNodeData extends Record<string, unknown> {
   clipId: string;
-  assetId: string;         // ★ 素材 ID，用于获取视频播放 URL
+  assetId?: string;        // ★ 素材 ID（空节点可无 assetId）
   index: number;
+  /** 媒体类型：video 有播放器、image 只显示静态图 */
+  mediaType: 'video' | 'image';
   thumbnail?: string;
   duration: number;        // 秒
   startTime: number;       // 时间轴上的起点（秒）
@@ -24,7 +26,23 @@ export interface ClipNodeData extends Record<string, unknown> {
   transcript?: string;
   name?: string;
   isSelected?: boolean;
-  aspectRatio?: '16:9' | '9:16' | 'vertical' | 'horizontal';  // 视频比例
+  aspectRatio?: '16:9' | '9:16' | 'vertical' | 'horizontal';  // 素材比例
+  videoUrl?: string;       // ★ 替换后的视频 URL（直接播放）
+  /** ★ AI 生成中的任务 ID — 非空表示此节点正在等待 AI 生成结果 */
+  generatingTaskId?: string;
+  /** ★ AI 生成中的能力标签（用于 loading UI 显示） */
+  generatingCapability?: string;
+  onOpenGeneration?: (clipId: string, capabilityId?: string) => void;  // ★ 右键直接打开生成弹窗，可指定能力
+  onOpenCompositor?: (clipId: string) => void;  // ★ Edit 按钮 → 打开 Compositor 全屏合成编辑器
+  onSeparate?: (clipId: string) => void;  // ★ 右键「抠图分层」→ 后台静默分离
+  isFreeNode?: boolean;    // ★ 是否为自由节点（画布右键添加的独立素材）
+  onDeleteFreeNode?: (nodeId: string) => void;  // ★ 删除自由节点回调
+  /** ★ 空节点标记 — 等待上游连线后触发 AI 生成 */
+  isEmpty?: boolean;
+  /** ★ 空节点有上游连线时的生成回调 */
+  onGenerateFromEmpty?: (clipId: string) => void;
+  /** ★ 空节点上游连线数量（用于显示"生成"按钮） */
+  upstreamCount?: number;
 }
 
 // Processor 节点数据（AI 处理）
@@ -104,16 +122,6 @@ export const AI_CAPABILITIES: AICapability[] = [
     description: '自动生成动态字幕',
     icon: 'Subtitles',
     category: 'text',
-    inputType: 'clip',
-    outputType: 'clip',
-    requiresConfig: true,
-  },
-  {
-    id: 'style-transfer',
-    name: '风格迁移',
-    description: '应用艺术风格滤镜',
-    icon: 'Palette',
-    category: 'effect',
     inputType: 'clip',
     outputType: 'clip',
     requiresConfig: true,

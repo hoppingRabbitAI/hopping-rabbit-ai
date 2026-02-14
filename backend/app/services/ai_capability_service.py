@@ -11,10 +11,12 @@ AI 能力服务
 """
 
 import os
+import io
 import uuid
 import asyncio
 import logging
 import json
+import httpx
 from typing import Optional, Dict, Any, List, Callable, Set
 from datetime import datetime
 from enum import Enum
@@ -34,6 +36,21 @@ class CapabilityType(str, Enum):
     ADD_SUBTITLE = "add-subtitle"
     STYLE_TRANSFER = "style-transfer"
     VOICE_ENHANCE = "voice-enhance"
+    OMNI_IMAGE = "omni_image"
+
+
+def normalize_capability_type(capability_type: str) -> str:
+    """将前端/历史别名归一化为 CapabilityType 可识别的值。"""
+    raw = (capability_type or "").strip()
+    aliases = {
+        "background_replace": "background-replace",
+        "add_broll": "add-broll",
+        "add_subtitle": "add-subtitle",
+        "style_transfer": "style-transfer",
+        "voice_enhance": "voice-enhance",
+        "omni-image": "omni_image",
+    }
+    return aliases.get(raw, raw)
 
 
 class TaskStatus(str, Enum):
@@ -54,6 +71,7 @@ class TaskEvent:
     progress: int = 0  # 0-100
     message: Optional[str] = None
     result_url: Optional[str] = None
+    output_asset_id: Optional[str] = None  # ★ AI 生成的资产 ID
     error: Optional[str] = None
     timestamp: Optional[str] = None
     
@@ -177,9 +195,11 @@ class AICapabilityService:
         if mask_data_url:
             mask_url = await self._upload_mask(task_id, mask_data_url)
         
+        normalized_capability = normalize_capability_type(capability_type)
+
         task = CapabilityTask(
             id=task_id,
-            capability_type=CapabilityType(capability_type),
+            capability_type=CapabilityType(normalized_capability),
             clip_id=clip_id,
             session_id=session_id,
             status=TaskStatus.PENDING,
@@ -199,7 +219,7 @@ class AICapabilityService:
                 task_data = {
                     "id": task_id,
                     "user_id": user_id,
-                    "task_type": self._map_capability_to_task_type(capability_type),
+                    "task_type": self._map_capability_to_task_type(normalized_capability),
                     "status": "pending",
                     "progress": 0,
                     "input_params": {
@@ -223,19 +243,54 @@ class AICapabilityService:
         # 异步启动处理
         asyncio.create_task(self._process_task(task))
         
-        logger.info(f"[AICapability] 创建任务: {task_id}, 类型: {capability_type}")
+        logger.info(f"[AICapability] 创建任务: {task_id}, 类型: {normalized_capability}")
         return task
     
     def _map_capability_to_task_type(self, capability_type: str) -> str:
         """将 capability_type 映射到 tasks 表的 task_type"""
+        normalized = normalize_capability_type(capability_type)
         mapping = {
+            "background-replace": "background_replace",
             "background_replace": "background_replace",
             "person_replace": "background_replace",  # 人物替换也归类为 background_replace
+            "add-broll": "add_broll",
+            "add_broll": "add_broll",
+            "add-subtitle": "add_subtitle",
+            "add_subtitle": "add_subtitle",
+            "style-transfer": "style_transfer",
+            "style_transfer": "style_transfer",
+            "voice-enhance": "voice_enhance",
+            "voice_enhance": "voice_enhance",
             "lip_sync": "lip_sync",
             "face_swap": "face_swap",
             "image_generation": "image_generation",
+            "omni_image": "omni_image",
+            # ★ 视频生成能力
+            "text_to_video": "text_to_video",
+            "text-to-video": "text_to_video",
+            "image_to_video": "image_to_video",
+            "image-to-video": "image_to_video",
+            "multi_image_to_video": "multi_image_to_video",
+            "multi-image-to-video": "multi_image_to_video",
+            "motion_control": "motion_control",
+            "motion-control": "motion_control",
+            "video_extend": "video_extend",
+            "video-extend": "video_extend",
+            # ★ 模板
+            "template_render": "template_render",
+            "template-render": "template_render",
+            # ★ Enhance & Style 五大能力
+            "skin_enhance": "skin_enhance",
+            "skin-enhance": "skin_enhance",
+            "relight": "relight",
+            "outfit_swap": "outfit_swap",
+            "outfit-swap": "outfit_swap",
+            "ai_stylist": "ai_stylist",
+            "ai-stylist": "ai_stylist",
+            "outfit_shot": "outfit_shot",
+            "outfit-shot": "outfit_shot",
         }
-        return mapping.get(capability_type, "image_generation")
+        return mapping.get(normalized, "image_generation")
     
     async def get_task(self, task_id: str) -> Optional[CapabilityTask]:
         """获取任务状态"""
@@ -292,9 +347,11 @@ class AICapabilityService:
         metadata["is_preview"] = True
         metadata["applied"] = False
         
+        normalized_capability = normalize_capability_type(capability_type)
+
         task = CapabilityTask(
             id=task_id,
-            capability_type=CapabilityType(capability_type),
+            capability_type=CapabilityType(normalized_capability),
             clip_id=clip_id,
             session_id=session_id,
             status=TaskStatus.PENDING,
@@ -314,7 +371,7 @@ class AICapabilityService:
                 task_data = {
                     "id": task_id,
                     "user_id": user_id,
-                    "task_type": self._map_capability_to_task_type(capability_type),
+                    "task_type": self._map_capability_to_task_type(normalized_capability),
                     "status": "pending",
                     "progress": 0,
                     "input_params": {
@@ -339,7 +396,7 @@ class AICapabilityService:
         # 异步启动处理
         asyncio.create_task(self._process_task(task))
         
-        logger.info(f"[AICapability] 创建预览任务: {task_id}, 类型: {capability_type}")
+        logger.info(f"[AICapability] 创建预览任务: {task_id}, 类型: {normalized_capability}")
         return task
     
     async def apply_preview(self, task_id: str) -> Optional[CapabilityTask]:
@@ -682,6 +739,9 @@ class AICapabilityService:
                 result = await self._process_style_transfer(task)
             elif task.capability_type == CapabilityType.VOICE_ENHANCE:
                 result = await self._process_voice_enhance(task)
+            elif task.capability_type == CapabilityType.OMNI_IMAGE:
+                # omni_image 复用图像编辑处理链路（Kling omni-image）
+                result = await self._process_background_replace(task)
             else:
                 raise ValueError(f"未知的能力类型: {task.capability_type}")
             
@@ -777,6 +837,7 @@ class AICapabilityService:
         from app.services.edit_intent_classifier import EditIntent
         
         display_names = {
+            EditIntent.SKETCH_GUIDE: "草图引导生成",
             EditIntent.ADD_ELEMENT: "添加元素",
             EditIntent.LOCAL_EDIT: "局部修改",
             EditIntent.FULL_REPLACE: "换背景",
@@ -793,24 +854,11 @@ class AICapabilityService:
         """
         ★★★ 核心方法：根据意图构建不同的 Prompt ★★★
         
-        这是治本的关键：
-        - add_element: "在图中添加 X，保持其他一切不变"
-        - local_edit: "在 mask 区域内编辑，其他不变"
-        - full_replace: "替换整个背景"
-        
-        Args:
-            task: 任务对象
-            intent_result: 意图分类结果
-            keyframe_image: 关键帧图片 (PIL.Image)
-            image_list: 图片列表（会被修改，添加 mask）
-            
-        Returns:
-            {
-                "prompt": str,               # 最终的 prompt
-                "has_mask": bool,            # 是否有 mask
-                "processed_mask_image": Optional[Image],  # 处理后的 mask（用于合成）
-                "original_keyframe_image": Optional[Image],  # 原图（用于合成）
-            }
+        意图策略：
+        - sketch_guide: 涂鸦作为草图参考（<<<image_2>>>），AI 生成对应真实物体
+        - add_element: 无涂鸦，纯 prompt 描述添加元素
+        - local_edit: 涂鸦区域作为 inpainting mask，修改该区域
+        - full_replace: 替换整个背景
         """
         from app.services.edit_intent_classifier import EditIntent
         from app.utils.image_utils import (
@@ -829,213 +877,141 @@ class AICapabilityService:
         
         intent = intent_result.intent
         user_prompt = task.prompt
+        detected_element = intent_result.detected_element or user_prompt
         
-        logger.info(f"[BuildPrompt] 意图={intent.value}, has_mask={has_mask}, prompt='{user_prompt}'")
+        logger.info(f"[BuildPrompt] 意图={intent.value}, has_mask={has_mask}, prompt='{user_prompt}', detected_element='{detected_element}'")
         
         # ==========================================
-        # 1. ADD_ELEMENT 意图：添加元素
+        # 1. SKETCH_GUIDE 意图：草图引导生成（核心逻辑）
         # ==========================================
-        if intent == EditIntent.ADD_ELEMENT:
-            # 用户想添加某个元素（太阳、云、光效等）
-            # 关键：只在指定位置添加，不改变其他任何东西
+        if intent == EditIntent.SKETCH_GUIDE:
+            # ★★★ 关键：不传涂鸦给 Kling API ★★★
+            # Kling omni-image 不是 ControlNet，无法理解涂鸦 → 真实物体的映射。
+            # 正确做法：LLM 已分析涂鸦内容，这里只用纯文字 prompt + 原图。
+            # 涂鸦仅在 LLM 意图分析阶段被消费，不传给生成 API。
             
-            if has_mask:
-                # 有 mask：在 mask 区域添加元素
+            # 从 LLM 分析结果获取位置和风格信息
+            position_desc = intent_result.position_description or ""
+            style_desc = intent_result.style_hint or ""
+            
+            # 如果 LLM 没给位置描述，从涂鸦 mask 计算粗略位置
+            if not position_desc and has_mask:
                 try:
                     mask_image = await self._load_mask_image(mask_data_url, keyframe_image.size)
-                    
-                    # ★ 治本方案：前端已使用白色画笔，直接转灰度即可 ★
-                    # AI 标准：白色 = 编辑区域
-                    processed_mask_image = self._convert_to_grayscale_mask(mask_image)
-                    
-                    # ★★★ DEBUG: 分析 mask 内容（仅日志）★★★
-                    try:
-                        import numpy as np
-                        mask_array = np.array(processed_mask_image)
-                        white_pixels = np.sum(mask_array > 127)
-                        total_pixels = mask_array.size
-                        white_ratio = white_pixels / total_pixels * 100
-                        
-                        # 找出白色区域的边界框
-                        white_coords = np.argwhere(mask_array > 127)
-                        if len(white_coords) > 0:
-                            y_min, x_min = white_coords.min(axis=0)
-                            y_max, x_max = white_coords.max(axis=0)
-                            logger.info(f"[DEBUG MASK] 白色区域边界: x=[{x_min}, {x_max}], y=[{y_min}, {y_max}], "
-                                       f"占比={white_ratio:.2f}%, 图片尺寸={processed_mask_image.size}")
-                        else:
-                            logger.warning(f"[DEBUG MASK] ⚠️ 未检测到白色区域！")
-                    except Exception as debug_err:
-                        logger.warning(f"[DEBUG MASK] 调试信息生成失败: {debug_err}")
-                    
-                    # ★★★ 发送给 API 的是处理后的 mask（白色=用户画的区域）★★★
-                    mask_base64 = prepare_kling_image_input(processed_mask_image)
-                    image_list.append({"image": mask_base64})
-                    
-                    logger.info(f"[BuildPrompt] ADD_ELEMENT: mask 已转换，白色区域=用户标记区域, size={processed_mask_image.size}")
-                    
-                    # ★★★ 计算 mask 区域的位置描述（用于 prompt）★★★
-                    position_description = ""
-                    try:
-                        import numpy as np
-                        mask_array = np.array(processed_mask_image)
-                        white_coords = np.argwhere(mask_array > 127)
-                        if len(white_coords) > 0:
-                            y_min, x_min = white_coords.min(axis=0)
-                            y_max, x_max = white_coords.max(axis=0)
-                            img_h, img_w = mask_array.shape
-                            
-                            # 判断位置区域
-                            x_center = (x_min + x_max) / 2 / img_w
-                            y_center = (y_min + y_max) / 2 / img_h
-                            
-                            h_pos = "left" if x_center < 0.33 else "right" if x_center > 0.67 else "center"
-                            v_pos = "top" if y_center < 0.33 else "bottom" if y_center > 0.67 else "middle"
-                            position_description = f"The white area is located at the {v_pos}-{h_pos} of the image. "
-                            logger.info(f"[BuildPrompt] Mask 位置: {v_pos}-{h_pos}")
-                    except Exception as pos_err:
-                        logger.warning(f"[BuildPrompt] 位置计算失败: {pos_err}")
-                    
-                    # Prompt：在 mask 白色区域添加元素（强调真实感和严格位置）
-                    prompt = (
-                        f"INPAINTING TASK for <<<image_1>>> using mask <<<image_2>>>. "
-                        f"{position_description}"
-                        f"STRICT INPAINTING RULES: "
-                        f"1. Add ONLY: {user_prompt} "
-                        f"2. The element MUST be placed EXACTLY in the WHITE regions of the mask. "
-                        f"3. ALL BLACK regions MUST remain PIXEL-PERFECT IDENTICAL to the original - including all people, objects, and background. "
-                        f"4. DO NOT modify, regenerate, or alter ANY content in the black regions. "
-                        f"5. The output image MUST have the EXACT same composition, perspective, and layout as the input. "
-                        f"6. Make the added element look PHOTOREALISTIC - natural lighting, shadows, and seamless blending. "
-                        f"7. If a person exists in the original image, they MUST remain EXACTLY the same - same pose, clothing, face, position."
-                    )
-                except Exception as e:
-                    logger.warning(f"[BuildPrompt] Mask 加载失败，使用无 mask 添加模式: {e}")
-                    has_mask = False
-                    has_mask = False
+                    position_desc = self._get_sketch_position(mask_image)
+                except Exception:
+                    pass
             
-            if not has_mask:
-                # 无 mask：智能添加（AI 自己判断合适位置）
-                prompt = (
-                    f"Add to <<<image_1>>>: {user_prompt}. "
-                    f"CRITICAL REQUIREMENTS: "
-                    f"1. Keep all existing content EXACTLY unchanged - people, background, everything. "
-                    f"2. Place the new element in a visually logical position. "
-                    f"3. The result MUST look like a REAL PHOTOGRAPH - completely photorealistic, not AI-generated. "
-                    f"4. Match lighting, shadows, color grading, and image quality perfectly. "
-                    f"5. No visible artifacts, seams, or inconsistencies."
-                )
+            # 构建纯文字 prompt — 所有智能都在文字里
+            position_clause = f"Position: {position_desc}. " if position_desc else ""
+            style_clause = f"Style matching: {style_desc}. " if style_desc else ""
             
+            prompt = (
+                f"Edit <<<image_1>>> by adding: {detected_element}. "
+                f"{position_clause}"
+                f"STRICT REQUIREMENTS: "
+                f"1. The added element must be COMPLETELY PHOTOREALISTIC — real textures, proper lighting, natural shadows, as if captured by a camera. "
+                f"2. It must seamlessly blend with the existing photo — match the lighting direction, color temperature, depth of field, and overall aesthetic. "
+                f"3. PRESERVE everything else in the photo EXACTLY as-is — all people, background, objects remain pixel-perfect identical. "
+                f"4. NO cartoon, illustration, sketch, or drawn appearance — ONLY photorealistic output. "
+                f"5. The element should look like it was physically present when the photo was taken. "
+                f"{style_clause}"
+            )
+            
+            # ★ 不添加任何涂鸦/mask 到 image_list — 只传原图
+            has_mask = False  # 告诉后续流程不需要合成
+            
+            logger.info(f"[BuildPrompt] SKETCH_GUIDE: 纯文字 prompt（不传涂鸦给 Kling），detected_element='{detected_element}'")
+            
+        # ==========================================
+        # 2. ADD_ELEMENT 意图：添加元素（无涂鸦）
+        # ==========================================
+        elif intent == EditIntent.ADD_ELEMENT:
+            # 无涂鸦，纯文字描述添加
+            prompt = (
+                f"Add to <<<image_1>>>: {user_prompt}. "
+                f"CRITICAL REQUIREMENTS: "
+                f"1. Keep all existing content EXACTLY unchanged — people, background, everything. "
+                f"2. Place the new element in a visually logical position. "
+                f"3. The result MUST look like a REAL PHOTOGRAPH — completely photorealistic, not AI-generated. "
+                f"4. Match lighting, shadows, color grading, and image quality perfectly. "
+                f"5. No visible artifacts, seams, or inconsistencies."
+            )
             logger.info(f"[BuildPrompt] ADD_ELEMENT prompt 构建完成")
             
         # ==========================================
-        # 2. LOCAL_EDIT 意图：局部修改
+        # 3. LOCAL_EDIT 意图：局部修改（inpainting）
         # ==========================================
         elif intent == EditIntent.LOCAL_EDIT:
             if has_mask:
                 try:
                     mask_image = await self._load_mask_image(mask_data_url, keyframe_image.size)
                     
-                    # ★ 治本方案：前端已使用白色画笔，直接转灰度即可 ★
+                    # LOCAL_EDIT 才用 inpainting mask（白色=要修改的区域）
                     processed_mask_image = self._convert_to_grayscale_mask(mask_image)
                     
-                    # 发送处理后的 mask（白色=用户画的区域）
                     mask_base64 = prepare_kling_image_input(processed_mask_image)
                     image_list.append({"image": mask_base64})
                     
-                    logger.info(f"[BuildPrompt] LOCAL_EDIT: mask 已转换，白色区域=用户标记区域, size={processed_mask_image.size}")
+                    logger.info(f"[BuildPrompt] LOCAL_EDIT: mask 已转换，白色区域=要修改的区域, size={processed_mask_image.size}")
                     
-                    # ★★★ 计算 mask 区域的位置描述 ★★★
-                    position_description = ""
-                    try:
-                        import numpy as np
-                        mask_array = np.array(processed_mask_image)
-                        white_coords = np.argwhere(mask_array > 127)
-                        if len(white_coords) > 0:
-                            y_min, x_min = white_coords.min(axis=0)
-                            y_max, x_max = white_coords.max(axis=0)
-                            img_h, img_w = mask_array.shape
-                            x_center = (x_min + x_max) / 2 / img_w
-                            y_center = (y_min + y_max) / 2 / img_h
-                            h_pos = "left" if x_center < 0.33 else "right" if x_center > 0.67 else "center"
-                            v_pos = "top" if y_center < 0.33 else "bottom" if y_center > 0.67 else "middle"
-                            position_description = f"The edit region is at the {v_pos}-{h_pos}. "
-                    except Exception:
-                        pass
+                    position_description = self._get_mask_position(processed_mask_image)
                     
-                    # Prompt：严格的 inpainting 指令
                     prompt = (
                         f"INPAINTING TASK for <<<image_1>>> using mask <<<image_2>>>. "
                         f"{position_description}"
                         f"STRICT INPAINTING RULES: "
                         f"1. Edit ONLY the WHITE regions: {user_prompt} "
-                        f"2. ALL BLACK regions MUST remain PIXEL-PERFECT IDENTICAL - including all people, faces, poses, clothing, background. "
+                        f"2. ALL BLACK regions MUST remain PIXEL-PERFECT IDENTICAL — all people, faces, poses, clothing, background. "
                         f"3. DO NOT regenerate or modify ANYTHING outside the white mask area. "
                         f"4. The output MUST have the EXACT same composition and layout as the input. "
-                        f"5. Make edits look PHOTOREALISTIC with seamless blending. "
-                        f"6. Any person in the original MUST remain EXACTLY unchanged in pose, expression, and appearance."
+                        f"5. Make edits look PHOTOREALISTIC with seamless blending."
                     )
                 except Exception as e:
                     logger.warning(f"[BuildPrompt] LOCAL_EDIT mask 加载失败: {e}")
-                    # 回退到全图编辑
                     has_mask = False
                     prompt = (
                         f"Make a subtle edit to <<<image_1>>>: {user_prompt}. "
-                        f"Keep the overall composition, people, and major elements unchanged. "
-                        f"Only apply the requested modification."
+                        f"Keep the overall composition, people, and major elements unchanged."
                     )
             else:
-                # 没有 mask 的局部编辑（用户没画区域）
                 prompt = (
                     f"Make a subtle edit to <<<image_1>>>: {user_prompt}. "
-                    f"CRITICAL: The result must look like a REAL PHOTOGRAPH - completely photorealistic. "
-                    f"Keep composition, people, and major elements unchanged. "
-                    f"Only apply the requested modification with perfect blending."
+                    f"CRITICAL: The result must look like a REAL PHOTOGRAPH. "
+                    f"Keep composition, people, and major elements unchanged."
                 )
             
             logger.info(f"[BuildPrompt] LOCAL_EDIT prompt 构建完成")
             
         # ==========================================
-        # 3. FULL_REPLACE 意图：完整换背景
+        # 4. FULL_REPLACE 意图：完整换背景
         # ==========================================
         else:  # EditIntent.FULL_REPLACE
-            # 用户想换整个背景
             prompt = (
                 f"BACKGROUND REPLACEMENT for <<<image_1>>>. "
                 f"Replace the background with: {user_prompt}. "
                 f"STRICT RULES: "
-                f"1. The person/subject MUST remain PIXEL-PERFECT IDENTICAL - same pose, face, expression, clothing, position. "
-                f"2. ONLY the background changes - DO NOT modify the subject in ANY way. "
+                f"1. The person/subject MUST remain PIXEL-PERFECT IDENTICAL — same pose, face, expression, clothing, position. "
+                f"2. ONLY the background changes — DO NOT modify the subject in ANY way. "
                 f"3. New background MUST look PHOTOREALISTIC. "
                 f"4. Perfect edge blending with natural lighting and shadows."
             )
             
-            # 如果有 mask，可能是用户标记了"这些是背景"
             if has_mask:
                 try:
                     mask_image = await self._load_mask_image(mask_data_url, keyframe_image.size)
-                    
-                    # ★ 治本方案：前端已使用白色画笔，直接转灰度即可 ★
                     processed_mask_image = self._convert_to_grayscale_mask(mask_image)
-                    
-                    # 发送处理后的 mask（白色=用户画的背景区域）
                     mask_base64 = prepare_kling_image_input(processed_mask_image)
                     image_list.append({"image": mask_base64})
                     
-                    logger.info(f"[BuildPrompt] FULL_REPLACE: mask 已转换，白色区域=用户标记的背景区域, size={processed_mask_image.size}")
-                    
-                    # 有 mask 的换背景 - 严格 inpainting
                     prompt = (
                         f"INPAINTING TASK for <<<image_1>>> using mask <<<image_2>>>. "
                         f"WHITE areas = background to replace with: {user_prompt}. "
                         f"BLACK areas = subjects that MUST remain PIXEL-PERFECT IDENTICAL. "
-                        f"STRICT RULES: "
-                        f"1. DO NOT modify ANY content in black mask regions - people MUST stay exactly the same. "
-                        f"2. Output MUST have EXACT same composition and layout as input. "
-                        f"3. New background MUST look PHOTOREALISTIC with seamless blending."
+                        f"New background MUST look PHOTOREALISTIC with seamless blending."
                     )
                 except Exception as e:
-                    logger.warning(f"[BuildPrompt] FULL_REPLACE mask 加载失败，使用无 mask 模式: {e}")
+                    logger.warning(f"[BuildPrompt] FULL_REPLACE mask 加载失败: {e}")
                     has_mask = False
             
             logger.info(f"[BuildPrompt] FULL_REPLACE prompt 构建完成")
@@ -1046,6 +1022,60 @@ class AICapabilityService:
             "processed_mask_image": processed_mask_image,
             "original_keyframe_image": original_keyframe_for_composite,
         }
+    
+    def _get_sketch_position(self, mask_image: 'Image.Image') -> str:
+        """分析涂鸦的位置，生成位置描述"""
+        import numpy as np
+        
+        try:
+            if mask_image.mode == "RGBA":
+                alpha = np.array(mask_image.split()[3])
+                visible = alpha > 10
+            else:
+                gray = np.array(mask_image.convert("L"))
+                visible = gray > 127
+            
+            coords = np.argwhere(visible)
+            if len(coords) == 0:
+                return ""
+            
+            y_min, x_min = coords.min(axis=0)
+            y_max, x_max = coords.max(axis=0)
+            img_h, img_w = mask_image.size[1], mask_image.size[0]
+            
+            x_center = (x_min + x_max) / 2 / img_w
+            y_center = (y_min + y_max) / 2 / img_h
+            
+            h_pos = "left" if x_center < 0.33 else "right" if x_center > 0.67 else "center"
+            v_pos = "top" if y_center < 0.33 else "bottom" if y_center > 0.67 else "middle"
+            
+            return f"The sketch is located at the {v_pos}-{h_pos} of the image. "
+        except Exception:
+            return ""
+    
+    def _get_mask_position(self, mask_image: 'Image.Image') -> str:
+        """分析 mask 的位置，生成位置描述"""
+        import numpy as np
+        
+        try:
+            mask_array = np.array(mask_image)
+            white_coords = np.argwhere(mask_array > 127)
+            if len(white_coords) == 0:
+                return ""
+            
+            y_min, x_min = white_coords.min(axis=0)
+            y_max, x_max = white_coords.max(axis=0)
+            img_h, img_w = mask_array.shape
+            
+            x_center = (x_min + x_max) / 2 / img_w
+            y_center = (y_min + y_max) / 2 / img_h
+            
+            h_pos = "left" if x_center < 0.33 else "right" if x_center > 0.67 else "center"
+            v_pos = "top" if y_center < 0.33 else "bottom" if y_center > 0.67 else "middle"
+            
+            return f"The edit region is at the {v_pos}-{h_pos}. "
+        except Exception:
+            return ""
     
     async def _load_mask_image(self, mask_data_url: str, target_size: tuple):
         """加载 mask 图片"""
@@ -1121,105 +1151,98 @@ class AICapabilityService:
         logger.info(f"[BackgroundReplace] 开始图像编辑: {task.prompt}")
         
         try:
-            # ★★★ Step 0: 意图分类 - 治本的核心（支持多模态） ★★★
-            await self._emit_progress(task, 5, "正在分析编辑意图...")
+            # ★★★ Step 0: 准备图片 + 意图分类（需要先下载图片用于多模态分析）★★★
+            await self._emit_progress(task, 5, "正在准备图片...")
             
             from app.services.edit_intent_classifier import classify_edit_intent, EditIntent
-            from app.utils.image_utils import pil_image_to_base64
-            from PIL import Image
-            import os
-            
-            mask_data_url = getattr(task, 'mask_data_url', None) or task.mask_url
-            has_mask = bool(mask_data_url)
-            
-            # ★ 如果有 mask，读取它的 base64 用于多模态分析
-            mask_base64_for_analysis = None
-            if has_mask and mask_data_url:
-                try:
-                    if mask_data_url.startswith('data:'):
-                        # data URL 直接提取 base64
-                        if ',' in mask_data_url:
-                            mask_base64_for_analysis = mask_data_url.split(',')[1]
-                    elif mask_data_url.startswith('http://') or mask_data_url.startswith('https://'):
-                        # ★ 从远程 URL 读取（Supabase Storage）
-                        async with httpx.AsyncClient(timeout=30) as client:
-                            response = await client.get(mask_data_url, follow_redirects=True)
-                            response.raise_for_status()
-                            mask_img = Image.open(io.BytesIO(response.content))
-                            mask_base64_for_analysis = pil_image_to_base64(mask_img, format="PNG")
-                            logger.info(f"[BackgroundReplace] 已从远程加载 mask 用于多模态分析")
-                except Exception as e:
-                    logger.warning(f"[BackgroundReplace] 读取 mask 用于分析失败: {e}")
-            
-            intent_result = await classify_edit_intent(
-                prompt=task.prompt,
-                has_mask=has_mask,
-                mask_base64=mask_base64_for_analysis,  # ★ 传入 mask 图片用于多模态分析
-                use_llm=True,
-            )
-            
-            logger.info(f"[BackgroundReplace] ★ 意图分类结果: {intent_result.intent.value}, "
-                       f"confidence={intent_result.confidence:.2f}, "
-                       f"reason={intent_result.reasoning}")
-            
-            # 记录意图到任务（用于调试和统计）
-            task.metadata = task.metadata or {}
-            task.metadata["intent"] = {
-                "type": intent_result.intent.value,
-                "confidence": intent_result.confidence,
-                "reasoning": intent_result.reasoning,
-                "suggested_api": intent_result.suggested_api,
-            }
-            
-            await self._emit_progress(task, 10, f"意图识别完成: {self._get_intent_display_name(intent_result.intent)}")
-            
-            # Step 1: 准备图片数据
-            if not task.keyframe_url:
-                raise ValueError("需要关键帧图片进行图像编辑")
-            
-            # 导入图片处理工具
             from app.utils.image_utils import (
+                pil_image_to_base64,
                 prepare_kling_image_input,
                 data_url_to_pil_image,
                 process_drawing_mask,
                 prepare_mask_for_inpainting,
                 create_composite_image
             )
-            import httpx
             from PIL import Image
-            import io
+            import os
+            import httpx
             
-            # ★ 用于后续合成的变量
-            original_keyframe_image = None  # 原图（用于合成）
-            processed_mask_image = None     # 处理后的 mask（用于合成）
+            # Step 0a: 下载关键帧图片（后续意图分类和生成都需要）
+            if not task.keyframe_url:
+                raise ValueError("需要关键帧图片进行图像编辑")
             
-            await self._emit_progress(task, 15, "正在准备图片...")
-            
-            # 确保 URL 有协议前缀
             keyframe_url = task.keyframe_url
             if keyframe_url and not keyframe_url.startswith(('http://', 'https://', 'data:')):
-                # 相对路径，添加本地后端 URL
                 from app.config import get_settings
                 settings = get_settings()
                 base_url = getattr(settings, 'BACKEND_URL', 'http://localhost:8000')
                 keyframe_url = f"{base_url.rstrip('/')}/{keyframe_url.lstrip('/')}"
-                logger.info(f"[BackgroundReplace] 补全 keyframe_url: {keyframe_url}")
             
-            # 下载关键帧图片
             async with httpx.AsyncClient() as client:
                 response = await client.get(keyframe_url)
                 response.raise_for_status()
                 keyframe_image = Image.open(io.BytesIO(response.content))
             
-            # ★★★ 保存原图用于后续合成 ★★★
             original_keyframe_image = keyframe_image.copy()
-            
-            # ★★★ 核心修复：记录原始尺寸和宽高比 ★★★
             original_width, original_height = keyframe_image.size
             original_aspect_ratio = self._calculate_aspect_ratio_string(original_width, original_height)
             logger.info(f"[BackgroundReplace] 原始尺寸: {original_width}x{original_height}, 宽高比: {original_aspect_ratio}")
             
-            # 准备 omni-image 的图片输入
+            # Step 0b: 准备 mask 和原图的 base64 用于 LLM 多模态意图分析
+            mask_data_url = getattr(task, 'mask_data_url', None) or task.mask_url
+            has_mask = bool(mask_data_url)
+            
+            mask_base64_for_analysis = None
+            original_image_base64_for_analysis = None
+            
+            if has_mask and mask_data_url:
+                try:
+                    if mask_data_url.startswith('data:'):
+                        if ',' in mask_data_url:
+                            mask_base64_for_analysis = mask_data_url.split(',')[1]
+                    elif mask_data_url.startswith('http://') or mask_data_url.startswith('https://'):
+                        async with httpx.AsyncClient(timeout=30) as client:
+                            response = await client.get(mask_data_url, follow_redirects=True)
+                            response.raise_for_status()
+                            mask_img = Image.open(io.BytesIO(response.content))
+                            mask_base64_for_analysis = pil_image_to_base64(mask_img, format="PNG")
+                    
+                    # ★ 同时准备原图 base64 用于上下文分析
+                    original_image_base64_for_analysis = pil_image_to_base64(keyframe_image, format="JPEG")
+                    logger.info(f"[BackgroundReplace] 已准备涂鸦 + 原图用于多模态分析")
+                except Exception as e:
+                    logger.warning(f"[BackgroundReplace] 准备分析图片失败: {e}")
+            
+            # Step 0c: 意图分类（传入涂鸦 + 原图）
+            await self._emit_progress(task, 8, "正在分析编辑意图...")
+            
+            intent_result = await classify_edit_intent(
+                prompt=task.prompt,
+                has_mask=has_mask,
+                mask_base64=mask_base64_for_analysis,
+                original_image_base64=original_image_base64_for_analysis,
+                use_llm=True,
+            )
+            
+            logger.info(f"[BackgroundReplace] ★ 意图分类结果: {intent_result.intent.value}, "
+                       f"confidence={intent_result.confidence:.2f}, "
+                       f"reason={intent_result.reasoning}, "
+                       f"detected_element={intent_result.detected_element}")
+            
+            task.metadata = task.metadata or {}
+            task.metadata["intent"] = {
+                "type": intent_result.intent.value,
+                "confidence": intent_result.confidence,
+                "reasoning": intent_result.reasoning,
+                "suggested_api": intent_result.suggested_api,
+                "detected_element": intent_result.detected_element,
+            }
+            
+            await self._emit_progress(task, 12, f"意图识别完成: {self._get_intent_display_name(intent_result.intent)}")
+            
+            # Step 1: 准备 omni-image 图片输入
+            processed_mask_image = None
+            
             keyframe_base64 = prepare_kling_image_input(keyframe_image)
             image_list = [{"image": keyframe_base64}]
             
@@ -1292,13 +1315,17 @@ class AICapabilityService:
                 target_height=original_height
             )
             
-            await self._emit_progress(task, 95, "处理完成...")
+            await self._emit_progress(task, 95, "正在保存到永久存储...")
             
-            logger.info(f"[BackgroundReplace] 图像编辑完成: {final_image_url}")
+            # ★★★ Step 6: 治标治本 - 将图片上传到永久存储 ★★★
+            # Kling 返回的 URL 是临时的，上传到我们的 Supabase 确保历史记录可访问
+            permanent_url = await self._upload_image_to_storage(final_image_url, task.id)
+            
+            logger.info(f"[BackgroundReplace] 图像编辑完成: {permanent_url[:80]}...")
             
             # ★ 返回包含意图信息的结果
             return {
-                "url": final_image_url, 
+                "url": permanent_url,  # ★ 使用永久 URL
                 "type": "image",
                 "preview": True,  # 标记为预览，需要用户确认后应用
                 "original_keyframe": task.keyframe_url,
@@ -1658,6 +1685,90 @@ class AICapabilityService:
         # 目前返回占位结果
         return {"url": None, "type": "voice", "message": "声音优化功能开发中"}
     
+    async def _upload_image_to_storage(self, image_url: str, task_id: str) -> str:
+        """
+        ★★★ 治标治本：将 Kling 临时 URL 的图片上传到我们的 Supabase Storage ★★★
+        
+        Kling API 返回的图片 URL 是临时的，会在一段时间后过期。
+        为了确保历史记录中的图片始终可访问，需要下载并上传到我们自己的存储。
+        
+        支持两种输入格式：
+        1. HTTP(S) URL - 从网络下载
+        2. Data URL (base64) - 直接解析
+        
+        Args:
+            image_url: 图片 URL（HTTP 或 data URL）
+            task_id: 任务 ID，用于生成存储路径
+            
+        Returns:
+            Supabase Storage 中的永久公开 URL
+        """
+        import httpx
+        import uuid
+        import base64
+        from .supabase_client import supabase, get_file_url
+        
+        try:
+            logger.info(f"[AICapability] 正在将图片上传到永久存储...")
+            
+            # ★ 支持 data URL 格式
+            if image_url.startswith("data:"):
+                # 解析 data URL: data:image/jpeg;base64,xxxxx
+                header, data = image_url.split(",", 1)
+                image_data = base64.b64decode(data)
+                
+                # 从 header 中提取 content-type
+                if "png" in header:
+                    content_type = "image/png"
+                    ext = "png"
+                elif "webp" in header:
+                    content_type = "image/webp"
+                    ext = "webp"
+                else:
+                    content_type = "image/jpeg"
+                    ext = "jpg"
+                    
+                logger.info(f"[AICapability] 解析 data URL 成功, 大小: {len(image_data)} bytes")
+            else:
+                # HTTP(S) URL - 下载图片
+                async with httpx.AsyncClient(timeout=60) as client:
+                    response = await client.get(image_url, follow_redirects=True)
+                    response.raise_for_status()
+                    image_data = response.content
+                
+                # 检测图片格式
+                content_type = response.headers.get("content-type", "image/jpeg")
+                if "png" in content_type:
+                    ext = "png"
+                elif "webp" in content_type:
+                    ext = "webp"
+                else:
+                    ext = "jpg"
+                    
+                logger.info(f"[AICapability] 下载图片成功, 大小: {len(image_data)} bytes")
+            
+            # 生成存储路径
+            unique_id = str(uuid.uuid4())[:8]
+            storage_path = f"generated_images/{task_id}_{unique_id}.{ext}"
+            
+            # 上传到 Supabase Storage
+            supabase.storage.from_("ai-creations").upload(
+                path=storage_path,
+                file=image_data,
+                file_options={"content-type": content_type, "upsert": "true"}
+            )
+            
+            # 获取永久公开 URL（1年有效期）
+            public_url = get_file_url("ai-creations", storage_path, expires_in=86400 * 365)
+            
+            logger.info(f"[AICapability] ✅ 图片已上传到永久存储: {public_url[:80]}...")
+            return public_url
+            
+        except Exception as e:
+            logger.warning(f"[AICapability] ⚠️ 图片上传失败，使用原始 URL: {e}")
+            # 如果上传失败，退回使用原始 URL（至少短期内可用）
+            return image_url
+
     async def _upload_mask(self, task_id: str, mask_data_url: str) -> Optional[str]:
         """
         上传 Mask 图片到 Supabase Storage

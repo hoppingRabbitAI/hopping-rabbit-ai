@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 视频导出任务 (Enhanced)
+Lepus AI - 视频导出任务 (Enhanced)
 支持多轨道合成、特效渲染、水印、字幕烧录等功能
 """
 import os

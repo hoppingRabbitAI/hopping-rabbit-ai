@@ -9,7 +9,7 @@ import {
   CheckCircle2,
   Rabbit
 } from 'lucide-react';
-import { useAuthStore } from '@/features/editor/store/auth-store';
+import { useAuthStore } from '@/stores/authStore';
 
 export default function ForgotPasswordPage() {
   const { resetPasswordForEmail } = useAuthStore();
@@ -52,7 +52,7 @@ export default function ForgotPasswordPage() {
             <div className="w-10 h-10 flex items-center justify-center">
               <img src="/rabbit-logo.png" alt="Logo" className="w-full h-full object-contain" />
             </div>
-            <span className="text-lg font-black tracking-tighter italic text-white">HOPPINGRABBIT</span>
+            <span className="text-lg font-black tracking-tighter italic text-white">LEPUS</span>
           </div>
 
           {isSuccess ? (
@@ -162,7 +162,7 @@ export default function ForgotPasswordPage() {
 
         {/* 底部链接 */}
         <div className="mt-8 flex justify-center items-center text-[10px] text-gray-600 font-bold uppercase tracking-widest">
-          <span>© 2026 HoppingRabbit AI</span>
+          <span>© 2026 Lepus AI</span>
         </div>
       </div>
     </div>

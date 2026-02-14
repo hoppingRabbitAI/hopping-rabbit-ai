@@ -6,7 +6,7 @@ import {
   getAuthToken as getAuthTokenFromStore, 
   ensureValidToken as ensureValidTokenFromStore,
   useAuthStore 
-} from '@/features/editor/store/auth-store';
+} from '@/stores/authStore';
 
 // ============================================
 // 配置
@@ -89,7 +89,7 @@ export function handleAuthExpired() {
   if (typeof window === 'undefined') return;
   
   // 清除认证状态
-  localStorage.removeItem('hoppingrabbit-auth');
+  localStorage.removeItem('lepus-auth');
   
   // 跳转到登录页（如果不在登录页）
   if (!window.location.pathname.includes('/login')) {

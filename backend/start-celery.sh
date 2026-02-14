@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${GREEN}🐰 启动 HoppingRabbit Celery Worker${NC}"
+echo -e "${GREEN}🐰 启动 Lepus Celery Worker${NC}"
 
 # 切换到 backend 目录
 cd "$(dirname "$0")"
@@ -53,8 +53,8 @@ else
     exit 1
 fi
 
-# 解析参数
-QUEUES="gpu_high,gpu_medium,cpu_medium,cpu_low"
+# 解析参数 — 所有任务统一使用 gpu 队列
+QUEUES="gpu"
 CONCURRENCY=2
 LOGLEVEL="info"
 
@@ -68,7 +68,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "Usage: ./start-celery.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  -Q, --queues       队列名称 (默认: gpu_high,gpu_medium,cpu_medium,cpu_low)"
+            echo "  -Q, --queues       队列名称 (默认: 所有队列)"
             echo "  -c, --concurrency  并发数 (默认: 2)"
             echo "  -l, --loglevel     日志级别 (默认: info)"
             echo ""

@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - API 共享工具函数
+Lepus AI - API 共享工具函数
 """
 from datetime import datetime
 from uuid import uuid4

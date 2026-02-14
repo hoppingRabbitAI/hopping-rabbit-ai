@@ -2,7 +2,7 @@
 测试 Remotion V2 两阶段生成器
 
 运行方式:
-cd /Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend
+cd /Users/hexiangyang/rabbit-ai/lepus-ai/backend
 python -m scripts.test_remotion_v2
 """
 

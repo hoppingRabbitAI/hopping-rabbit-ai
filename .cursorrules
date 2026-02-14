@@ -1,0 +1,114 @@
+# Lepus AI (HoppingRabbit AI) — AI Coding Rules
+# 参考图驱动的 AI 视觉创作平台
+
+# =============================================
+# 🔴 CRITICAL RULES — Must NEVER violate
+# =============================================
+
+## Time Units
+# Backend API/Database = seconds (float)
+# Frontend store/UI = milliseconds (integer)
+# ALWAYS convert: `* 1000` when receiving from API, `/ 1000` when sending to API
+# NEVER mix units. Check variable name suffix (_ms = milliseconds, _sec = seconds)
+
+## API Response Format
+# Success: { success: true, data: ... }
+# Failure: { success: false, error: "message" }
+# Frontend ApiClient wraps every call in ApiResponse<T> — always check response.success before using response.data
+
+## State Management
+# ALWAYS use immer produce() for nested Zustand state updates
+# After async operations, re-read state via useXxxStore.getState() instead of captured variables (stale closure trap)
+# WRONG: const handleSave = async () => { await saveProject(); console.log(clips); }
+# RIGHT: const handleSave = async () => { await saveProject(); const { clips } = useEditorStore.getState(); }
+
+## Async Operations
+# EVERY async call must have try-catch + loading state + error handling
+# Never fire-and-forget promises
+
+# =============================================
+# Tech Stack
+# =============================================
+
+# Frontend: Next.js 14 (App Router), TypeScript 5.5, React 18, Tailwind CSS, Zustand 5, XY Flow, Fabric.js 7, Remotion 4, pnpm
+# Backend: Python 3.11, FastAPI 0.115, Pydantic 2, Celery 5.4 + RabbitMQ, Redis, httpx
+# AI: Kling AI (image/video generation, face swap, lip sync), Whisper, Doubao/Gemini LLM
+# DB: Supabase (PostgreSQL + Auth + Storage)
+# Video: Remotion (composition), FFmpeg, Cloudflare Stream (HLS)
+
+# =============================================
+# Project Structure
+# =============================================
+
+# backend/app/
+#   api/          — FastAPI routers (27 modules)
+#   services/     — Business logic classes (singleton pattern)
+#   tasks/        — Celery async tasks (AI generation)
+#   models.py     — SQLAlchemy / Pydantic models
+#   config.py     — Settings singleton
+#   celery_config.py
+
+# frontend/src/
+#   app/          — Next.js App Router pages
+#   components/   — React components by domain (visual-editor/, editor/, workspace/)
+#   features/     — Feature stores (visual-editor/store/, editor/store/)
+#   lib/api/      — API client modules (client.ts base + domain files)
+#   types/        — TypeScript type definitions
+
+# docs/           — Design docs (start with docs/README.md)
+
+# =============================================
+# ID Formats
+# =============================================
+
+# Projects: proj-{uuid}
+# Clips: clip-{uuid}
+# Tasks: task-{uuid}
+# Templates: tr-{uuid} or tmpl-{uuid}
+
+# =============================================
+# Backend (Python) Conventions
+# =============================================
+
+# API routes: backend/app/api/, one file per resource
+# Service classes: backend/app/services/, business logic only
+# Celery tasks: backend/app/tasks/, one per AI capability
+# Router: router = APIRouter(prefix="/resource", tags=["Resource"])
+# Auth: user_id: str = Depends(get_current_user_id)
+# Errors: raise HTTPException(status_code=..., detail=...)
+# Chinese comments/docstrings are normal in this codebase
+# Pydantic V2 models for request/response validation
+# Service pattern: class with lazy Supabase init + module-level singleton factory
+
+# =============================================
+# Frontend (TypeScript) Conventions
+# =============================================
+
+# PascalCase file names for components: VideoCanvas.tsx
+# Named exports (not default): export function VideoCanvas() {}
+# Props via interfaces: interface VideoCanvasProps { ... }
+# API calls through lib/api/ client modules, never raw fetch
+# Zustand stores with immer: set(produce(state => { ... }))
+# All API types in types/ directory
+# Always handle loading/error states in UI
+
+# =============================================
+# Kling AI Integration
+# =============================================
+
+# All Kling API calls through KlingAIClient (services/kling_ai_client.py)
+# Task lifecycle: create → process → poll → complete/fail
+# Credits pre-deducted when task created; refunded on failure
+# Progress updates: 0.1 → 0.3 → 0.7 → 0.9 → 1.0
+# Celery tasks use ai_task_base utilities (update_task_status, download_file_to_temp, etc.)
+
+# =============================================
+# Documentation
+# =============================================
+
+# docs/README.md              — Doc index (start here)
+# docs/DEVELOPMENT_STANDARDS.md — Coding conventions
+# docs/AI_CAPABILITIES.md     — AI ability matrix + Kling integration
+# docs/TEMPLATE_SYSTEM.md     — Template ingest→publish→render pipeline
+# docs/AUTH_AND_BILLING.md     — Auth + credits/subscription
+# docs/KLING_API_REFERENCE.md  — Kling API endpoints (single source of truth)

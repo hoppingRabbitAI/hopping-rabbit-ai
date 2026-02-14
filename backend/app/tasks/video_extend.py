@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 视频延长 Celery 任务
+Lepus AI - 视频延长 Celery 任务
 异步处理视频延长任务，支持进度更新和结果存储
 
 应用场景：
@@ -64,7 +64,15 @@ def create_asset(user_id: str, asset_data: Dict) -> Optional[str]:
 # Celery 任务
 # ============================================
 
-@celery_app.task(name="tasks.video_extend.process_video_extend", bind=True)
+@celery_app.task(
+    name="tasks.video_extend.process_video_extend",
+    bind=True,
+    queue="gpu",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_kwargs={"max_retries": 2},
+)
 def process_video_extend(
     self,
     task_id: str,
@@ -152,7 +160,7 @@ async def _process_video_extend_async(
         if not kling_task_id:
             raise ValueError(f"可灵 API 返回无效: {response}")
         
-        update_ai_task(task_id, kling_task_id=kling_task_id, progress=20)
+        update_ai_task(task_id, provider_task_id=kling_task_id, progress=20)
         logger.info(f"[VideoExtend] 可灵任务ID: {kling_task_id}")
         
         # Step 3: 轮询任务状态
@@ -169,7 +177,7 @@ async def _process_video_extend_async(
             status_data = status_response.get("data", {})
             task_status = status_data.get("task_status", "")
             
-            logger.info(f"[VideoExtend] 轮询 {poll_count}/{max_polls}: status={task_status}")
+            logger.info(f"[VideoExtend] 轮询 {poll_count}/{max_polls}: task_id={task_id}, status={task_status}")
             
             # 计算进度 20-80%
             progress = 20 + int((poll_count / max_polls) * 60)
@@ -245,7 +253,7 @@ async def _process_video_extend_async(
         logger.info(f"[VideoExtend] Step 7: 创建 Asset 记录...")
         
         asset_data = {
-            "project_id": "00000000-0000-0000-0000-000000000000",
+            "project_id": None,  # AI 生成的素材不属于任何项目
             "user_id": user_id,
             "name": f"AI视频延长_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
             "file_type": "video",
@@ -269,8 +277,8 @@ async def _process_video_extend_async(
             task_id,
             status="completed",
             progress=100,
-            result_asset_id=asset_id,
-            result_url=storage_url
+            output_asset_id=asset_id,
+            output_url=storage_url
         )
         
         logger.info(f"[VideoExtend] 任务完成: task_id={task_id}, asset_id={asset_id}")

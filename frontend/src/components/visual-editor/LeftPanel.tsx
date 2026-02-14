@@ -12,6 +12,7 @@ import {
   Unlock,
   ChevronRight,
   Undo,
+  Redo,
 } from 'lucide-react';
 
 // ==========================================
@@ -61,7 +62,7 @@ function LayerList() {
               onClick={() => toggleLock(layer.id, layer.locked)}
               className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
                 layer.locked 
-                  ? 'text-amber-500' 
+                  ? 'text-gray-500' 
                   : 'text-gray-400 opacity-0 group-hover:opacity-100 hover:text-gray-600'
               }`}
             >
@@ -91,7 +92,7 @@ function LayerList() {
 // ==========================================
 
 function HistoryList() {
-  const { history, historyIndex } = useVisualEditorStore();
+  const { history, historyIndex, undo, redo, jumpToHistory, canUndo, canRedo } = useVisualEditorStore();
   
   if (history.length === 0) {
     return (
@@ -102,23 +103,65 @@ function HistoryList() {
   }
   
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-2 space-y-1">
-        {history.map((entry: HistoryEntry, index: number) => (
-          <button
-            key={entry.id}
-            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
-              index === historyIndex 
-                ? 'bg-gray-100 text-gray-900 font-medium' 
-                : index > historyIndex
-                  ? 'text-gray-400 hover:bg-gray-50'
-                  : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            <Undo size={12} />
-            <span className="flex-1 text-sm truncate">{entry.description}</span>
-          </button>
-        ))}
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* 撤销/重做按钮栏 */}
+      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-gray-100">
+        <button
+          onClick={undo}
+          disabled={!canUndo()}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
+            canUndo()
+              ? 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              : 'text-gray-300 cursor-not-allowed'
+          }`}
+          title="撤销 (⌘Z)"
+        >
+          <Undo size={12} />
+          撤销
+        </button>
+        <button
+          onClick={redo}
+          disabled={!canRedo()}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
+            canRedo()
+              ? 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              : 'text-gray-300 cursor-not-allowed'
+          }`}
+          title="重做 (⌘⇧Z)"
+        >
+          <Redo size={12} />
+          重做
+        </button>
+        <span className="ml-auto text-[10px] text-gray-400">
+          {historyIndex + 1}/{history.length}
+        </span>
+      </div>
+      
+      {/* 历史列表 */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="p-2 space-y-0.5">
+          {history.map((entry: HistoryEntry, index: number) => (
+            <button
+              key={entry.id}
+              onClick={() => jumpToHistory(index)}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
+                index === historyIndex 
+                  ? 'bg-gray-100 text-gray-800 font-medium ring-1 ring-gray-200' 
+                  : index > historyIndex
+                    ? 'text-gray-400 hover:bg-gray-50'
+                    : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                index === historyIndex ? 'bg-gray-800' : index > historyIndex ? 'bg-gray-300' : 'bg-gray-400'
+              }`} />
+              <span className="flex-1 text-xs truncate">{entry.description}</span>
+              <span className="text-[10px] text-gray-400 flex-shrink-0">
+                {new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

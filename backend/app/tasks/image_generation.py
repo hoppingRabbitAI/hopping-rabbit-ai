@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 图像生成 Celery 任务
+Lepus AI - 图像生成 Celery 任务
 异步处理文生图/图生图任务，支持进度更新和结果存储
 
 任务流程:
@@ -93,7 +93,7 @@ def update_ai_task_status(
     if error_message:
         updates["error_message"] = error_message
     if result_metadata:
-        updates["result_metadata"] = result_metadata
+        updates["metadata"] = result_metadata
     if status == "completed":
         updates["progress"] = 100
     
@@ -196,7 +196,7 @@ def _get_callback_url() -> str:
 @celery_app.task(
     bind=True,
     name="app.tasks.image_generation.process_image_generation",
-    queue="gpu_medium",
+    queue="gpu",
     autoretry_for=(Exception,),
     retry_backoff=True,
     retry_backoff_max=300,

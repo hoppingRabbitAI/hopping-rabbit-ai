@@ -23,11 +23,7 @@ features/
 ├── ai/                 # AI 处理任务
 │   ├── api.py             # 任务触发接口
 │   ├── tasks/             # Celery 任务
-│   │   ├── transcribe.py     # ASR 转写
-│   │   ├── vad.py            # 静音检测
-│   │   ├── diarization.py    # 说话人分离
-│   │   ├── stem_separation.py # 人声分离
-│   │   └── filler_detection.py # 口头禅检测
+│   │   └── transcribe.py     # ASR 转写
 │   └── schemas.py
 │
 ├── export/             # 导出功能

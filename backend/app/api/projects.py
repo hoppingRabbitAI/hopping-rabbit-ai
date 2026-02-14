@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 项目管理 API
+Lepus AI - 项目管理 API
 适配新表结构 (2026-01-07)
 
 新表结构变化：
@@ -254,18 +254,11 @@ async def create_project(
             "name": request.name,
             "description": request.description,
             "status": "draft",
-            "resolution": {"width": 1920, "height": 1080},
-            "fps": 30,
+            "resolution": request.resolution or {"width": 1920, "height": 1080},
+            "fps": request.fps or 30,
             "created_at": now,
             "updated_at": now
         }
-        
-        # 如果提供了 settings，提取 resolution 和 fps
-        if request.settings:
-            if "resolution" in request.settings:
-                project_data["resolution"] = request.settings["resolution"]
-            if "fps" in request.settings:
-                project_data["fps"] = request.settings["fps"]
         
         result = supabase.table("projects").insert(project_data).execute()
         
@@ -528,7 +521,6 @@ async def _delete_project_data_legacy(project_id: str) -> None:
     # 5. 删除其他关联数据
     supabase.table("tracks").delete().eq("project_id", project_id).execute()
     supabase.table("assets").delete().eq("project_id", project_id).execute()
-    supabase.table("workspace_sessions").delete().eq("project_id", project_id).execute()
     supabase.table("snapshots").delete().eq("project_id", project_id).execute()
     supabase.table("exports").delete().eq("project_id", project_id).execute()
     supabase.table("tasks").delete().eq("project_id", project_id).execute()
@@ -651,9 +643,6 @@ async def delete_project(
         
         # 删除资源
         supabase.table("assets").delete().eq("project_id", project_id).execute()
-        
-        # 删除工作会话
-        supabase.table("workspace_sessions").delete().eq("project_id", project_id).execute()
         
         # 删除快照
         supabase.table("snapshots").delete().eq("project_id", project_id).execute()

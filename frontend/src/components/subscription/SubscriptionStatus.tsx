@@ -88,13 +88,13 @@ function formatStorage(mb: number): string {
 function getTierIcon(slug: string) {
   switch (slug) {
     case 'creator':
-      return <Rocket className="w-4 h-4 text-pink-500" />;
+      return <Rocket className="w-4 h-4 text-gray-500" />;
     case 'ultimate':
-      return <Gem className="w-4 h-4 text-purple-500" />;
+      return <Gem className="w-4 h-4 text-gray-500" />;
     case 'pro':
-      return <Crown className="w-4 h-4 text-amber-500" />;
+      return <Crown className="w-4 h-4 text-gray-500" />;
     case 'basic':
-      return <Zap className="w-4 h-4 text-blue-500" />;
+      return <Zap className="w-4 h-4 text-gray-500" />;
     default:
       return <Sparkles className="w-4 h-4 text-gray-500" />;
   }
@@ -103,13 +103,13 @@ function getTierIcon(slug: string) {
 function getTierBadgeStyle(slug: string): string {
   switch (slug) {
     case 'creator':
-      return 'bg-gradient-to-r from-pink-500 to-rose-500 text-white';
+      return 'bg-gray-800 text-white';
     case 'ultimate':
-      return 'bg-gradient-to-r from-purple-500 to-pink-500 text-white';
+      return 'bg-gray-800 text-white';
     case 'pro':
-      return 'bg-gradient-to-r from-amber-500 to-orange-500 text-white';
+      return 'bg-gray-700 text-white';
     case 'basic':
-      return 'bg-blue-500 text-white';
+      return 'bg-gray-700 text-white';
     default:
       return 'bg-gray-200 text-gray-700';
   }
@@ -125,11 +125,11 @@ interface ProgressBarProps {
   colorClass?: string;
 }
 
-function ProgressBar({ used, total, colorClass = 'bg-blue-500' }: ProgressBarProps) {
+function ProgressBar({ used, total, colorClass = 'bg-gray-500' }: ProgressBarProps) {
   if (total === -1) {
     return (
       <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className="h-full bg-green-500 w-1/4" />
+        <div className="h-full bg-gray-500 w-1/4" />
       </div>
     );
   }
@@ -140,7 +140,7 @@ function ProgressBar({ used, total, colorClass = 'bg-blue-500' }: ProgressBarPro
 
   let barColor = colorClass;
   if (isDanger) barColor = 'bg-red-500';
-  else if (isWarning) barColor = 'bg-amber-500';
+  else if (isWarning) barColor = 'bg-gray-500';
 
   return (
     <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -313,7 +313,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
             <p className="text-gray-500 text-xs font-mono">错误代码: {error.code}</p>
           )}
           {error.action && (
-            <p className="text-amber-600 text-xs">💡 {error.action}</p>
+            <p className="text-gray-600 text-xs">💡 {error.action}</p>
           )}
         </div>
       </div>
@@ -338,7 +338,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
               {plan.name}
             </span>
             {isCanceled && (
-              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-700">
                 已取消续期
               </span>
             )}
@@ -346,7 +346,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
           {isFree && onUpgradeClick && (
             <button
               onClick={onUpgradeClick}
-              className="text-xs text-purple-600 hover:text-purple-700 transition-colors"
+              className="text-xs text-gray-600 hover:text-gray-800 transition-colors"
             >
               升级
             </button>
@@ -374,7 +374,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
             </span>
             <span className="text-gray-600 text-sm">当前套餐</span>
             {isCanceled && (
-              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 flex items-center gap-1">
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-700 flex items-center gap-1">
                 <AlertCircle className="w-3 h-3" />
                 已取消续期
               </span>
@@ -385,8 +385,8 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
               onUpgradeClick && (
                 <button
                   onClick={onUpgradeClick}
-                  className="flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-purple-600 to-pink-600 
-                             text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                  className="flex items-center gap-1 px-3 py-1 bg-gray-800 
+                             text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
                 >
                   升级 Pro
                   <ChevronRight className="w-4 h-4" />
@@ -416,15 +416,15 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
 
         {/* 取消续期提示 */}
         {isCanceled && subscription.current_period_end && (
-          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-amber-700 text-sm">
+          <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+            <p className="text-gray-700 text-sm">
               您已取消自动续期，订阅将于 {new Date(subscription.current_period_end).toLocaleDateString('zh-CN')} 到期。
               到期后将降级为免费用户。
             </p>
             {showManagement && (
               <button
                 onClick={() => setShowManagementModal(true)}
-                className="mt-2 text-amber-700 text-sm font-medium hover:text-amber-800"
+                className="mt-2 text-gray-700 text-sm font-medium hover:text-gray-800"
               >
                 恢复订阅 →
               </button>
@@ -433,14 +433,14 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
         )}
 
         {/* 积分余额 - 整合显示 */}
-        <div className="mb-4 p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-100">
+        <div className="mb-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <Gem className="w-5 h-5 text-purple-500" />
+              <Gem className="w-5 h-5 text-gray-500" />
               <span className="font-medium text-gray-900">积分余额</span>
             </div>
             <div className="text-right">
-              <span className="text-2xl font-bold text-purple-600">
+              <span className="text-2xl font-bold text-gray-600">
                 {credits?.credits_balance?.toLocaleString() || 0}
               </span>
               <span className="text-gray-500 ml-1">积分</span>
@@ -456,7 +456,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
               </div>
               <div className="h-2 bg-white rounded-full overflow-hidden shadow-inner">
                 <div
-                  className="h-full bg-gradient-to-r from-purple-400 to-purple-600 rounded-full transition-all duration-500"
+                  className="h-full bg-gray-500 rounded-full transition-all duration-500"
                   style={{ 
                     width: `${Math.max(5, (credits.credits_balance / (credits.credits_total_granted ?? 1)) * 100)}%` 
                   }}
@@ -466,37 +466,37 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
           )}
           
           {/* 订阅权益说明 */}
-          <div className="mt-3 pt-3 border-t border-purple-100 flex items-center justify-between text-sm">
+          <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between text-sm">
             <span className="text-gray-600">订阅权益</span>
-            <span className="text-purple-600 font-medium">+{plan.credits_per_month} 积分/月</span>
+            <span className="text-gray-600 font-medium">+{plan.credits_per_month} 积分/月</span>
           </div>
         </div>
 
         {/* 配额列表 */}
         <div className="space-y-4">
         <QuotaItem
-          icon={<Sparkles className="w-4 h-4 text-yellow-500" />}
+          icon={<Sparkles className="w-4 h-4 text-gray-500" />}
           label="免费 AI 智能剪辑"
           used={0}
           total={features.ai_create_free_gens}
-          colorClass="bg-yellow-500"
+          colorClass="bg-gray-500"
         />
 
         <QuotaItem
-          icon={<HardDrive className="w-4 h-4 text-green-500" />}
+          icon={<HardDrive className="w-4 h-4 text-gray-500" />}
           label="存储空间"
           used={0}
           total={features.storage_mb}
           format={formatStorage}
-          colorClass="bg-green-500"
+          colorClass="bg-gray-500"
         />
 
         <QuotaItem
-          icon={<FolderOpen className="w-4 h-4 text-amber-500" />}
+          icon={<FolderOpen className="w-4 h-4 text-gray-500" />}
           label="项目数量"
           used={0}
           total={features.max_projects}
-          colorClass="bg-amber-500"
+          colorClass="bg-gray-500"
         />
       </div>
 
@@ -505,16 +505,16 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
         <p className="text-xs text-gray-500 mb-2">同时处理能力</p>
         <div className="flex flex-wrap gap-2">
           <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 rounded text-xs">
-            <Video className="w-3 h-3 text-blue-500" />
+            <Video className="w-3 h-3 text-gray-500" />
             <span className="text-gray-700">{features.concurrent_videos} 视频</span>
           </div>
           <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 rounded text-xs">
-            <Image className="w-3 h-3 text-green-500" />
+            <Image className="w-3 h-3 text-gray-500" />
             <span className="text-gray-700">{features.concurrent_images} 图像</span>
           </div>
           {features.concurrent_characters > 0 && (
             <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 rounded text-xs">
-              <Users className="w-3 h-3 text-pink-500" />
+              <Users className="w-3 h-3 text-gray-500" />
               <span className="text-gray-700">{features.concurrent_characters} 角色</span>
             </div>
           )}
@@ -525,25 +525,25 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
       <div className="mt-4 pt-4 border-t border-gray-200">
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="flex items-center gap-1.5">
-            <Check className={`w-3 h-3 ${features.access_all_models ? 'text-green-500' : 'text-gray-300'}`} />
+            <Check className={`w-3 h-3 ${features.access_all_models ? 'text-gray-500' : 'text-gray-300'}`} />
             <span className={features.access_all_models ? 'text-gray-700' : 'text-gray-400'}>
               全部模型
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <Check className={`w-3 h-3 ${features.access_all_features ? 'text-green-500' : 'text-gray-300'}`} />
+            <Check className={`w-3 h-3 ${features.access_all_features ? 'text-gray-500' : 'text-gray-300'}`} />
             <span className={features.access_all_features ? 'text-gray-700' : 'text-gray-400'}>
               全部功能
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <Check className={`w-3 h-3 ${!features.watermark ? 'text-green-500' : 'text-gray-300'}`} />
+            <Check className={`w-3 h-3 ${!features.watermark ? 'text-gray-500' : 'text-gray-300'}`} />
             <span className={!features.watermark ? 'text-gray-700' : 'text-gray-400'}>
               无水印
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <Check className={`w-3 h-3 ${features.early_access_advanced ? 'text-green-500' : 'text-gray-300'}`} />
+            <Check className={`w-3 h-3 ${features.early_access_advanced ? 'text-gray-500' : 'text-gray-300'}`} />
             <span className={features.early_access_advanced ? 'text-gray-700' : 'text-gray-400'}>
               优先体验
             </span>
@@ -553,8 +553,8 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
 
       {/* 免费用户升级提示 */}
       {isFree && onUpgradeClick && (
-        <div className="mt-4 p-3 bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg">
-          <p className="text-purple-700 text-sm">
+        <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          <p className="text-gray-700 text-sm">
             ✨ 升级到 Pro 版本，获得 600 积分/月 + 无水印导出！
           </p>
         </div>
@@ -563,7 +563,7 @@ export function SubscriptionStatus({ onUpgradeClick, compact = false, className 
       {/* 额外积分折扣 */}
       {features.extra_credits_discount > 0 && (
         <div className="mt-3 flex items-center gap-2 text-xs">
-          <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-medium">
+          <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded font-medium">
             BONUS
           </span>
           <span className="text-gray-600">

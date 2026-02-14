@@ -133,13 +133,13 @@ export function getPlanIconStyle(slug: string) {
     case 'free':
       return { color: 'text-gray-400', bg: 'bg-gray-100' };
     case 'basic':
-      return { color: 'text-blue-500', bg: 'bg-blue-100' };
+      return { color: 'text-gray-500', bg: 'bg-gray-100' };
     case 'pro':
-      return { color: 'text-amber-500', bg: 'bg-amber-100' };
+      return { color: 'text-gray-600', bg: 'bg-gray-100' };
     case 'ultimate':
-      return { color: 'text-purple-500', bg: 'bg-purple-100' };
+      return { color: 'text-gray-700', bg: 'bg-gray-100' };
     case 'creator':
-      return { color: 'text-pink-500', bg: 'bg-pink-100' };
+      return { color: 'text-gray-800', bg: 'bg-gray-100' };
     default:
       return { color: 'text-gray-400', bg: 'bg-gray-100' };
   }

@@ -5,5 +5,6 @@ export { default as Canvas } from './Canvas';
 export { default as RightPanel } from './RightPanel';
 export { default as Toolbar } from './Toolbar';
 export { default as Timeline } from './Timeline';
+export { default as MainTimeline } from './MainTimeline';
 export { default as ShotStrategySelector } from './ShotStrategySelector';
 export type { ShotStrategy } from './ShotStrategySelector';

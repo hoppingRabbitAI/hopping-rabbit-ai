@@ -1,5 +1,5 @@
 """
-HoppingRabbit AI - 资源管理 API
+Lepus AI - 资源管理 API
 适配新表结构 (2026-01-07)
 """
 import logging
@@ -10,6 +10,7 @@ from typing import Optional, Dict, Union
 from datetime import datetime
 from uuid import uuid4
 import httpx
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,95 @@ async def presign_upload(
             expires_at=datetime.utcnow().isoformat()
         )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ★ AI 生成占位 Asset（先建记录，等 AI 完成后回填 URL）
+# ============================================
+
+class CreatePlaceholderAssetRequest(BaseModel):
+    project_id: str
+    file_type: str = "video"      # video / image
+    name: Optional[str] = None    # 可选显示名
+
+@router.post("/create-placeholder")
+async def create_placeholder_asset(
+    request: CreatePlaceholderAssetRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    为 AI 生成任务预创建一个占位 asset 记录。
+    - status = 'processing'（AI 正在生成中）
+    - storage_path = 'pending/{asset_id}'（占位路径，AI 完成后由任务回写真实路径）
+    - ai_generated = True
+    前端在创建 placeholder FreeNode 之前调用此接口获取真实 asset_id，
+    避免 canvas_nodes.asset_id FK 约束报错。
+    """
+    try:
+        asset_id = str(uuid4())
+        now = datetime.utcnow().isoformat()
+
+        asset_data = {
+            "id": asset_id,
+            "project_id": request.project_id,
+            "user_id": user_id,
+            "name": request.name or "AI 生成中...",
+            "file_type": request.file_type,
+            "storage_path": f"pending/{asset_id}",
+            "status": "processing",
+            "ai_generated": True,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        result = supabase.table("assets").insert(asset_data).execute()
+        if not result.data:
+            raise HTTPException(status_code=500, detail="创建占位 asset 失败")
+
+        logger.info(f"[Assets] ✅ 创建占位 asset: {asset_id}, project={request.project_id}")
+        return {"asset_id": asset_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Assets] ❌ 创建占位 asset 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class FinalizePlaceholderAssetRequest(BaseModel):
+    result_url: str                       # AI 生成结果的 URL
+    output_asset_id: Optional[str] = None # Celery 任务生成的真实 asset_id（可选）
+
+@router.put("/{asset_id}/finalize-placeholder")
+async def finalize_placeholder_asset(
+    asset_id: str,
+    request: FinalizePlaceholderAssetRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    AI 生成完成后，将占位 asset 标记为 ready 并写入真实 URL。
+    如果 Celery 任务创建了单独的 output_asset，可传入 output_asset_id 进行关联。
+    """
+    try:
+        now = datetime.utcnow().isoformat()
+        update_data = {
+            "storage_path": request.result_url,  # 写入真实 URL
+            "status": "ready",
+            "updated_at": now,
+        }
+        result = supabase.table("assets").update(update_data).eq(
+            "id", asset_id
+        ).eq("user_id", user_id).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Asset 不存在")
+
+        logger.info(f"[Assets] ✅ 占位 asset 已完成: {asset_id}")
+        return result.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Assets] ❌ 更新占位 asset 失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -577,13 +667,7 @@ async def process_asset(asset_id: str) -> None:
                     except Exception as e:
                         logger.warning(f"缩略图生成失败: {e}")
                     
-                    # ★ 记录编码信息（用于前端判断）
-                    video_codec = metadata.get("codec", "")
-                    BROWSER_SUPPORTED_CODECS = {"h264", "avc1", "vp8", "vp9", "av1", "hevc", "h265"}
-                    needs_transcode = video_codec and video_codec.lower() not in BROWSER_SUPPORTED_CODECS
-                    update_data["needs_transcode"] = needs_transcode
-                    
-                    logger.info(f"☁️ Supabase 视频处理完成 (codec={video_codec or 'h264'})")
+                    logger.info(f"☁️ Supabase 视频处理完成")
                 elif file_type == "video":
                     # Cloudflare 视频：无需本地处理
                     logger.info(f"☁️ Cloudflare 视频：跳过本地处理")
@@ -859,16 +943,14 @@ async def get_hls_status(asset_id: str):
     
     返回:
     - available: HLS 是否已就绪
-    - needs_transcode: 是否需要转码才能播放（ProRes 等）
     - hls_status: HLS 生成状态 (pending/processing/ready/failed)
     - hls_progress: HLS 处理进度 (0-100)
     - hls_message: HLS 处理状态消息（如：正在下载远程视频...）
-    - can_play_mp4: 是否可以直接播放 MP4（不需要等待 HLS）
     - cloudflare: 是否使用 Cloudflare Stream
     
     前端逻辑:
     1. if available → 使用 HLS（playlist_url 可能是 Cloudflare 或本地）
-    2. elif needs_transcode and hls_status != 'ready' → 显示"转码中" + hls_message
+    2. elif hls_status != 'ready' → 显示"转码中" + hls_message
     3. else → 使用 MP4 代理
     """
     # ★ 网络请求重试逻辑（处理 HTTP/2 连接断开等瞬时故障）
@@ -889,7 +971,6 @@ async def get_hls_status(asset_id: str):
             
             hls_path = result.data.get("hls_path")
             status = result.data.get("status")
-            needs_transcode = result.data.get("needs_transcode", False)
             hls_status = result.data.get("hls_status")  # pending/processing/ready/failed
             hls_progress = result.data.get("hls_progress", 0)  # 0-100
             hls_message = result.data.get("hls_message")  # 进度消息
@@ -917,9 +998,7 @@ async def get_hls_status(asset_id: str):
                 # 使用本地 HLS
                 playlist_url = f"/api/assets/hls/{asset_id}/playlist.m3u8"
             
-            # ★ 判断是否可以直接播放 MP4
             hls_available = playlist_url is not None and (hls_status == "ready" or use_cloudflare and cloudflare_status == "ready")
-            can_play_mp4 = not needs_transcode or hls_available
             
             # ★ 获取 storage_path 供前端判断
             storage_path = result.data.get("storage_path", "")
@@ -929,11 +1008,9 @@ async def get_hls_status(asset_id: str):
                 "hls_path": hls_path,
                 "asset_status": status,
                 "playlist_url": playlist_url,
-                "needs_transcode": needs_transcode,
                 "hls_status": hls_status,
                 "hls_progress": hls_progress,
                 "hls_message": hls_message,
-                "can_play_mp4": can_play_mp4,
                 "cloudflare": use_cloudflare,
                 "cloudflare_status": cloudflare_status,
                 "storage_path": storage_path,  # ★ 供前端识别 cloudflare: 前缀
@@ -1354,49 +1431,38 @@ async def _process_additions_async(
                     await asyncio.sleep(2)
                 
                 try:
-                    from ..api.workspace import _run_asr
-                    
-                    def update_task_progress(step: str, progress: int):
-                        task["progress"] = base_progress + int((progress - base_progress) * progress_per_asset / 100)
-                    
-                    transcript_segments = await _run_asr(
-                        file_url,
-                        update_task_progress,
-                        base_progress,
-                        int(progress_per_asset * 0.8)
-                    )
-                    
-                    logger.info(f"[ProcessAdditions] ASR 完成，识别 {len(transcript_segments)} 个片段")
+                    # [REMOVED] Old workspace ASR pipeline has been deleted.
+                    # This endpoint (process-additions) is not used by Visual Editor.
+                    raise RuntimeError("ASR pipeline (workspace._run_asr) has been removed. Use Visual Editor workflow instead.")
                 except Exception as asr_err:
                     logger.error(f"[ProcessAdditions] ASR 失败: {asr_err}")
                     # 继续处理，创建完整视频 clip
             
             # 创建 clips
             if transcript_segments:
-                from ..api.workspace import _create_clips_from_segments_with_offset
-                
-                video_clips, subtitle_clips, keyframes = await _create_clips_from_segments_with_offset(
-                    project_id=project_id,
-                    asset_id=asset_id,
-                    transcript_segments=transcript_segments,
-                    video_track_id=video_track_id,
-                    text_track_id=text_track_id,
-                    timeline_offset=timeline_position,
-                    asset_index=idx,
-                    enable_smart_camera=enable_smart_camera,
-                    enable_subtitle=enable_asr,  # ★ 新增：只有勾选 ASR 才生成字幕
-                )
-                
-                all_video_clips.extend(video_clips)
-                all_subtitle_clips.extend(subtitle_clips)
-                all_keyframes.extend(keyframes)  # ★ 收集关键帧
-                
-                # 更新时间轴位置
-                if video_clips:
-                    last_clip = max(video_clips, key=lambda c: c["end_time"])
-                    timeline_position = last_clip["end_time"]
-                else:
-                    timeline_position += duration_ms
+                # [REMOVED] Old workspace clip creation pipeline deleted.
+                # This endpoint (process-additions) is not used by Visual Editor.
+                logger.warning("[ProcessAdditions] Clip creation from ASR removed. Skipping.")
+                # Create a single full-duration clip instead
+                clip_type = file_type if file_type in ["video", "audio", "image"] else "video"
+                video_clip_id = str(uuid4())
+                video_clip = {
+                    "id": video_clip_id,
+                    "track_id": video_track_id,
+                    "asset_id": asset_id,
+                    "clip_type": clip_type,
+                    "name": asset_name,
+                    "start_time": timeline_position,
+                    "end_time": timeline_position + duration_ms,
+                    "source_start": 0,
+                    "source_end": duration_ms,
+                    "is_muted": False,
+                    "metadata": {"asset_index": idx, "from_additions": True},
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                all_video_clips.append(video_clip)
+                timeline_position += duration_ms
             else:
                 # 没有 ASR 结果，创建完整素材 Clip
                 # 根据文件类型确定 clip_type

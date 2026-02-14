@@ -163,7 +163,7 @@ export function MultiStepRefineEditor({
         {/* 头部 */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center">
               <Layers className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -260,7 +260,7 @@ export function MultiStepRefineEditor({
               <button
                 onClick={handleConfirm}
                 disabled={isProcessing || !currentResult}
-                className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-medium rounded-xl hover:from-purple-600 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                className="flex items-center gap-2 px-6 py-2.5 bg-gray-800 text-white text-sm font-medium rounded-xl hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 {isProcessing ? (
                   <>
@@ -291,14 +291,14 @@ function StepIndicator({ step, label, active, completed }: {
 }) {
   return (
     <div className={`flex items-center gap-1.5 px-2 py-1 rounded-lg ${
-      active ? 'bg-purple-100' : completed ? 'bg-green-50' : 'bg-gray-50'
+      active ? 'bg-gray-100' : completed ? 'bg-gray-50' : 'bg-gray-50'
     }`}>
       <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-medium ${
-        active ? 'bg-purple-500 text-white' : completed ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+        active ? 'bg-gray-800 text-white' : completed ? 'bg-gray-500 text-white' : 'bg-gray-200 text-gray-500'
       }`}>
         {completed ? '✓' : step}
       </div>
-      <span className={`text-xs ${active ? 'text-purple-700 font-medium' : 'text-gray-500'}`}>
+      <span className={`text-xs ${active ? 'text-gray-800 font-medium' : 'text-gray-500'}`}>
         {label}
       </span>
     </div>
@@ -315,16 +315,16 @@ function SelectModeStep({ onSelectDirect }: { onSelectDirect: () => void }) {
       <div className="grid grid-cols-1 gap-4 max-w-md w-full">
         <button
           onClick={onSelectDirect}
-          className="flex items-center gap-4 p-6 border-2 border-gray-200 rounded-2xl hover:border-purple-300 hover:bg-purple-50 transition-all group"
+          className="flex items-center gap-4 p-6 border-2 border-gray-200 rounded-2xl hover:border-gray-300 hover:bg-gray-50 transition-all group"
         >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+          <div className="w-14 h-14 rounded-xl bg-gray-800 flex items-center justify-center group-hover:scale-110 transition-transform">
             <Wand2 className="w-7 h-7 text-white" />
           </div>
           <div className="flex-1 text-left">
             <h4 className="font-semibold text-gray-800">智能背景优化</h4>
             <p className="text-sm text-gray-500">AI 自动保持人物，只替换背景</p>
           </div>
-          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-purple-500" />
+          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-gray-700" />
         </button>
       </div>
     </div>
@@ -381,7 +381,7 @@ function RefineBackgroundStep({
           value={prompt}
           onChange={(e) => onPromptChange(e.target.value)}
           placeholder="描述你想要的背景效果，人物位置和姿态会保持不变..."
-          className="w-full h-32 px-4 py-3 border border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+          className="w-full h-32 px-4 py-3 border border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent text-sm"
         />
 
         {/* 生成按钮 */}
@@ -389,7 +389,7 @@ function RefineBackgroundStep({
           <button
             onClick={onGenerate}
             disabled={isProcessing || !prompt.trim()}
-            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-medium rounded-xl hover:from-purple-600 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="flex items-center gap-2 px-5 py-2.5 bg-gray-800 text-white text-sm font-medium rounded-xl hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             {isProcessing ? (
               <>
@@ -413,7 +413,7 @@ function RefineBackgroundStep({
               <button
                 key={index}
                 onClick={() => onPromptChange(template)}
-                className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-purple-100 rounded-full text-gray-700 transition-colors truncate max-w-[200px]"
+                className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-full text-gray-700 transition-colors truncate max-w-[200px]"
                 title={template}
               >
                 {template}
@@ -476,9 +476,9 @@ function PreviewResultStep({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-purple-500" />
+              <Sparkles className="w-4 h-4 text-gray-500" />
               <h3 className="font-medium text-gray-700">生成结果</h3>
-              <span className="px-2 py-0.5 text-xs bg-purple-100 text-purple-600 rounded-full">
+              <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
                 {currentIndex + 1} / {resultHistory.length}
               </span>
             </div>
@@ -500,13 +500,13 @@ function PreviewResultStep({
               </button>
             </div>
           </div>
-          <div className="relative rounded-xl overflow-hidden border-2 border-purple-200 bg-gray-100">
+          <div className="relative rounded-xl overflow-hidden border-2 border-gray-200 bg-gray-100">
             <img
               src={resultUrl}
               alt="生成结果"
               className="w-full h-auto max-h-[350px] object-contain"
             />
-            <div className="absolute top-3 left-3 px-2.5 py-1 bg-purple-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5">
+            <div className="absolute top-3 left-3 px-2.5 py-1 bg-gray-800 text-white text-xs font-medium rounded-lg flex items-center gap-1.5">
               <Sparkles className="w-3 h-3" />
               AI 生成
             </div>
@@ -525,7 +525,7 @@ function PreviewResultStep({
                 onClick={() => onSelectResult(idx)}
                 className={`relative flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${
                   idx === currentIndex 
-                    ? 'border-purple-500 ring-2 ring-purple-200' 
+                    ? 'border-gray-900 ring-2 ring-gray-200' 
                     : 'border-gray-200 hover:border-gray-300'
                 }`}
               >

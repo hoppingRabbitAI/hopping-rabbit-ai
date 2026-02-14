@@ -48,7 +48,7 @@ body {
 }
 
 .transcript-segment.filler {
-  @apply bg-orange-50 border-orange-200;
+  @apply bg-gray-50 border-gray-200;
 }
 
 .transcript-segment.silence {
@@ -56,7 +56,7 @@ body {
 }
 
 .transcript-segment.current {
-  @apply bg-blue-50 border-blue-300 shadow-md ring-1 ring-blue-200;
+  @apply bg-gray-50 border-gray-300 shadow-md ring-1 ring-gray-200;
 }
 
 .transcript-segment.deleted {
@@ -69,11 +69,11 @@ body {
 }
 
 .type-badge.normal {
-  @apply bg-blue-600 text-white;
+  @apply bg-gray-800 text-white;
 }
 
 .type-badge.filler {
-  @apply bg-orange-500 text-white;
+  @apply bg-gray-700 text-white;
 }
 
 .type-badge.silence {
@@ -110,7 +110,7 @@ body {
 }
 
 .context-menu-item.primary {
-  @apply text-blue-600 font-black;
+  @apply text-gray-800 font-black;
 }
 
 .context-menu-item.danger {
@@ -143,7 +143,7 @@ body {
 }
 
 .toolbar-btn.active {
-  @apply text-blue-600 bg-blue-50;
+  @apply text-gray-700 bg-gray-50;
 }
 
 /* ==================== ASR 进度条动画 ==================== */
@@ -245,3 +245,168 @@ input[type="range"]::-moz-range-thumb:hover {
   background: #374151;
   transform: scale(1.1);
 }
+
+
+/* ================================================================
+   Delos Design System — "西部世界" 极简白灰未来感
+   精密 · 克制 · 唯一色彩是 Indigo
+   ================================================================ */
+
+/* ---- Glass 面板（白色毛玻璃） ---- */
+.glass-panel {
+  @apply backdrop-blur-xl;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.glass-panel-strong {
+  @apply backdrop-blur-2xl;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ---- 精密网格背景 ---- */
+.delos-grid {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.03) 1px, transparent 0),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.03) 1px, transparent 0);
+  background-size: 48px 48px;
+}
+
+/* ---- 精密点阵背景 ---- */
+.delos-dots {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ---- 极简滚动条 ---- */
+.delos-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.delos-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.delos-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.10);
+  border-radius: 4px;
+}
+.delos-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+/* ---- Accent 选中光环 ---- */
+.accent-ring {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2), 0 0 12px rgba(99, 102, 241, 0.06);
+}
+
+/* ---- 发光边框 ---- */
+.border-focus-accent {
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
+}
+
+/* ---- Loading 呼吸 ---- */
+@keyframes breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.animate-breathe {
+  animation: breathe 2s ease-in-out infinite;
+}
+
+/* ---- 节点连线 ---- */
+.glow-line {
+  filter: drop-shadow(0 0 4px rgba(99, 102, 241, 0.2));
+}
+
+/* ---- Delos 滑块（白底适配） ---- */
+.delos-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #EBEEF2;
+}
+.delos-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6366F1;
+  border: 2px solid #FFFFFF;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(99, 102, 241, 0.1);
+  margin-top: -5px;
+  transition: all 0.2s ease;
+}
+.delos-slider::-webkit-slider-thumb:hover {
+  background: #4F46E5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 8px rgba(99, 102, 241, 0.2);
+}
+.delos-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #EBEEF2;
+}
+.delos-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6366F1;
+  border: 2px solid #FFFFFF;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(99, 102, 241, 0.1);
+  transition: all 0.2s ease;
+}
+.delos-slider::-moz-range-thumb:hover {
+  background: #4F46E5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 8px rgba(99, 102, 241, 0.2);
+}
+
+/* ---- Cap 标签文字（装饰性小标签） ---- */
+.cap-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9CA3AF;
+}
+
+/* ==================== React Flow 框选矩形美化 ==================== */
+/* 拖拽框选时的矩形区域 */
+.react-flow__selection {
+  background: rgba(99, 102, 241, 0.06) !important;
+  border: 1.5px dashed rgba(99, 102, 241, 0.35) !important;
+  border-radius: 12px !important;
+}
+
+/* 多选完成后的节点包围框 — 隐藏 + 事件穿透，不拦截节点的右键菜单等交互 */
+.react-flow__nodesselection {
+  pointer-events: none !important;
+}
+.react-flow__nodesselection-rect {
+  background: transparent !important;
+  border: none !important;
+  pointer-events: none !important;
+}
+
+/* 批量操作工具栏入场动画 */
+@keyframes slideUpFadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+.animate-slide-up-fade-in {
+  animation: slideUpFadeIn 0.2s ease-out;
+}
+
+/* ---- 分隔线 ---- */
+.delos-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+}
+

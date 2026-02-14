@@ -1,4 +1,4 @@
-# HoppingRabbit AI - 本地开发启动指南
+# Lepus AI - 本地开发启动指南
 
 ## 📋 前置要求
 
@@ -47,7 +47,7 @@ redis-server
 
 ### 2. 启动后端 (FastAPI)
 ```bash
-cd /Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend
+cd /Users/hexiangyang/rabbit-ai/lepus-ai/backend
 source /Users/hexiangyang/rabbit-ai/.venv/bin/activate
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -56,7 +56,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ### 3. 启动前端 (Next.js)
 ```bash
-cd /Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/frontend
+cd /Users/hexiangyang/rabbit-ai/lepus-ai/frontend
 pnpm dev
 ```
 ✅ 成功标志: `✓ Ready in X.Xs`
@@ -64,7 +64,7 @@ pnpm dev
 
 ### 4. 启动 Celery Worker (异步任务)
 ```bash
-cd /Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend
+cd /Users/hexiangyang/rabbit-ai/lepus-ai/backend
 source /Users/hexiangyang/rabbit-ai/.venv/bin/activate
 PYTHONPATH=$(pwd) celery -A app.celery_config worker --loglevel=info -Q default,gpu_medium
 ```

@@ -4,7 +4,7 @@
 """
 import sys
 import importlib
-sys.path.insert(0, '/Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend')
+sys.path.insert(0, '/Users/hexiangyang/rabbit-ai/lepus-ai/backend')
 
 def test_imports():
     print("=" * 60)
@@ -16,7 +16,7 @@ def test_imports():
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "base", 
-            "/Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend/app/services/video_generation/base.py"
+            "/Users/hexiangyang/rabbit-ai/lepus-ai/backend/app/services/video_generation/base.py"
         )
         base = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(base)
@@ -39,7 +39,7 @@ def test_imports():
     try:
         spec = importlib.util.spec_from_file_location(
             "registry", 
-            "/Users/hexiangyang/rabbit-ai/hoppingrabbit-ai/backend/app/services/video_generation/registry.py"
+            "/Users/hexiangyang/rabbit-ai/lepus-ai/backend/app/services/video_generation/registry.py"
         )
         registry = importlib.util.module_from_spec(spec)
         

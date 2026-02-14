@@ -29,7 +29,7 @@ import {
   type VoiceSampleItem,
   type MaterialType 
 } from '@/lib/api/materials';
-import { RabbitLoader } from '@/components/common/RabbitLoader';
+import { LepusLoader } from '@/components/common/LepusLoader';
 import { toast } from '@/lib/stores/toast-store';
 
 // ============================================
@@ -71,7 +71,7 @@ function AvatarCard({ avatar, onDelete, onToggleFavorite, onSetDefault, isDefaul
         
         {/* 默认标记 */}
         {isDefault && (
-          <div className="absolute top-2 left-2 px-2 py-0.5 bg-violet-500 text-white text-xs rounded-full">
+          <div className="absolute top-2 left-2 px-2 py-0.5 bg-gray-700 text-white text-xs rounded-full">
             默认
           </div>
         )}
@@ -190,12 +190,12 @@ function VoiceSampleCard({ voice, onDelete, onClone, onSetDefault, isDefault }: 
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-medium text-gray-900 truncate">{voice.name}</h3>
           {voice.type === 'clone' && (
-            <span className="px-1.5 py-0.5 text-[10px] bg-violet-100 text-violet-600 rounded">
+            <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded">
               已克隆
             </span>
           )}
           {isDefault && (
-            <span className="px-1.5 py-0.5 text-[10px] bg-green-100 text-green-600 rounded">
+            <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded">
               默认
             </span>
           )}
@@ -212,7 +212,7 @@ function VoiceSampleCard({ voice, onDelete, onClone, onSetDefault, isDefault }: 
         {voice.type === 'sample' && !voice.is_cloned && (
           <button
             onClick={() => onClone(voice.id)}
-            className="px-3 py-1.5 text-xs bg-violet-100 hover:bg-violet-200 text-violet-700 rounded-lg transition-colors"
+            className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
           >
             克隆声音
           </button>
@@ -293,7 +293,7 @@ function UploadArea({ materialType, acceptTypes, icon, title, description, onUpl
       onClick={() => !uploading && inputRef.current?.click()}
       className={`
         relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all
-        ${dragOver ? 'border-violet-400 bg-violet-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}
+        ${dragOver ? 'border-gray-400 bg-gray-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}
         ${uploading ? 'pointer-events-none' : ''}
       `}
     >
@@ -307,11 +307,11 @@ function UploadArea({ materialType, acceptTypes, icon, title, description, onUpl
       
       {uploading ? (
         <div className="py-4">
-          <RabbitLoader size={32} />
+          <LepusLoader size={32} />
           <p className="text-sm text-gray-600 mt-3">上传中 {progress}%</p>
           <div className="w-full h-1.5 bg-gray-200 rounded-full mt-2 overflow-hidden">
             <div 
-              className="h-full bg-violet-500 transition-all duration-300"
+              className="h-full bg-gray-500 transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -557,7 +557,7 @@ export function UserMaterialsView() {
             <p className="text-gray-600 mb-4">{error}</p>
             <button
               onClick={loadData}
-              className="px-4 py-2 bg-violet-500 hover:bg-violet-600 text-white rounded-lg text-sm"
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm"
             >
               重试
             </button>
